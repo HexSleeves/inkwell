@@ -10,6 +10,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./db": {
+      "types": "./dist/db/index.d.ts",
+      "import": "./dist/db/index.js"
     }
   },
   "files": [
@@ -28,6 +32,9 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
+    "db:migrate": "node dist/db/cli.js migrate",
+    "db:rollback": "node dist/db/cli.js rollback",
+    "db:status": "node dist/db/cli.js status",
     "ci": "npm run lint && npm run format:check && npm run typecheck && npm run test && npm run build"
   },
   "keywords": [
