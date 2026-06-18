@@ -54,10 +54,69 @@ npm run format:check
 npm run build
 ```
 
+## Environment variables
+
+Inkwell is configured entirely through the environment. Only `DATABASE_URL` is
+required; the rest have sensible defaults.
+
+| Variable       | Required | Default   | Used by                | Description                                                                                               |
+| -------------- | -------- | --------- | ---------------------- | --------------------------------------------------------------------------------------------------------- |
+| `DATABASE_URL` | yes      | —         | server, `db:*` scripts | Postgres connection string, e.g. `postgres://user:pass@host:5432/inkwell`. Startup fails loudly if unset. |
+| `PORT`         | no       | `3000`    | server                 | TCP port the HTTP server listens on.                                                                      |
+| `HOST`         | no       | `0.0.0.0` | server                 | Address to bind. Use `127.0.0.1` to restrict to localhost.                                                |
+
+## Run Inkwell
+
+Follow these steps from a fresh clone to publish your first Markdown page. They
+assume a reachable PostgreSQL instance.
+
+```bash
+# 1. Install dependencies and compile to ./dist
+npm install
+npm run build
+
+# 2. Point Inkwell at your database
+export DATABASE_URL=postgres://user:pass@localhost:5432/inkwell
+
+# 3. Create the schema
+npm run db:migrate
+
+# 4. Start the server (defaults to http://0.0.0.0:3000)
+npm start
+```
+
+You should see `Inkwell listening on http://0.0.0.0:3000`. Leave it running and,
+in a second terminal, **publish a document** by POSTing Markdown to the API:
+
+```bash
+curl -sS -X POST http://localhost:3000/documents \
+  -H 'content-type: application/json' \
+  -d '{"title":"Hello World","bodyMarkdown":"# Hello World\n\nMy first **Inkwell** page."}'
+```
+
+The response echoes the stored document, including its derived `slug`
+(`hello-world`) and the sanitized `renderedHtml`. Your page is now live:
+
+- Open <http://localhost:3000/hello-world> to read the published page.
+- Open <http://localhost:3000/> to see it listed on the index.
+
+To update it, `PATCH` the same slug; to remove it, `DELETE` it:
+
+```bash
+curl -sS -X PATCH http://localhost:3000/documents/hello-world \
+  -H 'content-type: application/json' \
+  -d '{"bodyMarkdown":"# Hello World\n\nNow with an edit."}'
+
+curl -sS -X DELETE http://localhost:3000/documents/hello-world -o /dev/null -w '%{http_code}\n'
+```
+
+See [API](#api) below for the full endpoint reference.
+
 ## npm scripts
 
 | Script                  | What it does                                     |
 | ----------------------- | ------------------------------------------------ |
+| `npm start`             | Run the compiled server (`dist/main.js`)         |
 | `npm run build`         | Compile `src/` to `dist/` with type declarations |
 | `npm run typecheck`     | Type-check without emitting                      |
 | `npm run lint`          | Lint with ESLint                                 |
@@ -85,6 +144,7 @@ The `db:*` scripts run against compiled output, so `npm run build` first.
 │   ├── api.ts           # Framework-free HTTP request handler (routing/validation)
 │   ├── pages.ts         # Public HTML frontend (index + document pages)
 │   ├── server.ts        # node:http transport adapter (routes API vs. pages)
+│   ├── main.ts          # Server entrypoint (npm start): pool + server + listen
 │   ├── db/              # Postgres schema, migrations, data-access layer
 │   └── *.test.ts        # Co-located tests
 ├── docs/adr/            # Architecture Decision Records
@@ -255,6 +315,8 @@ is needed for `npm test`.
 1. Branch from `main`.
 2. Keep the core small and tested — add tests alongside features.
 3. Ensure `npm run ci` passes before opening a pull request.
+
+Releases follow the [v0.1 release checklist](docs/RELEASE-CHECKLIST.md).
 
 ## License
 

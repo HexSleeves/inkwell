@@ -23,6 +23,7 @@
     "node": ">=20"
   },
   "scripts": {
+    "start": "node dist/main.js",
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint .",
