@@ -80,7 +80,10 @@ The `db:*` scripts run against compiled output, so `npm run build` first.
 .
 ├── src/                 # TypeScript source (entry: src/index.ts)
 │   ├── index.ts         # Public API surface
+│   ├── slug.ts          # URL-safe slug derivation
 │   ├── rendering.ts     # Markdown → sanitized HTML pipeline
+│   ├── api.ts           # Framework-free HTTP request handler (routing/validation)
+│   ├── server.ts        # node:http transport adapter
 │   ├── db/              # Postgres schema, migrations, data-access layer
 │   └── *.test.ts        # Co-located tests
 ├── docs/adr/            # Architecture Decision Records
@@ -94,16 +97,78 @@ Tests are co-located with source as `*.test.ts`.
 
 ## API
 
-The HTTP API is not yet implemented. As endpoints land they will be documented
-here as an endpoint table (method, path, purpose). The current public module
-surface is:
+Documents are managed over a small JSON REST API. The routing/validation core
+lives in [`src/api.ts`](src/api.ts) and is framework-free; a thin `node:http`
+adapter in [`src/server.ts`](src/server.ts) binds it to a port. Start a server
+backed by a Postgres pool:
 
-| Export                     | Description                                                 |
-| -------------------------- | ----------------------------------------------------------- |
-| `NAME`, `VERSION`          | Package metadata constants                                  |
-| `slugify(title)`           | Derive a URL-safe slug from a document title                |
-| `renderMarkdown(markdown)` | Render Markdown to sanitized, XSS-safe HTML                 |
-| `renderDocumentHtml(body)` | Produce a document's `rendered_html` from its Markdown body |
+```ts
+import { createPool } from 'inkwell/db';
+import { createServer } from 'inkwell';
+
+createServer(createPool(process.env.DATABASE_URL)).listen(3000);
+```
+
+All request and response bodies are JSON. Errors share one shape:
+`{ "error": { "message": string, ... } }`.
+
+### Endpoints
+
+| Method   | Path               | Description                        | Success | Errors                         |
+| -------- | ------------------ | ---------------------------------- | ------- | ------------------------------ |
+| `GET`    | `/health`          | Liveness check                     | `200`   | —                              |
+| `POST`   | `/documents`       | Create a document                  | `201`   | `400` invalid, `409` dup slug  |
+| `GET`    | `/documents`       | List documents (newest first)      | `200`   | —                              |
+| `GET`    | `/documents/:slug` | Fetch one document by slug         | `200`   | `404` not found                |
+| `PATCH`  | `/documents/:slug` | Partial update (`PUT` is an alias) | `200`   | `400` invalid, `404` not found |
+| `DELETE` | `/documents/:slug` | Delete a document                  | `204`   | `404` not found                |
+
+Unknown paths return `404`; a known path with an unsupported method returns
+`405` with an `Allow` hint.
+
+**Request bodies.**
+
+- **Create** (`POST /documents`): `{ "title": string, "bodyMarkdown": string, "slug"?: string }`.
+  `title` and `bodyMarkdown` are required; `slug` is optional and derived from
+  the title when omitted. An explicit `slug` must be lowercase alphanumerics
+  separated by single hyphens.
+- **Update** (`PATCH /documents/:slug`): `{ "title"?: string, "bodyMarkdown"?: string }`.
+  At least one field is required.
+
+`renderedHtml` is always derived server-side from `bodyMarkdown` via the
+[rendering pipeline](#rendering-pipeline) — clients never supply HTML. A
+document is returned as:
+
+```json
+{
+  "id": "uuid",
+  "slug": "hello-world",
+  "title": "Hello World",
+  "bodyMarkdown": "# Hello",
+  "renderedHtml": "<h1>Hello</h1>",
+  "createdAt": "2026-01-01T00:00:00.000Z",
+  "updatedAt": "2026-01-01T00:00:00.000Z"
+}
+```
+
+The API is integration-tested end to end against the data-access layer (and a
+real `node:http` server) using the in-memory Postgres double, so `npm test`
+needs no database. See
+[`docs/adr/0004-http-api.md`](docs/adr/0004-http-api.md) for the design
+rationale.
+
+The current public module surface is:
+
+| Export                      | Description                                                 |
+| --------------------------- | ----------------------------------------------------------- |
+| `NAME`, `VERSION`           | Package metadata constants                                  |
+| `slugify(title)`            | Derive a URL-safe slug from a document title                |
+| `renderMarkdown(markdown)`  | Render Markdown to sanitized, XSS-safe HTML                 |
+| `renderDocumentHtml(body)`  | Produce a document's `rendered_html` from its Markdown body |
+| `createServer(db)`          | Build a `node:http` server for the documents API            |
+| `createRequestListener(db)` | Bare request listener, for mounting on an existing server   |
+| `handleApiRequest(db, req)` | Framework-free request handler (routing + validation)       |
+| `ApiError`                  | Error type carrying an HTTP status                          |
 
 ### Rendering pipeline
 
