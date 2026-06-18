@@ -75,7 +75,8 @@ npm run build
 .
 ├── src/                 # TypeScript source (entry: src/index.ts)
 │   ├── index.ts         # Public API surface
-│   └── index.test.ts    # Co-located tests
+│   ├── rendering.ts     # Markdown → sanitized HTML pipeline
+│   └── *.test.ts        # Co-located tests
 ├── docs/adr/            # Architecture Decision Records
 ├── .github/workflows/   # CI pipeline
 ├── tsconfig*.json       # TypeScript configuration
@@ -91,10 +92,22 @@ The HTTP API is not yet implemented. As endpoints land they will be documented
 here as an endpoint table (method, path, purpose). The current public module
 surface is:
 
-| Export            | Description                                  |
-| ----------------- | -------------------------------------------- |
-| `NAME`, `VERSION` | Package metadata constants                   |
-| `slugify(title)`  | Derive a URL-safe slug from a document title |
+| Export                     | Description                                                 |
+| -------------------------- | ----------------------------------------------------------- |
+| `NAME`, `VERSION`          | Package metadata constants                                  |
+| `slugify(title)`           | Derive a URL-safe slug from a document title                |
+| `renderMarkdown(markdown)` | Render Markdown to sanitized, XSS-safe HTML                 |
+| `renderDocumentHtml(body)` | Produce a document's `rendered_html` from its Markdown body |
+
+### Rendering pipeline
+
+Markdown is rendered with [`markdown-it`](https://github.com/markdown-it/markdown-it)
+and the output is sanitized with [`sanitize-html`](https://github.com/apostrophecms/sanitize-html)
+using a strict allowlist. Authors may use safe inline HTML; anything that can
+execute script (`<script>`, `<iframe>`, `on*` handlers, `javascript:` URLs) is
+stripped. The document create/update path calls `renderDocumentHtml` to populate
+the stored `rendered_html`. See
+[`docs/adr/0002-markdown-rendering.md`](docs/adr/0002-markdown-rendering.md).
 
 ## Contributing
 

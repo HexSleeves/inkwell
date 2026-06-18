@@ -10,6 +10,8 @@
 export const NAME = 'inkwell';
 export const VERSION = '0.1.0';
 
+export { renderMarkdown, renderDocumentHtml } from './rendering.js';
+
 /**
  * Derive a URL-safe slug from a document title.
  *
