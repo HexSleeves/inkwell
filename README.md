@@ -83,7 +83,8 @@ The `db:*` scripts run against compiled output, so `npm run build` first.
 │   ├── slug.ts          # URL-safe slug derivation
 │   ├── rendering.ts     # Markdown → sanitized HTML pipeline
 │   ├── api.ts           # Framework-free HTTP request handler (routing/validation)
-│   ├── server.ts        # node:http transport adapter
+│   ├── pages.ts         # Public HTML frontend (index + document pages)
+│   ├── server.ts        # node:http transport adapter (routes API vs. pages)
 │   ├── db/              # Postgres schema, migrations, data-access layer
 │   └── *.test.ts        # Co-located tests
 ├── docs/adr/            # Architecture Decision Records
@@ -157,6 +158,26 @@ needs no database. See
 [`docs/adr/0004-http-api.md`](docs/adr/0004-http-api.md) for the design
 rationale.
 
+## Public web frontend
+
+The same server also serves a minimal, styled public website rendered from the
+documents' sanitized HTML. The frontend lives in [`src/pages.ts`](src/pages.ts)
+and is framework-free in the same spirit as the API: a `handlePageRequest`
+handler returns complete HTML pages with an inlined stylesheet (no static-asset
+pipeline needed for v0.1). The transport adapter routes any path outside the
+reserved API prefixes (`/documents`, `/health`) to the frontend.
+
+| Method | Path     | Description                                    | Success | Errors            |
+| ------ | -------- | ---------------------------------------------- | ------- | ----------------- |
+| `GET`  | `/`      | Index of published documents (newest first)    | `200`   | —                 |
+| `GET`  | `/:slug` | A document's public reading page (styled HTML) | `200`   | `404` styled page |
+
+A document's `renderedHtml` is sanitized at write time by the
+[rendering pipeline](#rendering-pipeline), so it is embedded verbatim; every
+other interpolated value (titles, etc.) is HTML-escaped. Because the frontend
+shares the root with the API, a document whose slug is exactly `documents` or
+`health` is unreachable as a public page — those words are reserved.
+
 The current public module surface is:
 
 | Export                      | Description                                                 |
@@ -169,6 +190,10 @@ The current public module surface is:
 | `createRequestListener(db)` | Bare request listener, for mounting on an existing server   |
 | `handleApiRequest(db, req)` | Framework-free request handler (routing + validation)       |
 | `ApiError`                  | Error type carrying an HTTP status                          |
+| `handlePageRequest(db,req)` | Framework-free HTML page handler (index + document pages)   |
+| `renderIndexPage(docs)`     | Render the index page from a list of documents              |
+| `renderDocumentPage(doc)`   | Render a single document's public reading page              |
+| `escapeHtml(value)`         | HTML-escape a plain-text value for safe interpolation       |
 
 ### Rendering pipeline
 

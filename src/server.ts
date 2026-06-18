@@ -17,6 +17,16 @@ import {
 
 import { handleApiRequest, type ApiResponse } from './api.js';
 import type { Queryable } from './db/pool.js';
+import { handlePageRequest, type PageResponse } from './pages.js';
+
+/**
+ * Path prefixes reserved for the JSON API. Any other path is served by the
+ * public HTML frontend (see `src/pages.ts`), so `GET /:slug` renders a document
+ * page and `GET /` renders the index. A consequence is that a document whose
+ * slug is exactly `documents` or `health` is unreachable as a public page;
+ * those words are reserved for the API.
+ */
+const API_PREFIXES = new Set(['documents', 'health']);
 
 /** Cap request bodies so a client can't exhaust memory with an endless stream. */
 const MAX_BODY_BYTES = 1_000_000; // 1 MB
@@ -64,6 +74,17 @@ function writeResponse(res: ServerResponse, response: ApiResponse): void {
   res.end(payload);
 }
 
+/** Serialize an HTML page response from the public frontend. */
+function writeHtmlResponse(res: ServerResponse, method: string, response: PageResponse): void {
+  const payload = Buffer.from(response.html, 'utf8');
+  res.writeHead(response.status, {
+    'content-type': 'text/html; charset=utf-8',
+    'content-length': payload.length,
+  });
+  // HEAD requests get headers (including content-length) but no body.
+  res.end(method === 'HEAD' ? undefined : payload);
+}
+
 /**
  * Build an HTTP request listener bound to a given database. Exposed separately
  * from {@link createServer} so it can be mounted on an existing server or
@@ -73,6 +94,14 @@ export function createRequestListener(db: Queryable) {
   return async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     try {
       const segments = splitPath(req.url ?? '/');
+      const method = (req.method ?? 'GET').toUpperCase();
+
+      // Anything outside the reserved API prefixes is a public HTML page.
+      if (segments.length === 0 || !API_PREFIXES.has(segments[0] as string)) {
+        const pageResponse = await handlePageRequest(db, { method, segments });
+        writeHtmlResponse(res, method, pageResponse);
+        return;
+      }
 
       let body: unknown;
       const raw = await readBody(req);
@@ -88,11 +117,7 @@ export function createRequestListener(db: Queryable) {
         }
       }
 
-      const response = await handleApiRequest(db, {
-        method: (req.method ?? 'GET').toUpperCase(),
-        segments,
-        body,
-      });
+      const response = await handleApiRequest(db, { method, segments, body });
       writeResponse(res, response);
     } catch (error) {
       const tooLarge = error instanceof Error && error.message === 'Request body too large.';

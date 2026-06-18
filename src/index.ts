@@ -13,4 +13,13 @@ export const VERSION = '0.1.0';
 export { renderMarkdown, renderDocumentHtml } from './rendering.js';
 export { handleApiRequest, ApiError, type ApiRequest, type ApiResponse } from './api.js';
 export { createServer, createRequestListener } from './server.js';
+export {
+  handlePageRequest,
+  renderIndexPage,
+  renderDocumentPage,
+  renderNotFoundPage,
+  escapeHtml,
+  type PageRequest,
+  type PageResponse,
+} from './pages.js';
 export { slugify } from './slug.js';
