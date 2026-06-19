@@ -111,6 +111,21 @@ describe('documents HTTP API (handler)', () => {
       expect(res.status).toBe(409);
       expect((res.body as { error: { slug: string } }).error.slug).toBe('hello-world');
     });
+
+    // DoS guard: rendering is synchronous, so bodyMarkdown is capped at 256 KiB
+    // (262_144 chars) at the API edge. Exercise both sides of the boundary.
+    const MAX_BODY_MARKDOWN_LENGTH = 256 * 1024;
+
+    it('accepts bodyMarkdown exactly at the cap', async () => {
+      const res = await createSample({ bodyMarkdown: 'a'.repeat(MAX_BODY_MARKDOWN_LENGTH) });
+      expect(res.status).toBe(201);
+    });
+
+    it('rejects bodyMarkdown one char over the cap with 400', async () => {
+      const res = await createSample({ bodyMarkdown: 'a'.repeat(MAX_BODY_MARKDOWN_LENGTH + 1) });
+      expect(res.status).toBe(400);
+      expect((res.body as { error: { message: string } }).error.message).toMatch(/at most/i);
+    });
   });
 
   interface ListBody {
@@ -276,6 +291,17 @@ describe('documents HTTP API (handler)', () => {
         body: {},
       });
       expect(res.status).toBe(400);
+    });
+
+    it('rejects a bodyMarkdown patch over the 256 KiB cap with 400', async () => {
+      await createSample();
+      const res = await call({
+        method: 'PATCH',
+        segments: ['documents', 'hello-world'],
+        body: { bodyMarkdown: 'a'.repeat(256 * 1024 + 1) },
+      });
+      expect(res.status).toBe(400);
+      expect((res.body as { error: { message: string } }).error.message).toMatch(/at most/i);
     });
 
     it('returns 404 when updating a missing document', async () => {
@@ -465,10 +491,23 @@ describe('documents HTTP API (handler)', () => {
       expect(res.status).toBe(405);
     });
 
-    it('serves a health check', async () => {
+    it('serves a health check that reports the database as up', async () => {
       const res = await call({ method: 'GET', segments: ['health'] });
       expect(res.status).toBe(200);
-      expect(res.body).toEqual({ status: 'ok' });
+      expect(res.body).toEqual({ status: 'ok', db: 'up' });
+    });
+
+    it('reports 503 when the database is unreachable', async () => {
+      const brokenDb: Queryable = {
+        query: () => Promise.reject(new Error('connection refused')),
+      };
+      const res = await handleApiRequest(
+        brokenDb,
+        { method: 'GET', segments: ['health'], headers: { 'x-api-key': API_KEY } },
+        { apiKey: API_KEY },
+      );
+      expect(res.status).toBe(503);
+      expect(res.body).toEqual({ status: 'error', db: 'down' });
     });
   });
 

@@ -37,7 +37,7 @@
     "db:migrate": "node dist/db/cli.js migrate",
     "db:rollback": "node dist/db/cli.js rollback",
     "db:status": "node dist/db/cli.js status",
-    "ci": "pnpm run lint && pnpm run format:check && pnpm run typecheck && pnpm run test && pnpm run build"
+    "ci": "pnpm run lint && pnpm run format:check && pnpm run typecheck && pnpm run test:coverage && pnpm run build"
   },
   "keywords": [
     "markdown",

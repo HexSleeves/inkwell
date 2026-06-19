@@ -105,6 +105,18 @@ const SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const MAX_SLUG_LENGTH = 200;
 const MAX_TITLE_LENGTH = 500;
 
+/**
+ * Hard cap on `bodyMarkdown` length. Rendering (markdown-it + highlight.js +
+ * sanitize-html) runs synchronously on the event loop, so an oversize or
+ * pathological document would block every other request while it renders.
+ * Reject oversize input at the API edge with a 400 before it ever reaches the
+ * renderer. 256 KiB of Markdown is well beyond any legitimate single document.
+ */
+const MAX_BODY_MARKDOWN_LENGTH = 256 * 1024; // 262_144 chars (~256 KB)
+
+/** How long the health check waits on the DB before reporting it unreachable. */
+const HEALTH_DB_TIMEOUT_MS = 1000;
+
 /** Pagination defaults/bounds for the list route. */
 const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 100;
@@ -115,6 +127,39 @@ function errorResponse(
   details?: Record<string, unknown>,
 ): ApiResponse {
   return { status, body: { error: { message, ...details } } };
+}
+
+/** Reject with a timeout error if `promise` doesn't settle within `ms`. */
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('Operation timed out.')), ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error: unknown) => {
+        clearTimeout(timer);
+        reject(error instanceof Error ? error : new Error(String(error)));
+      },
+    );
+  });
+}
+
+/**
+ * GET /health — readiness probe. Pings Postgres with `SELECT 1` under a short
+ * timeout so the check reflects actual database reachability instead of mere
+ * process liveness. Returns 200 `{ status: 'ok', db: 'up' }` when reachable and
+ * 503 `{ status: 'error', db: 'down' }` otherwise, letting load balancers and
+ * orchestrators route around an instance that can't serve requests.
+ */
+async function handleHealth(db: Queryable): Promise<ApiResponse> {
+  try {
+    await withTimeout(db.query('SELECT 1'), HEALTH_DB_TIMEOUT_MS);
+    return { status: 200, body: { status: 'ok', db: 'up' } };
+  } catch {
+    return { status: 503, body: { status: 'error', db: 'down' } };
+  }
 }
 
 /** Require a value to be a non-empty (after trim) string, else 400. */
@@ -235,7 +280,7 @@ function requireApiKey(req: ApiRequest, configuredKey: string | undefined): void
 async function handleCreate(db: Queryable, body: unknown): Promise<ApiResponse> {
   const input = asObject(body);
   const title = requireString(input.title, 'title', MAX_TITLE_LENGTH);
-  const bodyMarkdown = requireString(input.bodyMarkdown, 'bodyMarkdown', Number.MAX_SAFE_INTEGER);
+  const bodyMarkdown = requireString(input.bodyMarkdown, 'bodyMarkdown', MAX_BODY_MARKDOWN_LENGTH);
   const slug = resolveSlug(input.slug, title);
   try {
     const doc = await createDocument(db, {
@@ -347,7 +392,11 @@ async function handleUpdate(db: Queryable, slug: string, body: unknown): Promise
     patch.title = requireString(input.title, 'title', MAX_TITLE_LENGTH);
   }
   if (input.bodyMarkdown !== undefined) {
-    const bodyMarkdown = requireString(input.bodyMarkdown, 'bodyMarkdown', Number.MAX_SAFE_INTEGER);
+    const bodyMarkdown = requireString(
+      input.bodyMarkdown,
+      'bodyMarkdown',
+      MAX_BODY_MARKDOWN_LENGTH,
+    );
     patch.bodyMarkdown = bodyMarkdown;
     // Re-render so the stored HTML never drifts from the Markdown source.
     patch.renderedHtml = renderDocumentHtml(bodyMarkdown);
@@ -391,7 +440,8 @@ function methodNotAllowed(allowed: string[]): ApiResponse {
  *   - `POST   /documents/:slug/publish`   -> mark published (idempotent)
  *   - `POST   /documents/:slug/unpublish` -> mark draft (idempotent)
  *
- * Also serves `GET /health` for liveness checks. Unknown paths return 404;
+ * Also serves `GET /health` as a DB-aware readiness check (503 if Postgres is
+ * unreachable). Unknown paths return 404;
  * known paths with an unsupported method return 405. Any {@link ApiError}
  * thrown by a handler is mapped to its status; anything else surfaces as a 500
  * without leaking internal detail to the client.
@@ -412,10 +462,11 @@ export async function handleApiRequest(
   try {
     const [resource, slug, action, ...extra] = req.segments;
 
-    // Lightweight health check, handy for liveness probes.
+    // DB-aware readiness check: pings Postgres so the probe fails when the
+    // database is unreachable rather than reporting healthy on liveness alone.
     if (resource === 'health' && req.segments.length === 1) {
       if (req.method !== 'GET') return methodNotAllowed(['GET']);
-      return { status: 200, body: { status: 'ok' } };
+      return await handleHealth(db);
     }
 
     if (resource !== 'documents') {
