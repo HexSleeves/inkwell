@@ -61,6 +61,7 @@
     "vitest": "^3.2.6"
   },
   "dependencies": {
+    "highlight.js": "^11.11.1",
     "markdown-it": "^14.2.0",
     "pg": "^8.21.0",
     "sanitize-html": "^2.17.5"

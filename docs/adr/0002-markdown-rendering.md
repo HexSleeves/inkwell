@@ -42,3 +42,22 @@ nofollow"`.
   change in `src/rendering.ts`, with tests, rather than an accidental hole.
 - Sanitization runs at write time (on create/update). If the allowlist later
   tightens for security reasons, existing documents must be re-rendered.
+
+## Update (2026-06-18): server-side syntax highlighting
+
+The allowlist expansion anticipated above was made: fenced code blocks are now
+syntax-highlighted at render time with
+[`highlight.js`](https://github.com/highlightjs/highlight.js) (CYP-12).
+
+- **Where.** `markdown-it`'s `highlight` hook calls `highlight.js` for each
+  fenced block whose language hint it recognizes, emitting `<span class="hljs-…">`
+  token markup; a custom `fence` renderer rule wraps the block in
+  `<pre><code class="hljs language-<lang>">` so the theme's `.hljs` rules apply.
+- **Safety.** Highlighting happens *before* sanitization, so the output still
+  passes through the same allowlist. The only allowlist change is permitting the
+  `class` attribute on `<span>` (class values are inert). Code with no recognized
+  language is escaped as plain text — never parsed as markup — so a fenced
+  `<script>` cannot execute.
+- **Theme.** Token colors (light + dark) live in the inlined page stylesheet in
+  `src/pages.ts`, keeping the frontend asset-pipeline-free. `highlight.js` is a
+  pure-Node dependency, consistent with the no-DOM constraint above.

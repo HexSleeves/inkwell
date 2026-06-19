@@ -325,8 +325,12 @@ Markdown is rendered with [`markdown-it`](https://github.com/markdown-it/markdow
 and the output is sanitized with [`sanitize-html`](https://github.com/apostrophecms/sanitize-html)
 using a strict allowlist. Authors may use safe inline HTML; anything that can
 execute script (`<script>`, `<iframe>`, `on*` handlers, `javascript:` URLs) is
-stripped. The document create/update path calls `renderDocumentHtml` to populate
-the stored `rendered_html`. See
+stripped. Fenced code blocks with a language hint (e.g. ` ```ts `) are
+syntax-highlighted server-side with
+[`highlight.js`](https://github.com/highlightjs/highlight.js) before
+sanitization; the colored token markup is styled by a theme inlined into every
+page (`src/pages.ts`). The document create/update path calls `renderDocumentHtml`
+to populate the stored `rendered_html`. See
 [`docs/adr/0002-markdown-rendering.md`](docs/adr/0002-markdown-rendering.md).
 
 ### Persistence

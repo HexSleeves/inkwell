@@ -31,7 +31,11 @@ describe('renderMarkdown — formatting preserved', () => {
     const fenced = renderMarkdown('```ts\nconst x = 1;\n```');
     expect(fenced).toContain('<pre>');
     expect(fenced).toContain('<code');
-    expect(fenced).toContain('const x = 1;');
+    // The source survives, just tokenized into highlight.js spans rather than
+    // verbatim — the keyword and the number are wrapped, the rest is plain.
+    expect(fenced).toContain('const');
+    expect(fenced).toContain('x = ');
+    expect(fenced).toContain('1');
   });
 
   it('keeps the language class on fenced code blocks', () => {
@@ -78,6 +82,73 @@ describe('renderMarkdown — formatting preserved', () => {
   it('returns empty string for empty or whitespace-only input', () => {
     expect(renderMarkdown('')).toBe('');
     expect(renderMarkdown('   \n  ')).toBe('');
+  });
+});
+
+describe('renderMarkdown — syntax highlighting (highlight.js)', () => {
+  it('highlights a TypeScript block with hljs token spans', () => {
+    const html = renderMarkdown('```ts\nconst x: number = 1;\n```');
+    expect(html).toContain('class="hljs language-ts"');
+    expect(html).toContain('<span class="hljs-keyword">const</span>');
+  });
+
+  it('highlights Python', () => {
+    const html = renderMarkdown('```python\ndef greet(name):\n    return f"hi {name}"\n```');
+    expect(html).toContain('language-python');
+    expect(html).toContain('class="hljs-keyword">def</span>');
+  });
+
+  it('highlights JSON', () => {
+    const html = renderMarkdown('```json\n{ "ok": true }\n```');
+    expect(html).toContain('language-json');
+    expect(html).toContain('hljs-');
+  });
+
+  it('highlights Bash', () => {
+    const html = renderMarkdown('```bash\necho "hello" | grep h\n```');
+    expect(html).toContain('language-bash');
+    expect(html).toContain('hljs-');
+  });
+
+  it('marks every highlighted block with the hljs class for theme styling', () => {
+    const html = renderMarkdown('```ts\nlet y = 2;\n```');
+    expect(html).toContain('<code class="hljs language-ts">');
+  });
+
+  it('falls back to plain (un-tokenized) text for an unknown language', () => {
+    const html = renderMarkdown('```notalang\nsome text\n```');
+    // The author's hint is preserved as a class, but with no highlight.js
+    // grammar for it the content is left as plain escaped text — no token spans.
+    expect(html).toContain('class="hljs language-notalang"');
+    expect(html).toContain('some text');
+    expect(html).not.toContain('hljs-keyword');
+  });
+
+  it('renders a fenced block with no language hint as a plain hljs block', () => {
+    const html = renderMarkdown('```\nplain code\n```');
+    expect(html).toContain('<code class="hljs">');
+    expect(html).toContain('plain code');
+  });
+
+  it('escapes HTML metacharacters inside highlighted code (no injection)', () => {
+    const html = renderMarkdown('```html\n<script>alert(1)</script>\n```');
+    // The angle brackets are escaped to entities; no live <script> survives.
+    expect(html).not.toContain('<script>alert(1)</script>');
+    expect(html).toContain('&lt;');
+    expect(html).toContain('alert(1)');
+  });
+
+  it('escapes metacharacters even for an unknown language', () => {
+    const html = renderMarkdown('```nope\n<b>not bold</b> & <i>x</i>\n```');
+    expect(html).not.toContain('<b>not bold</b>');
+    expect(html).toContain('&lt;b&gt;');
+    expect(html).toContain('&amp;');
+  });
+
+  it('keeps highlight.js token spans through sanitization', () => {
+    const html = renderMarkdown('```ts\nconst x = 1;\n```');
+    // sanitize-html must not strip the span.class the highlighter emits.
+    expect(html).toMatch(/<span class="hljs-[a-z_]+">/);
   });
 });
 
