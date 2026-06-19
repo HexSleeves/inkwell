@@ -1,0 +1,50 @@
+# Local/self-host stack: the Inkwell app plus its Postgres database.
+#
+#   docker compose up --build
+#
+# Override the non-secret defaults below via a local `.env` file (gitignored)
+# or your shell. At minimum set INKWELL_API_KEY to a real secret before
+# exposing this beyond localhost.
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-inkwell}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-inkwell}
+      POSTGRES_DB: ${POSTGRES_DB:-inkwell}
+    volumes:
+      - inkwell-pgdata:/var/lib/postgresql/data
+    # Gate the app on real readiness, not just container start, so the
+    # migration step doesn't race Postgres' first boot.
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-inkwell} -d ${POSTGRES_DB:-inkwell}']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    ports:
+      # Exposed for host-side inspection (psql); the app reaches db over the
+      # compose network regardless.
+      - '${POSTGRES_PORT:-5432}:5432'
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      # `db` is the compose service hostname. Matches createPool()'s DATABASE_URL.
+      DATABASE_URL: postgres://${POSTGRES_USER:-inkwell}:${POSTGRES_PASSWORD:-inkwell}@db:5432/${POSTGRES_DB:-inkwell}
+      PORT: '3000'
+      HOST: 0.0.0.0
+      # Shared secret required on mutating requests (X-API-Key). Override in .env.
+      INKWELL_API_KEY: ${INKWELL_API_KEY:-changeme-local-dev-key}
+    depends_on:
+      db:
+        condition: service_healthy
+    # Apply migrations, then start the server. CMD in the image is
+    # `node dist/main.js`; this wraps it so a fresh database is schema-ready.
+    command: sh -c "node dist/db/cli.js migrate && node dist/main.js"
+    ports:
+      - '${PORT:-3000}:3000'
+
+volumes:
+  inkwell-pgdata:
