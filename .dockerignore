@@ -1,45 +1,6 @@
-# Dependencies — reinstalled in-image via `pnpm install --frozen-lockfile`.
-node_modules/
-
-# Build output — recompiled in the builder stage.
-dist/
-coverage/
-
-# VCS / CI metadata.
+target/
 .git/
-.gitignore
-.github/
-
-# Tests and test-only helpers — not needed in the production image.
-src/**/*.test.ts
-src/**/test-helpers.ts
-vitest.config.ts
-
-# Tooling configs irrelevant to the image build.
-eslint.config.js
-.prettierrc.json
-.prettierignore
-.npmrc
-
-# Docs and markdown.
-*.md
-docs/
-
-# Env & secrets — never bake these into an image.
 .env
 .env.*
-!.env.example
-
-# Editor / OS noise.
-.DS_Store
-.idea/
-.vscode/
-*.swp
-*.log
-npm-debug.log*
-pnpm-debug.log*
-
-# Docker files themselves.
-Dockerfile
-.dockerignore
-docker-compose.yml
+node_modules/
+coverage/

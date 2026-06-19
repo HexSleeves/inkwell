@@ -1,48 +1,20 @@
 # syntax=docker/dockerfile:1
-
-# ---- Stage 1: builder ----------------------------------------------------
-# Full toolchain (incl. devDependencies + TypeScript) to compile src -> dist.
-FROM node:20 AS builder
-
+FROM lukemathwalker/cargo-chef:latest-rust-1 AS chef
 WORKDIR /app
 
-# Corepack ships the pnpm version pinned in package.json's packageManager.
-RUN corepack enable
+FROM chef AS planner
+COPY . .
+RUN cargo chef prepare --recipe-path recipe.json
 
-# Install dependencies against the lockfile first so this layer caches across
-# source-only changes.
-COPY package.json pnpm-lock.yaml ./
-RUN pnpm install --frozen-lockfile
+FROM chef AS builder
+COPY --from=planner /app/recipe.json recipe.json
+RUN cargo chef cook --release --recipe-path recipe.json
+COPY . .
+RUN cargo build --release --bin inkwell
 
-# Compile TypeScript to dist/ (tsc -p tsconfig.build.json).
-COPY tsconfig.json tsconfig.build.json ./
-COPY src ./src
-RUN pnpm run build
-
-# ---- Stage 2: runtime ----------------------------------------------------
-# Slim image with only the compiled output and production dependencies.
-FROM node:20-slim AS runtime
-
-ENV NODE_ENV=production
-WORKDIR /app
-
-RUN corepack enable
-
-# package.json is needed at runtime: "type": "module" governs ESM resolution
-# and the db:* scripts resolve the migration CLI. Installing prod deps here
-# (instead of copying from the builder) keeps pnpm's virtual-store symlinks
-# self-contained — Docker's COPY dereferences symlinks, which would break the
-# .pnpm layout if node_modules were copied across stages.
-COPY package.json pnpm-lock.yaml ./
-RUN pnpm install --frozen-lockfile --prod
-
-COPY --from=builder /app/dist ./dist
-
-# Run as the unprivileged user baked into the node image.
-USER node
-
+FROM debian:bookworm-slim AS runtime
+RUN useradd --system --uid 10001 inkwell
+COPY --from=builder /app/target/release/inkwell /usr/local/bin/inkwell
+USER inkwell
 EXPOSE 3000
-
-# Server entrypoint (pnpm start === node dist/main.js). Reads DATABASE_URL,
-# PORT (default 3000), HOST (default 0.0.0.0), and INKWELL_API_KEY from the env.
-CMD ["node", "dist/main.js"]
+CMD ["inkwell", "serve"]

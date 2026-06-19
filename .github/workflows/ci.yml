@@ -6,28 +6,29 @@ on:
   pull_request:
 
 jobs:
-  build:
+  rust:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        node-version: [20.x, 22.x]
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: inkwell
+          POSTGRES_PASSWORD: inkwell
+          POSTGRES_DB: inkwell_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U inkwell -d inkwell_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
-      - uses: actions/checkout@v6
-      - uses: pnpm/action-setup@v6
-        # pnpm version is read from package.json's packageManager field.
-      - name: Use Node.js ${{ matrix.node-version }}
-        uses: actions/setup-node@v6
-        with:
-          node-version: ${{ matrix.node-version }}
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - name: Lint
-        run: pnpm run lint
-      - name: Check formatting
-        run: pnpm run format:check
-      - name: Typecheck
-        run: pnpm run typecheck
-      - name: Test
-        run: pnpm run test
-      - name: Build
-        run: pnpm run build
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets --all-features -- -D warnings
+      - run: cargo test --all
+        env:
+          DATABASE_URL: postgres://inkwell:inkwell@localhost:5432/inkwell_test
+      - run: cargo build --release --bin inkwell

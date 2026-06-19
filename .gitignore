@@ -1,16 +1,10 @@
-# Dependencies
+# Rust build output
+target/
+
+# Legacy Node artifacts
 node_modules/
-
-# Build output
 dist/
-
-# Test / coverage
 coverage/
-
-# Logs
-*.log
-npm-debug.log*
-pnpm-debug.log*
 
 # Env & secrets
 .env
@@ -23,5 +17,5 @@ pnpm-debug.log*
 .vscode/
 *.swp
 
-# Local agent/tool working state (opencode worktrees, etc.)
+# Local agent/tool working state
 .claude/
