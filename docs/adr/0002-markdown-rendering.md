@@ -53,7 +53,7 @@ syntax-highlighted at render time with
   fenced block whose language hint it recognizes, emitting `<span class="hljs-…">`
   token markup; a custom `fence` renderer rule wraps the block in
   `<pre><code class="hljs language-<lang>">` so the theme's `.hljs` rules apply.
-- **Safety.** Highlighting happens *before* sanitization, so the output still
+- **Safety.** Highlighting happens _before_ sanitization, so the output still
   passes through the same allowlist. The only allowlist change is permitting the
   `class` attribute on `<span>` (class values are inert). Code with no recognized
   language is escaped as plain text — never parsed as markup — so a fenced
