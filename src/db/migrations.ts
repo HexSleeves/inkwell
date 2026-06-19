@@ -63,5 +63,36 @@ const addDocumentStatus: Migration = {
   down: `ALTER TABLE documents DROP COLUMN status;`,
 };
 
+/**
+ * Documents gain free-form **tags** for discovery: a `text[]` column rather than
+ * a `document_tags` join table. Tags are a small, unordered set per document
+ * that is always read and written alongside the document itself (never queried
+ * independently of it), so an array column keeps reads single-row and writes
+ * atomic without a join. The trade-off — no referential tag entity — is
+ * acceptable for v0.x; a join table can be migrated to later if tags ever need
+ * their own metadata (descriptions, colors, rename-with-history).
+ *
+ * A GIN index over the array backs the `tag = ANY(tags)` containment lookups the
+ * tag listing pages and sitemap perform. Existing rows backfill to the empty
+ * array via the `DEFAULT '{}'`, so no document is left with a NULL tag set.
+ */
+const addDocumentTags: Migration = {
+  id: '0003',
+  name: 'add_document_tags',
+  up: `
+    ALTER TABLE documents
+      ADD COLUMN tags text[] NOT NULL DEFAULT '{}';
+    CREATE INDEX documents_tags_idx ON documents USING gin (tags);
+  `,
+  down: `
+    DROP INDEX documents_tags_idx;
+    ALTER TABLE documents DROP COLUMN tags;
+  `,
+};
+
 /** All migrations, in apply order. */
-export const MIGRATIONS: readonly Migration[] = [createDocuments, addDocumentStatus];
+export const MIGRATIONS: readonly Migration[] = [
+  createDocuments,
+  addDocumentStatus,
+  addDocumentTags,
+];

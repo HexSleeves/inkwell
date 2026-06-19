@@ -56,6 +56,7 @@ function makeDoc(overrides: Partial<Document> = {}): Document {
     bodyMarkdown: '# Hello',
     renderedHtml: '<h1>Hello</h1>',
     status: 'published',
+    tags: [],
     createdAt: new Date('2026-01-01T00:00:00.000Z'),
     updatedAt: new Date('2026-01-02T00:00:00.000Z'),
     ...overrides,

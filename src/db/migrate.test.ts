@@ -15,7 +15,7 @@ describe('migrate', () => {
   it('applies all migrations to a fresh database', async () => {
     const applied = await migrate(db);
     expect(applied).toEqual(MIGRATIONS.map((m) => m.id));
-    expect(await appliedMigrationIds(db)).toEqual(['0001', '0002']);
+    expect(await appliedMigrationIds(db)).toEqual(['0001', '0002', '0003']);
   });
 
   it('records the migration name in the ledger', async () => {
@@ -26,6 +26,7 @@ describe('migrate', () => {
     expect(ledger.rows).toEqual([
       { id: '0001', name: 'create_documents' },
       { id: '0002', name: 'add_document_status' },
+      { id: '0003', name: 'add_document_tags' },
     ]);
   });
 
@@ -43,25 +44,26 @@ describe('migrate', () => {
     await migrate(db);
     const secondRun = await migrate(db);
     expect(secondRun).toEqual([]);
-    expect(await appliedMigrationIds(db)).toEqual(['0001', '0002']);
+    expect(await appliedMigrationIds(db)).toEqual(['0001', '0002', '0003']);
   });
 
   it('rolls back the most recent migration', async () => {
     await migrate(db);
     const reverted = await rollback(db);
-    expect(reverted).toEqual(['0002']);
-    expect(await appliedMigrationIds(db)).toEqual(['0001']);
+    expect(reverted).toEqual(['0003']);
+    expect(await appliedMigrationIds(db)).toEqual(['0001', '0002']);
 
-    // The 0002 down SQL ran: the status column is gone but the table remains.
-    await expect(db.query(`SELECT status FROM documents`)).rejects.toThrow();
-    const stillThere = await db.query(`SELECT slug FROM documents`);
+    // The 0003 down SQL ran: the tags column is gone but the table (and the
+    // status column from 0002) remains.
+    await expect(db.query(`SELECT tags FROM documents`)).rejects.toThrow();
+    const stillThere = await db.query(`SELECT slug, status FROM documents`);
     expect(stillThere.rows).toEqual([]);
   });
 
   it('rolls back every migration when asked', async () => {
     await migrate(db);
     const reverted = await rollback(db, { steps: MIGRATIONS.length });
-    expect(reverted).toEqual(['0002', '0001']);
+    expect(reverted).toEqual(['0003', '0002', '0001']);
     expect(await appliedMigrationIds(db)).toEqual([]);
 
     // The 0001 down SQL ran: the documents table is gone.
