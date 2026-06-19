@@ -59,19 +59,22 @@ npm run build
 Inkwell is configured entirely through the environment. Only `DATABASE_URL` is
 required; the rest have sensible defaults.
 
-| Variable       | Required | Default   | Used by                | Description                                                                                               |
-| -------------- | -------- | --------- | ---------------------- | --------------------------------------------------------------------------------------------------------- |
-| `DATABASE_URL` | yes      | —         | server, `db:*` scripts | Postgres connection string, e.g. `postgres://user:pass@host:5432/inkwell`. Startup fails loudly if unset. |
-| `PORT`         | no       | `3000`    | server                 | TCP port the HTTP server listens on.                                                                      |
-| `HOST`         | no       | `0.0.0.0` | server                 | Address to bind. Use `127.0.0.1` to restrict to localhost.                                                |
-| `INKWELL_API_KEY` | no    | —         | server                 | Shared secret required on mutating requests via the `X-API-Key` header (see below). Unset locks down all writes. |
+| Variable          | Required | Default   | Used by                | Description                                                                                                      |
+| ----------------- | -------- | --------- | ---------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `DATABASE_URL`    | yes      | —         | server, `db:*` scripts | Postgres connection string, e.g. `postgres://user:pass@host:5432/inkwell`. Startup fails loudly if unset.        |
+| `PORT`            | no       | `3000`    | server                 | TCP port the HTTP server listens on.                                                                             |
+| `HOST`            | no       | `0.0.0.0` | server                 | Address to bind. Use `127.0.0.1` to restrict to localhost.                                                       |
+| `INKWELL_API_KEY` | no       | —         | server                 | Shared secret required on mutating requests via the `X-API-Key` header (see below). Unset locks down all writes. |
 
 ### Write authentication
 
-Mutating API requests — `POST`, `PATCH`/`PUT`, and `DELETE` on `/documents` —
-require the shared secret `INKWELL_API_KEY` to be presented in an `X-API-Key`
-header; missing or wrong keys get `401`. Reads (`GET /documents`,
-`GET /documents/:slug`) and the public HTML frontend stay open. If
+Mutating API requests — `POST`, `PATCH`/`PUT`, `DELETE`, and the
+`publish`/`unpublish` actions on `/documents` — require the shared secret
+`INKWELL_API_KEY` to be presented in an `X-API-Key` header; missing or wrong
+keys get `401`. Reads (`GET /documents`, `GET /documents/:slug`) and the public
+HTML frontend stay open but only expose `published` documents to unauthenticated
+callers — a valid key unlocks draft visibility (see
+[draft/published visibility](#endpoints)). If
 `INKWELL_API_KEY` is unset or empty the server fails closed: no key can match,
 so every write is rejected. Set it before allowing writes:
 
@@ -109,11 +112,20 @@ in a second terminal, **publish a document** by POSTing Markdown to the API:
 ```bash
 curl -sS -X POST http://localhost:3000/documents \
   -H 'content-type: application/json' \
+  -H "x-api-key: $INKWELL_API_KEY" \
   -d '{"title":"Hello World","bodyMarkdown":"# Hello World\n\nMy first **Inkwell** page."}'
 ```
 
 The response echoes the stored document, including its derived `slug`
-(`hello-world`) and the sanitized `renderedHtml`. Your page is now live:
+(`hello-world`), the sanitized `renderedHtml`, and `"status": "draft"`. New
+documents start as drafts and are hidden from the public site, so **publish it**:
+
+```bash
+curl -sS -X POST http://localhost:3000/documents/hello-world/publish \
+  -H "x-api-key: $INKWELL_API_KEY"
+```
+
+Your page is now live:
 
 - Open <http://localhost:3000/hello-world> to read the published page.
 - Open <http://localhost:3000/> to see it listed on the index.
@@ -193,17 +205,33 @@ All request and response bodies are JSON. Errors share one shape:
 
 ### Endpoints
 
-| Method   | Path               | Description                        | Success | Errors                         |
-| -------- | ------------------ | ---------------------------------- | ------- | ------------------------------ |
-| `GET`    | `/health`          | Liveness check                     | `200`   | —                              |
-| `POST`   | `/documents`       | Create a document                  | `201`   | `400` invalid, `409` dup slug  |
-| `GET`    | `/documents`       | List documents (newest first, paged) | `200` | `400` invalid paging           |
-| `GET`    | `/documents/:slug` | Fetch one document by slug         | `200`   | `404` not found                |
-| `PATCH`  | `/documents/:slug` | Partial update (`PUT` is an alias) | `200`   | `400` invalid, `404` not found |
-| `DELETE` | `/documents/:slug` | Delete a document                  | `204`   | `404` not found                |
+| Method   | Path                         | Description                           | Success | Errors                         |
+| -------- | ---------------------------- | ------------------------------------- | ------- | ------------------------------ |
+| `GET`    | `/health`                    | Liveness check                        | `200`   | —                              |
+| `POST`   | `/documents`                 | Create a document (defaults to draft) | `201`   | `400` invalid, `409` dup slug  |
+| `GET`    | `/documents`                 | List documents (newest first, paged)  | `200`   | `400` invalid paging/`?status` |
+| `GET`    | `/documents/:slug`           | Fetch one document by slug            | `200`   | `404` not found                |
+| `PATCH`  | `/documents/:slug`           | Partial update (`PUT` is an alias)    | `200`   | `400` invalid, `404` not found |
+| `DELETE` | `/documents/:slug`           | Delete a document                     | `204`   | `404` not found                |
+| `POST`   | `/documents/:slug/publish`   | Mark published (idempotent)           | `200`   | `401`, `404` not found         |
+| `POST`   | `/documents/:slug/unpublish` | Mark draft (idempotent)               | `200`   | `401`, `404` not found         |
 
 Unknown paths return `404`; a known path with an unsupported method returns
 `405` with an `Allow` hint.
+
+**Draft / published visibility.** Every document has a `status` of `draft` or
+`published`. New documents start as `draft`; flip the state with the
+`publish`/`unpublish` actions (both require the API key, both idempotent).
+Visibility on reads depends on authentication:
+
+- **Unauthenticated** (no/invalid key): only `published` documents are visible.
+  `GET /documents` lists published only; `GET /documents/:slug` for a draft
+  returns `404` (a draft's existence is never leaked); the public HTML frontend
+  shows published only. The `?status` query param is ignored.
+- **Authenticated** (valid `X-API-Key`): drafts are visible. `GET /documents`
+  returns every status by default; narrow it with `?status=published`,
+  `?status=draft`, or the explicit `?status=all`. An unknown value is a `400`.
+  `GET /documents/:slug` returns a document of any status.
 
 **Request bodies.**
 
@@ -222,7 +250,9 @@ through the full set:
 
 ```json
 {
-  "documents": [ /* document objects, newest first */ ],
+  "documents": [
+    /* document objects, newest first */
+  ],
   "total": 42,
   "limit": 20,
   "offset": 0
@@ -240,6 +270,7 @@ document is returned as:
   "title": "Hello World",
   "bodyMarkdown": "# Hello",
   "renderedHtml": "<h1>Hello</h1>",
+  "status": "draft",
   "createdAt": "2026-01-01T00:00:00.000Z",
   "updatedAt": "2026-01-01T00:00:00.000Z"
 }

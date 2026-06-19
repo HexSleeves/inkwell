@@ -178,15 +178,16 @@ export async function handlePageRequest(db: Queryable, req: PageRequest): Promis
     return { status: 405, html: renderNotFoundPage() };
   }
 
-  // Index.
+  // Index — the public frontend only ever surfaces published documents.
   if (req.segments.length === 0) {
-    const docs = await listDocuments(db);
+    const docs = await listDocuments(db, { status: 'published' });
     return { status: 200, html: renderIndexPage(docs) };
   }
 
-  // Single document page.
+  // Single document page. A draft (or unknown slug) renders the 404 page so a
+  // draft's existence isn't leaked through the public surface.
   if (req.segments.length === 1) {
-    const doc = await getDocumentBySlug(db, req.segments[0] as string);
+    const doc = await getDocumentBySlug(db, req.segments[0] as string, { status: 'published' });
     if (doc) {
       return { status: 200, html: renderDocumentPage(doc) };
     }

@@ -19,6 +19,11 @@ export type DocumentStatus = 'draft' | 'published';
 /** The full set of valid statuses, for validation at the edges. */
 export const DOCUMENT_STATUSES: readonly DocumentStatus[] = ['draft', 'published'];
 
+/** Narrow an arbitrary value to a {@link DocumentStatus}, or `null` if it isn't one. */
+export function asDocumentStatus(value: unknown): DocumentStatus | null {
+  return DOCUMENT_STATUSES.includes(value as DocumentStatus) ? (value as DocumentStatus) : null;
+}
+
 /** A document as stored in Postgres, mapped to domain shape. */
 export interface Document {
   readonly id: string;
@@ -37,6 +42,12 @@ export interface NewDocument {
   readonly title: string;
   readonly bodyMarkdown: string;
   readonly renderedHtml: string;
+  /**
+   * Initial publication status. Defaults to `draft` (the database default) when
+   * omitted, so newly authored documents stay private until explicitly
+   * published.
+   */
+  readonly status?: DocumentStatus;
 }
 
 /** Mutable fields when updating an existing document. */
@@ -44,6 +55,15 @@ export interface DocumentPatch {
   readonly title?: string;
   readonly bodyMarkdown?: string;
   readonly renderedHtml?: string;
+}
+
+/**
+ * Optional status filter shared by the read functions. Omit `status` to match
+ * documents of any status — the right default for authenticated callers that
+ * want everything; public callers should pass `'published'`.
+ */
+export interface StatusFilter {
+  readonly status?: DocumentStatus;
 }
 
 /** Raw row shape returned by `SELECT * FROM documents`. */
@@ -100,17 +120,18 @@ function toDocument(row: DocumentRow): Document {
 const RETURNING = `id, slug, title, body_markdown, rendered_html, status, created_at, updated_at`;
 
 /**
- * Insert a new document and return the persisted row.
+ * Insert a new document and return the persisted row. When `status` is omitted
+ * the database default (`draft`) applies.
  *
  * @throws {DuplicateSlugError} if `slug` is already taken.
  */
 export async function createDocument(db: Queryable, input: NewDocument): Promise<Document> {
   try {
     const result = await db.query<DocumentRow>(
-      `INSERT INTO documents (slug, title, body_markdown, rendered_html)
-       VALUES ($1, $2, $3, $4)
+      `INSERT INTO documents (slug, title, body_markdown, rendered_html, status)
+       VALUES ($1, $2, $3, $4, COALESCE($5, 'draft'))
        RETURNING ${RETURNING}`,
-      [input.slug, input.title, input.bodyMarkdown, input.renderedHtml],
+      [input.slug, input.title, input.bodyMarkdown, input.renderedHtml, input.status ?? null],
     );
     // INSERT ... RETURNING always yields exactly one row on success.
     return toDocument(result.rows[0] as DocumentRow);
@@ -122,11 +143,23 @@ export async function createDocument(db: Queryable, input: NewDocument): Promise
   }
 }
 
-/** Fetch a document by its unique slug, or `null` if none exists. */
-export async function getDocumentBySlug(db: Queryable, slug: string): Promise<Document | null> {
-  const result = await db.query<DocumentRow>(`SELECT ${RETURNING} FROM documents WHERE slug = $1`, [
-    slug,
-  ]);
+/**
+ * Fetch a document by its unique slug, or `null` if none exists. When
+ * `filter.status` is supplied, a document whose status differs is treated as
+ * not found (returns `null`) — this is how public reads avoid leaking the
+ * existence of a draft.
+ */
+export async function getDocumentBySlug(
+  db: Queryable,
+  slug: string,
+  filter: StatusFilter = {},
+): Promise<Document | null> {
+  const result = filter.status
+    ? await db.query<DocumentRow>(
+        `SELECT ${RETURNING} FROM documents WHERE slug = $1 AND status = $2`,
+        [slug, filter.status],
+      )
+    : await db.query<DocumentRow>(`SELECT ${RETURNING} FROM documents WHERE slug = $1`, [slug]);
   const row = result.rows[0];
   return row ? toDocument(row) : null;
 }
@@ -140,33 +173,44 @@ export async function getDocumentById(db: Queryable, id: string): Promise<Docume
   return row ? toDocument(row) : null;
 }
 
-/** Optional paging window for {@link listDocuments}. */
+/** Optional paging window and status filter for {@link listDocuments}. */
 export interface ListOptions {
   /** Maximum number of rows to return. Omitted means "no limit". */
   readonly limit?: number;
   /** Number of rows to skip from the start of the ordering. Defaults to 0. */
   readonly offset?: number;
+  /**
+   * Restrict to a single status. Omit to list documents of any status (the
+   * default for authenticated callers); public callers pass `'published'`.
+   */
+  readonly status?: DocumentStatus;
 }
 
 /**
  * List documents, newest first.
  *
- * When `limit`/`offset` are supplied the query returns a single page of the
- * ordering; the ordering is stable (`created_at`, then `id`) so paging never
- * skips or repeats a row. Use {@link countDocuments} for the unpaged total.
+ * `status` filters by publication state in SQL (before any `LIMIT`, so a page of
+ * N rows is N matching documents). `limit`/`offset` page the stable ordering
+ * (`created_at`, then `id`) so paging never skips or repeats a row. Use
+ * {@link countDocuments} for the unpaged total under the same status filter.
  */
 export async function listDocuments(db: Queryable, options: ListOptions = {}): Promise<Document[]> {
-  const clauses = [`SELECT ${RETURNING} FROM documents ORDER BY created_at DESC, id DESC`];
   const params: unknown[] = [];
+  let sql = `SELECT ${RETURNING} FROM documents`;
+  if (options.status) {
+    params.push(options.status);
+    sql += ` WHERE status = $${params.length}`;
+  }
+  sql += ` ORDER BY created_at DESC, id DESC`;
   if (options.limit !== undefined) {
     params.push(options.limit);
-    clauses.push(`LIMIT $${params.length}`);
+    sql += ` LIMIT $${params.length}`;
   }
   if (options.offset !== undefined) {
     params.push(options.offset);
-    clauses.push(`OFFSET $${params.length}`);
+    sql += ` OFFSET $${params.length}`;
   }
-  const result = await db.query<DocumentRow>(clauses.join(' '), params);
+  const result = await db.query<DocumentRow>(sql, params);
   return result.rows.map(toDocument);
 }
 
@@ -198,14 +242,17 @@ export async function listPublishedDocuments(
 }
 
 /**
- * Count all documents. Kept alongside {@link listDocuments} so paginated reads
- * can report a total; when row-level filters are added to listing they should
- * be applied here too so the count stays consistent with the page.
+ * Count documents, optionally restricted to a single status. Kept alongside
+ * {@link listDocuments} so paginated reads can report a total consistent with
+ * the page — pass the same `status` used for the listing.
  */
-export async function countDocuments(db: Queryable): Promise<number> {
-  const result = await db.query<{ count: number | string }>(
-    `SELECT count(*)::int AS count FROM documents`,
-  );
+export async function countDocuments(db: Queryable, filter: StatusFilter = {}): Promise<number> {
+  const result = filter.status
+    ? await db.query<{ count: number | string }>(
+        `SELECT count(*)::int AS count FROM documents WHERE status = $1`,
+        [filter.status],
+      )
+    : await db.query<{ count: number | string }>(`SELECT count(*)::int AS count FROM documents`);
   // `count(*)` comes back as a number with the `::int` cast, but coerce
   // defensively in case a driver hands it back as a string.
   return Number(result.rows[0]?.count ?? 0);
@@ -230,6 +277,26 @@ export async function updateDocumentBySlug(
       WHERE slug = $1
       RETURNING ${RETURNING}`,
     [slug, patch.title ?? null, patch.bodyMarkdown ?? null, patch.renderedHtml ?? null],
+  );
+  const row = result.rows[0];
+  return row ? toDocument(row) : null;
+}
+
+/**
+ * Set a document's publication status and return the updated row, or `null` if
+ * no such document exists. Idempotent: setting the status a document already has
+ * is a successful no-op that returns the row unchanged. `updated_at` is
+ * deliberately left untouched so repeated publish/unpublish calls don't churn
+ * the displayed "updated" date.
+ */
+export async function setDocumentStatus(
+  db: Queryable,
+  slug: string,
+  status: DocumentStatus,
+): Promise<Document | null> {
+  const result = await db.query<DocumentRow>(
+    `UPDATE documents SET status = $2 WHERE slug = $1 RETURNING ${RETURNING}`,
+    [slug, status],
   );
   const row = result.rows[0];
   return row ? toDocument(row) : null;

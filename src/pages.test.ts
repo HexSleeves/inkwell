@@ -22,17 +22,39 @@ import type { Queryable } from './db/pool.js';
 /** Shared secret used to authorize the seed writes below. */
 const SEED_API_KEY = 'pages-test-key';
 
-/** Seed a document through the real API create path (renders + persists HTML). */
-async function seed(
+/** Create a document through the real API path (renders + persists HTML). */
+async function create(
   db: Queryable,
   body: { title: string; bodyMarkdown: string; slug?: string },
-): Promise<void> {
+): Promise<string> {
   const res = await handleApiRequest(
     db,
     { method: 'POST', segments: ['documents'], body, headers: { 'x-api-key': SEED_API_KEY } },
     { apiKey: SEED_API_KEY },
   );
   expect(res.status).toBe(201);
+  return (res.body as { slug: string }).slug;
+}
+
+/**
+ * Seed a *published* document. Documents are created as drafts (which the public
+ * frontend hides), so the public-page tests below publish their fixtures.
+ */
+async function seed(
+  db: Queryable,
+  body: { title: string; bodyMarkdown: string; slug?: string },
+): Promise<void> {
+  const slug = await create(db, body);
+  const res = await handleApiRequest(
+    db,
+    {
+      method: 'POST',
+      segments: ['documents', slug, 'publish'],
+      headers: { 'x-api-key': SEED_API_KEY },
+    },
+    { apiKey: SEED_API_KEY },
+  );
+  expect(res.status).toBe(200);
 }
 
 describe('public pages (handler)', () => {
@@ -110,6 +132,20 @@ describe('public pages (handler)', () => {
       const res = await handlePageRequest(db, { method: 'GET', segments: ['ghost'] });
       expect(res.status).toBe(404);
       expect(res.html).toContain('Not found');
+    });
+
+    it('hides a draft: not on the index and its page 404s', async () => {
+      // Created but never published -> draft.
+      await create(db, { title: 'Secret Draft', slug: 'secret-draft', bodyMarkdown: '# wip' });
+
+      const index = await handlePageRequest(db, { method: 'GET', segments: [] });
+      expect(index.status).toBe(200);
+      expect(index.html).not.toContain('secret-draft');
+      expect(index.html).not.toContain('Secret Draft');
+
+      const page = await handlePageRequest(db, { method: 'GET', segments: ['secret-draft'] });
+      expect(page.status).toBe(404);
+      expect(page.html).toContain('Not found');
     });
   });
 

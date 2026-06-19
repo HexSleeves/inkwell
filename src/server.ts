@@ -44,7 +44,7 @@ function splitPath(rawUrl: string): string[] {
 
 /**
  * Parse the query string into a flat map, keeping the first value seen for any
- * repeated key. Matches the `ApiRequest.query` contract the handler expects.
+ * repeated key — matching the `ApiRequest.query` contract the handler expects.
  */
 function parseQuery(rawUrl: string): Record<string, string> {
   const params = new URLSearchParams(rawUrl.split('?')[1] ?? '');
@@ -161,7 +161,7 @@ export function createRequestListener(db: Queryable) {
       const apiKey = process.env.INKWELL_API_KEY;
       const response = await handleApiRequest(
         db,
-        { method, segments, body, headers: req.headers, query: parseQuery(req.url ?? '') },
+        { method, segments, body, headers: req.headers, query: parseQuery(req.url ?? '/') },
         { apiKey },
       );
       writeResponse(res, response);

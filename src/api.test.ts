@@ -24,6 +24,7 @@ interface DocumentBody {
   title: string;
   bodyMarkdown: string;
   renderedHtml: string;
+  status: 'draft' | 'published';
   createdAt: string;
   updatedAt: string;
 }
@@ -298,6 +299,161 @@ describe('documents HTTP API (handler)', () => {
     });
   });
 
+  describe('draft/published state', () => {
+    // Helpers scoped to this suite. `call` (authed) is used to create/transition;
+    // `pub`/`unpub` hit the action routes; reads use either `call` (authed) or a
+    // bare unauthenticated request to assert public gating.
+    const pub = (slug: string): Promise<ApiResponse> =>
+      call({ method: 'POST', segments: ['documents', slug, 'publish'] });
+    const unpub = (slug: string): Promise<ApiResponse> =>
+      call({ method: 'POST', segments: ['documents', slug, 'unpublish'] });
+    const anon = (req: ApiRequest): Promise<ApiResponse> =>
+      handleApiRequest(db, req, { apiKey: API_KEY });
+
+    it('defaults new documents to draft', async () => {
+      const res = await createSample();
+      expect(res.status).toBe(201);
+      expect((res.body as DocumentBody).status).toBe('draft');
+    });
+
+    it('publish then unpublish flips status and is idempotent', async () => {
+      await createSample();
+      const published = await pub('hello-world');
+      expect(published.status).toBe(200);
+      expect((published.body as DocumentBody).status).toBe('published');
+
+      // Idempotent: publishing again stays published, still 200.
+      const again = await pub('hello-world');
+      expect(again.status).toBe(200);
+      expect((again.body as DocumentBody).status).toBe('published');
+
+      const draft = await unpub('hello-world');
+      expect(draft.status).toBe(200);
+      expect((draft.body as DocumentBody).status).toBe('draft');
+
+      const againDraft = await unpub('hello-world');
+      expect(againDraft.status).toBe(200);
+      expect((againDraft.body as DocumentBody).status).toBe('draft');
+    });
+
+    it('publish/unpublish on a missing document is 404', async () => {
+      expect((await pub('ghost')).status).toBe(404);
+      expect((await unpub('ghost')).status).toBe(404);
+    });
+
+    it('publish/unpublish require an API key (401 without one)', async () => {
+      await createSample();
+      const noKeyPub = await anon({
+        method: 'POST',
+        segments: ['documents', 'hello-world', 'publish'],
+      });
+      expect(noKeyPub.status).toBe(401);
+      const noKeyUnpub = await anon({
+        method: 'POST',
+        segments: ['documents', 'hello-world', 'unpublish'],
+      });
+      expect(noKeyUnpub.status).toBe(401);
+      // The status was not changed by the rejected calls.
+      expect(
+        (await call({ method: 'GET', segments: ['documents', 'hello-world'] })).body,
+      ).toMatchObject({ status: 'draft' });
+    });
+
+    it('rejects a non-POST method on the action route (405)', async () => {
+      await createSample();
+      const res = await call({ method: 'GET', segments: ['documents', 'hello-world', 'publish'] });
+      expect(res.status).toBe(405);
+    });
+
+    it('public list returns only published docs', async () => {
+      await createSample({ slug: 'draft-one' });
+      await createSample({ slug: 'pub-one' });
+      await pub('pub-one');
+
+      const res = await anon({ method: 'GET', segments: ['documents'] });
+      expect(res.status).toBe(200);
+      expect((res.body as { documents: DocumentBody[] }).documents.map((d) => d.slug)).toEqual([
+        'pub-one',
+      ]);
+    });
+
+    it('public single GET 404s a draft but serves a published doc', async () => {
+      await createSample();
+      const draftGet = await anon({ method: 'GET', segments: ['documents', 'hello-world'] });
+      expect(draftGet.status).toBe(404);
+
+      await pub('hello-world');
+      const pubGet = await anon({ method: 'GET', segments: ['documents', 'hello-world'] });
+      expect(pubGet.status).toBe(200);
+      expect((pubGet.body as DocumentBody).slug).toBe('hello-world');
+    });
+
+    it('authenticated list includes drafts by default', async () => {
+      await createSample({ slug: 'draft-one' });
+      await createSample({ slug: 'pub-one' });
+      await pub('pub-one');
+
+      const res = await call({ method: 'GET', segments: ['documents'] });
+      expect(res.status).toBe(200);
+      expect(
+        (res.body as { documents: DocumentBody[] }).documents.map((d) => d.slug).sort(),
+      ).toEqual(['draft-one', 'pub-one']);
+    });
+
+    it('authenticated list filters by ?status', async () => {
+      await createSample({ slug: 'draft-one' });
+      await createSample({ slug: 'pub-one' });
+      await pub('pub-one');
+
+      const drafts = await call({
+        method: 'GET',
+        segments: ['documents'],
+        query: { status: 'draft' },
+      });
+      expect((drafts.body as { documents: DocumentBody[] }).documents.map((d) => d.slug)).toEqual([
+        'draft-one',
+      ]);
+
+      const published = await call({
+        method: 'GET',
+        segments: ['documents'],
+        query: { status: 'published' },
+      });
+      expect(
+        (published.body as { documents: DocumentBody[] }).documents.map((d) => d.slug),
+      ).toEqual(['pub-one']);
+
+      const all = await call({
+        method: 'GET',
+        segments: ['documents'],
+        query: { status: 'all' },
+      });
+      expect(
+        (all.body as { documents: DocumentBody[] }).documents.map((d) => d.slug).sort(),
+      ).toEqual(['draft-one', 'pub-one']);
+    });
+
+    it('rejects an unknown ?status value with 400 (authenticated)', async () => {
+      const res = await call({
+        method: 'GET',
+        segments: ['documents'],
+        query: { status: 'archived' },
+      });
+      expect(res.status).toBe(400);
+    });
+
+    it('ignores ?status for unauthenticated callers (drafts never leak)', async () => {
+      await createSample({ slug: 'draft-one' });
+      const res = await anon({
+        method: 'GET',
+        segments: ['documents'],
+        query: { status: 'draft' },
+      });
+      expect(res.status).toBe(200);
+      expect((res.body as { documents: DocumentBody[] }).documents).toEqual([]);
+    });
+  });
+
   describe('routing and method handling', () => {
     it('returns 404 for unknown routes', async () => {
       const res = await call({ method: 'GET', segments: ['widgets'] });
@@ -364,10 +520,15 @@ describe('documents HTTP API (handler)', () => {
       expect(res.status).toBe(401);
     });
 
-    it('leaves GET (list and item) open without a key', async () => {
+    it('leaves GET (list and item) open without a key for published docs', async () => {
       await createSample();
+      // Created docs are drafts; publish so an unauthenticated reader can see it.
+      await call({ method: 'POST', segments: ['documents', 'hello-world', 'publish'] });
       const list = await auth({ method: 'GET', segments: ['documents'] });
       expect(list.status).toBe(200);
+      expect((list.body as { documents: DocumentBody[] }).documents.map((d) => d.slug)).toEqual([
+        'hello-world',
+      ]);
       const item = await auth({ method: 'GET', segments: ['documents', 'hello-world'] });
       expect(item.status).toBe(200);
     });
@@ -430,6 +591,19 @@ describe('documents HTTP API (node:http transport)', () => {
     expect(createRes.status).toBe(201);
     const created = (await createRes.json()) as DocumentBody;
     expect(created.slug).toBe('over-the-wire');
+    expect(created.status).toBe('draft');
+
+    // A draft is hidden from unauthenticated readers (404, no existence leak).
+    const draftGet = await fetch(`${baseUrl}/documents/over-the-wire`);
+    expect(draftGet.status).toBe(404);
+
+    // Publish, then the same unauthenticated fetch succeeds.
+    const pubRes = await fetch(`${baseUrl}/documents/over-the-wire/publish`, {
+      method: 'POST',
+      headers: { 'x-api-key': API_KEY },
+    });
+    expect(pubRes.status).toBe(200);
+    expect(((await pubRes.json()) as DocumentBody).status).toBe('published');
 
     const getRes = await fetch(`${baseUrl}/documents/over-the-wire`);
     expect(getRes.status).toBe(200);

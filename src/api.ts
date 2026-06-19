@@ -22,13 +22,17 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 
 import {
   DuplicateSlugError,
+  asDocumentStatus,
   countDocuments,
   createDocument,
   deleteDocumentBySlug,
   getDocumentBySlug,
   listDocuments,
+  setDocumentStatus,
   updateDocumentBySlug,
   type Document,
+  type DocumentStatus,
+  type StatusFilter,
 } from './db/documents.js';
 import type { Queryable } from './db/pool.js';
 import { renderDocumentHtml } from './rendering.js';
@@ -54,10 +58,10 @@ export interface ApiRequest {
    */
   readonly headers?: Readonly<Record<string, string | string[] | undefined>>;
   /**
-   * Parsed URL query parameters, lower-cased values as supplied by the client.
-   * Each key holds the first value seen (repeated params collapse to the
-   * first). `undefined` when the transport supplies none. Used by the list
-   * route for `limit`/`offset` paging.
+   * Parsed URL query parameters (first value seen per key). `undefined` when the
+   * transport supplies none. Used by the list route for `limit`/`offset` paging
+   * and the `?status=` visibility filter; the transport adapter parses the
+   * query string.
    */
   readonly query?: Readonly<Record<string, string | undefined>>;
 }
@@ -204,15 +208,25 @@ function secretsMatch(provided: string, expected: string): boolean {
 }
 
 /**
+ * Whether a request carries the valid shared secret in `X-API-Key`. A missing,
+ * malformed (array-valued), or non-matching key — or an unconfigured server
+ * secret — is unauthenticated. Used both to gate mutations (via
+ * {@link requireApiKey}) and to decide whether reads may see drafts.
+ */
+function isAuthenticated(req: ApiRequest, configuredKey: string | undefined): boolean {
+  const header = req.headers?.['x-api-key'];
+  // A repeated header arrives as an array; reject the ambiguity outright.
+  const provided = typeof header === 'string' ? header : undefined;
+  return Boolean(configuredKey && provided && secretsMatch(provided, configuredKey));
+}
+
+/**
  * Enforce the shared-secret API key on a mutating request. The client must send
  * the configured secret in the `X-API-Key` header. A missing, malformed, or
  * non-matching key — or an unconfigured server secret — results in a 401.
  */
 function requireApiKey(req: ApiRequest, configuredKey: string | undefined): void {
-  const header = req.headers?.['x-api-key'];
-  // A repeated header arrives as an array; reject the ambiguity outright.
-  const provided = typeof header === 'string' ? header : undefined;
-  if (!configuredKey || !provided || !secretsMatch(provided, configuredKey)) {
+  if (!isAuthenticated(req, configuredKey)) {
     throw new ApiError(401, 'Missing or invalid API key.');
   }
 }
@@ -239,9 +253,16 @@ async function handleCreate(db: Queryable, body: unknown): Promise<ApiResponse> 
   }
 }
 
-/** GET /documents/:slug — fetch a single document. */
-async function handleGet(db: Queryable, slug: string): Promise<ApiResponse> {
-  const doc = await getDocumentBySlug(db, slug);
+/**
+ * GET /documents/:slug — fetch a single document.
+ *
+ * Unauthenticated callers only ever see `published` documents; a draft is
+ * reported as 404 so its existence isn't leaked. Authenticated callers (valid
+ * API key) see documents of any status.
+ */
+async function handleGet(db: Queryable, slug: string, authed: boolean): Promise<ApiResponse> {
+  const filter: StatusFilter = authed ? {} : { status: 'published' };
+  const doc = await getDocumentBySlug(db, slug, filter);
   if (!doc) {
     throw new ApiError(404, `No document with slug "${slug}".`);
   }
@@ -252,16 +273,69 @@ async function handleGet(db: Queryable, slug: string): Promise<ApiResponse> {
  * GET /documents — list documents, newest first, one page at a time.
  *
  * Reads `?limit=N&offset=N` (see {@link parsePagination}) and returns the page
- * alongside the unpaged `total` so clients can compute how many pages exist:
+ * alongside the unpaged `total` for the same filter:
  * `{ documents, total, limit, offset }`.
+ *
+ * Visibility depends on authentication:
+ *   - Unauthenticated: only `published` documents, always (the `status` query
+ *     param is ignored so drafts can never leak).
+ *   - Authenticated: every status by default (drafts included); narrow with
+ *     `?status=published`, `?status=draft`, or the explicit `?status=all`. An
+ *     unrecognized value is a 400.
  */
-async function handleList(db: Queryable, query: ApiRequest['query']): Promise<ApiResponse> {
-  const { limit, offset } = parsePagination(query);
+async function handleList(
+  db: Queryable,
+  req: ApiRequest,
+  configuredKey: string | undefined,
+): Promise<ApiResponse> {
+  const status = resolveListStatus(req, configuredKey);
+  const { limit, offset } = parsePagination(req.query);
+  const filter: StatusFilter = status ? { status } : {};
   const [documents, total] = await Promise.all([
-    listDocuments(db, { limit, offset }),
-    countDocuments(db),
+    listDocuments(db, { ...filter, limit, offset }),
+    countDocuments(db, filter),
   ]);
   return { status: 200, body: { documents, total, limit, offset } };
+}
+
+/**
+ * Resolve which status an authenticated list request is asking for. Returns the
+ * status to filter by, or `undefined` for "all statuses". Unauthenticated
+ * callers are pinned to `published` and the `?status` param is ignored.
+ */
+function resolveListStatus(
+  req: ApiRequest,
+  configuredKey: string | undefined,
+): DocumentStatus | undefined {
+  if (!isAuthenticated(req, configuredKey)) {
+    return 'published';
+  }
+  const raw = req.query?.status;
+  if (raw === undefined || raw === 'all') {
+    return undefined;
+  }
+  const status = asDocumentStatus(raw);
+  if (!status) {
+    throw new ApiError(400, 'Query param "status" must be one of: draft, published, all.');
+  }
+  return status;
+}
+
+/**
+ * POST /documents/:slug/publish and .../unpublish — flip a document's status.
+ * Requires the API key (enforced by the caller). Idempotent: re-publishing an
+ * already-published document (or vice versa) returns 200 with the row.
+ */
+async function handleSetStatus(
+  db: Queryable,
+  slug: string,
+  status: 'draft' | 'published',
+): Promise<ApiResponse> {
+  const doc = await setDocumentStatus(db, slug, status);
+  if (!doc) {
+    throw new ApiError(404, `No document with slug "${slug}".`);
+  }
+  return { status: 200, body: doc };
 }
 
 /** PATCH /documents/:slug — partial update of `{ title?, bodyMarkdown? }`. */
@@ -309,20 +383,26 @@ function methodNotAllowed(allowed: string[]): ApiResponse {
  * Route and execute a single request against the documents resource.
  *
  * Recognized routes (all under `/documents`):
- *   - `GET    /documents`        -> list
- *   - `POST   /documents`        -> create
- *   - `GET    /documents/:slug`  -> fetch
- *   - `PATCH  /documents/:slug`  -> update (PUT is accepted as an alias)
- *   - `DELETE /documents/:slug`  -> delete
+ *   - `GET    /documents`                 -> list (published-only unless authed)
+ *   - `POST   /documents`                 -> create (defaults to draft)
+ *   - `GET    /documents/:slug`           -> fetch (draft 404s unless authed)
+ *   - `PATCH  /documents/:slug`           -> update (PUT is accepted as an alias)
+ *   - `DELETE /documents/:slug`           -> delete
+ *   - `POST   /documents/:slug/publish`   -> mark published (idempotent)
+ *   - `POST   /documents/:slug/unpublish` -> mark draft (idempotent)
  *
  * Also serves `GET /health` for liveness checks. Unknown paths return 404;
  * known paths with an unsupported method return 405. Any {@link ApiError}
  * thrown by a handler is mapped to its status; anything else surfaces as a 500
  * without leaking internal detail to the client.
  *
- * Mutating routes (`POST`/`PATCH`/`PUT`/`DELETE` under `/documents`) require the
- * shared secret in `options.apiKey` to be presented via the `X-API-Key` header;
- * reads and the health check stay open. See {@link requireApiKey}.
+ * Mutating routes (`POST`/`PATCH`/`PUT`/`DELETE` and the publish/unpublish
+ * actions under `/documents`) require the shared secret in `options.apiKey` to
+ * be presented via the `X-API-Key` header. Reads stay open, but an
+ * unauthenticated reader only ever sees `published` documents — drafts are
+ * invisible (list) or 404 (single get) so their existence isn't leaked. A valid
+ * key on a read unlocks draft visibility. See {@link requireApiKey} and
+ * {@link isAuthenticated}.
  */
 export async function handleApiRequest(
   db: Queryable,
@@ -330,7 +410,7 @@ export async function handleApiRequest(
   options: ApiOptions = {},
 ): Promise<ApiResponse> {
   try {
-    const [resource, slug, ...rest] = req.segments;
+    const [resource, slug, action, ...extra] = req.segments;
 
     // Lightweight health check, handy for liveness probes.
     if (resource === 'health' && req.segments.length === 1) {
@@ -338,7 +418,7 @@ export async function handleApiRequest(
       return { status: 200, body: { status: 'ok' } };
     }
 
-    if (resource !== 'documents' || rest.length > 0) {
+    if (resource !== 'documents') {
       throw new ApiError(404, 'Not found.');
     }
 
@@ -346,7 +426,7 @@ export async function handleApiRequest(
     if (slug === undefined) {
       switch (req.method) {
         case 'GET':
-          return await handleList(db, req.query);
+          return await handleList(db, req, options.apiKey);
         case 'POST':
           requireApiKey(req, options.apiKey);
           return await handleCreate(db, req.body);
@@ -355,10 +435,27 @@ export async function handleApiRequest(
       }
     }
 
+    // Action route: /documents/:slug/(publish|unpublish)
+    if (action !== undefined && extra.length === 0) {
+      if (action !== 'publish' && action !== 'unpublish') {
+        throw new ApiError(404, 'Not found.');
+      }
+      if (req.method !== 'POST') {
+        return methodNotAllowed(['POST']);
+      }
+      requireApiKey(req, options.apiKey);
+      return await handleSetStatus(db, slug, action === 'publish' ? 'published' : 'draft');
+    }
+
+    // Any deeper path is not a route.
+    if (extra.length > 0) {
+      throw new ApiError(404, 'Not found.');
+    }
+
     // Item route: /documents/:slug
     switch (req.method) {
       case 'GET':
-        return await handleGet(db, slug);
+        return await handleGet(db, slug, isAuthenticated(req, options.apiKey));
       case 'PATCH':
       case 'PUT':
         requireApiKey(req, options.apiKey);

@@ -7,6 +7,7 @@ import {
   getDocumentById,
   getDocumentBySlug,
   listDocuments,
+  setDocumentStatus,
   updateDocumentBySlug,
 } from './documents.js';
 import { migrate } from './migrate.js';
@@ -87,5 +88,43 @@ describe('documents data-access layer', () => {
     expect(await deleteDocumentBySlug(db, 'hello-world')).toBe(true);
     expect(await getDocumentBySlug(db, 'hello-world')).toBeNull();
     expect(await deleteDocumentBySlug(db, 'hello-world')).toBe(false);
+  });
+
+  it('defaults a new document to draft status', async () => {
+    const doc = await createDocument(db, sample);
+    expect(doc.status).toBe('draft');
+  });
+
+  it('honors an explicit status on create', async () => {
+    const doc = await createDocument(db, { ...sample, status: 'published' });
+    expect(doc.status).toBe('published');
+  });
+
+  it('filters lists and single reads by status', async () => {
+    await createDocument(db, { ...sample, slug: 'a-draft' });
+    await createDocument(db, { ...sample, slug: 'b-published', status: 'published' });
+
+    const published = await listDocuments(db, { status: 'published' });
+    expect(published.map((d) => d.slug)).toEqual(['b-published']);
+
+    const drafts = await listDocuments(db, { status: 'draft' });
+    expect(drafts.map((d) => d.slug)).toEqual(['a-draft']);
+
+    // No filter returns both.
+    expect((await listDocuments(db)).map((d) => d.slug).sort()).toEqual(['a-draft', 'b-published']);
+
+    // A status filter on a single read treats a mismatch as not-found.
+    expect(await getDocumentBySlug(db, 'a-draft', { status: 'published' })).toBeNull();
+    expect((await getDocumentBySlug(db, 'a-draft', { status: 'draft' }))?.slug).toBe('a-draft');
+  });
+
+  it('sets status idempotently and returns null for a missing slug', async () => {
+    await createDocument(db, sample);
+    const published = await setDocumentStatus(db, 'hello-world', 'published');
+    expect(published?.status).toBe('published');
+    // Idempotent: setting the same status again still returns the row.
+    expect((await setDocumentStatus(db, 'hello-world', 'published'))?.status).toBe('published');
+    expect((await setDocumentStatus(db, 'hello-world', 'draft'))?.status).toBe('draft');
+    expect(await setDocumentStatus(db, 'ghost', 'published')).toBeNull();
   });
 });
