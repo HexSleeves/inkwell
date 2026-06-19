@@ -463,7 +463,10 @@ async function handleUpdate(db: Queryable, slug: string, body: unknown): Promise
     patch.tags = tags;
   }
   if (patch.title === undefined && patch.bodyMarkdown === undefined && patch.tags === undefined) {
-    throw new ApiError(400, 'Provide at least one of "title", "bodyMarkdown", or "tags" to update.');
+    throw new ApiError(
+      400,
+      'Provide at least one of "title", "bodyMarkdown", or "tags" to update.',
+    );
   }
 
   const updated = await updateDocumentBySlug(db, slug, patch);
