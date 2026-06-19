@@ -106,6 +106,15 @@ const MAX_SLUG_LENGTH = 200;
 const MAX_TITLE_LENGTH = 500;
 
 /**
+ * Tags share the slug grammar (lowercase alphanumerics, single hyphens) so each
+ * tag is a safe URL segment for its `/tags/:tag` listing page. A document may
+ * carry at most {@link MAX_TAGS} tags, each at most {@link MAX_TAG_LENGTH} chars.
+ */
+const TAG_PATTERN = SLUG_PATTERN;
+const MAX_TAG_LENGTH = 50;
+const MAX_TAGS = 20;
+
+/**
  * Hard cap on `bodyMarkdown` length. Rendering (markdown-it + highlight.js +
  * sanitize-html) runs synchronously on the event loop, so an oversize or
  * pathological document would block every other request while it renders.
@@ -199,6 +208,47 @@ function resolveSlug(rawSlug: unknown, title: string): string {
 }
 
 /**
+ * Validate and normalize the optional `tags` field.
+ *
+ * Returns `undefined` when `tags` is absent (so callers can distinguish "leave
+ * unchanged" from "set to []"), or a normalized array otherwise: each tag is
+ * lower-cased and trimmed, must match the slug grammar, and duplicates are
+ * dropped (first occurrence wins, order preserved). Rejects a non-array, a
+ * non-string element, an empty/over-long/ill-formed tag, or more than
+ * {@link MAX_TAGS} distinct tags — all as 400s.
+ */
+function resolveTags(rawTags: unknown): string[] | undefined {
+  if (rawTags === undefined || rawTags === null) {
+    return undefined;
+  }
+  if (!Array.isArray(rawTags)) {
+    throw new ApiError(400, 'Field "tags" must be an array of strings.');
+  }
+  const seen = new Set<string>();
+  const tags: string[] = [];
+  for (const raw of rawTags) {
+    if (typeof raw !== 'string') {
+      throw new ApiError(400, 'Field "tags" must be an array of strings.');
+    }
+    const tag = raw.trim().toLowerCase();
+    if (tag.length > MAX_TAG_LENGTH || !TAG_PATTERN.test(tag)) {
+      throw new ApiError(
+        400,
+        `Tag "${raw}" must be lowercase alphanumerics separated by single hyphens (≤ ${MAX_TAG_LENGTH} chars).`,
+      );
+    }
+    if (!seen.has(tag)) {
+      seen.add(tag);
+      tags.push(tag);
+    }
+  }
+  if (tags.length > MAX_TAGS) {
+    throw new ApiError(400, `A document may have at most ${MAX_TAGS} tags.`);
+  }
+  return tags;
+}
+
+/**
  * Parse a query param that must be a non-negative integer. Only digit strings
  * are accepted, so negatives, floats, and junk like `"12abc"` are rejected with
  * a 400 — keeping numeric validation consistent with the strict field checks
@@ -276,18 +326,20 @@ function requireApiKey(req: ApiRequest, configuredKey: string | undefined): void
   }
 }
 
-/** POST /documents — create a document from `{ title, bodyMarkdown, slug? }`. */
+/** POST /documents — create a document from `{ title, bodyMarkdown, slug?, tags? }`. */
 async function handleCreate(db: Queryable, body: unknown): Promise<ApiResponse> {
   const input = asObject(body);
   const title = requireString(input.title, 'title', MAX_TITLE_LENGTH);
   const bodyMarkdown = requireString(input.bodyMarkdown, 'bodyMarkdown', MAX_BODY_MARKDOWN_LENGTH);
   const slug = resolveSlug(input.slug, title);
+  const tags = resolveTags(input.tags);
   try {
     const doc = await createDocument(db, {
       slug,
       title,
       bodyMarkdown,
       renderedHtml: renderDocumentHtml(bodyMarkdown),
+      ...(tags !== undefined ? { tags } : {}),
     });
     return { status: 201, body: doc };
   } catch (error) {
@@ -383,10 +435,15 @@ async function handleSetStatus(
   return { status: 200, body: doc };
 }
 
-/** PATCH /documents/:slug — partial update of `{ title?, bodyMarkdown? }`. */
+/** PATCH /documents/:slug — partial update of `{ title?, bodyMarkdown?, tags? }`. */
 async function handleUpdate(db: Queryable, slug: string, body: unknown): Promise<ApiResponse> {
   const input = asObject(body);
-  const patch: { title?: string; bodyMarkdown?: string; renderedHtml?: string } = {};
+  const patch: {
+    title?: string;
+    bodyMarkdown?: string;
+    renderedHtml?: string;
+    tags?: readonly string[];
+  } = {};
 
   if (input.title !== undefined) {
     patch.title = requireString(input.title, 'title', MAX_TITLE_LENGTH);
@@ -401,8 +458,12 @@ async function handleUpdate(db: Queryable, slug: string, body: unknown): Promise
     // Re-render so the stored HTML never drifts from the Markdown source.
     patch.renderedHtml = renderDocumentHtml(bodyMarkdown);
   }
-  if (patch.title === undefined && patch.bodyMarkdown === undefined) {
-    throw new ApiError(400, 'Provide at least one of "title" or "bodyMarkdown" to update.');
+  const tags = resolveTags(input.tags);
+  if (tags !== undefined) {
+    patch.tags = tags;
+  }
+  if (patch.title === undefined && patch.bodyMarkdown === undefined && patch.tags === undefined) {
+    throw new ApiError(400, 'Provide at least one of "title", "bodyMarkdown", or "tags" to update.');
   }
 
   const updated = await updateDocumentBySlug(db, slug, patch);

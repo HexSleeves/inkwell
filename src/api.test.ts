@@ -25,6 +25,7 @@ interface DocumentBody {
   bodyMarkdown: string;
   renderedHtml: string;
   status: 'draft' | 'published';
+  tags: string[];
   createdAt: string;
   updatedAt: string;
 }
@@ -134,6 +135,50 @@ describe('documents HTTP API (handler)', () => {
     limit: number;
     offset: number;
   }
+
+  describe('tags', () => {
+    it('accepts, normalizes, and returns tags on create', async () => {
+      const res = await createSample({ slug: 'tagged', tags: ['Rust', 'rust', ' Postgres '] });
+      expect(res.status).toBe(201);
+      // Lower-cased, trimmed, de-duplicated, order preserved.
+      expect((res.body as DocumentBody).tags).toEqual(['rust', 'postgres']);
+    });
+
+    it('defaults tags to an empty array when omitted', async () => {
+      const res = await createSample({ slug: 'untagged' });
+      expect((res.body as DocumentBody).tags).toEqual([]);
+    });
+
+    it('rejects malformed tags with 400', async () => {
+      const bad = await createSample({ slug: 'x', tags: ['has space'] });
+      expect(bad.status).toBe(400);
+      const notArray = await createSample({ slug: 'y', tags: 'rust' });
+      expect(notArray.status).toBe(400);
+      const tooMany = await createSample({
+        slug: 'z',
+        tags: Array.from({ length: 21 }, (_, i) => `t${i}`),
+      });
+      expect(tooMany.status).toBe(400);
+    });
+
+    it('replaces tags on PATCH and leaves them untouched when omitted', async () => {
+      await createSample({ slug: 'doc', tags: ['a', 'b'] });
+      const patched = await call({
+        method: 'PATCH',
+        segments: ['documents', 'doc'],
+        body: { tags: ['c'] },
+      });
+      expect(patched.status).toBe(200);
+      expect((patched.body as DocumentBody).tags).toEqual(['c']);
+
+      const titleOnly = await call({
+        method: 'PATCH',
+        segments: ['documents', 'doc'],
+        body: { title: 'Renamed' },
+      });
+      expect((titleOnly.body as DocumentBody).tags).toEqual(['c']);
+    });
+  });
 
   describe('GET /documents', () => {
     it('lists documents in a paginated envelope', async () => {
