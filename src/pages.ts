@@ -23,7 +23,16 @@
  * context (HTML, attribute, or JSON) before insertion.
  */
 
-import { countDocuments, getDocumentBySlug, listDocuments, type Document } from './db/documents.js';
+import {
+  countDocuments,
+  countDocumentsByTag,
+  getDocumentBySlug,
+  listDocuments,
+  listDocumentsByTag,
+  listPublishedTags,
+  type Document,
+  type TagCount,
+} from './db/documents.js';
 import type { Queryable } from './db/pool.js';
 import { normalizeSiteUrl } from './site-url.js';
 
@@ -158,11 +167,28 @@ const STYLES = `
   table { border-collapse: collapse; width: 100%; }
   th, td { border: 1px solid #e0e0e6; padding: 0.4rem 0.6rem; text-align: left; }
   .meta { color: #777; font-size: 0.875rem; }
+  ul.tags { list-style: none; padding: 0; margin: 0.5rem 0 0; display: flex; flex-wrap: wrap; gap: 0.4rem; }
+  ul.tags li { margin: 0; }
+  ul.tags a {
+    display: inline-block; font-size: 0.8rem; line-height: 1.4; text-decoration: none;
+    padding: 0.1rem 0.55rem; border: 1px solid #d0d0d8; border-radius: 999px; color: #555;
+  }
+  ul.tags a:hover { border-color: #0b5fff; color: #0b5fff; }
+  ul.tags .count { color: #999; }
   ul.index { list-style: none; padding: 0; }
   ul.index li { margin: 0 0 1.75rem; }
   ul.index a.title { font-size: 1.15rem; font-weight: 600; text-decoration: none; }
   ul.index a.title:hover { text-decoration: underline; }
   ul.index .excerpt { margin: 0.35rem 0 0; color: #444; }
+  form.search { display: flex; gap: 0.5rem; margin: 0 0 2rem; }
+  form.search input[type="search"] {
+    flex: 1; padding: 0.5rem 0.75rem; font-size: 1rem; border: 1px solid #d0d0d8; border-radius: 6px;
+    background: #fff; color: inherit;
+  }
+  form.search button {
+    padding: 0.5rem 1rem; font-size: 1rem; border: 1px solid #0b5fff; border-radius: 6px;
+    background: #0b5fff; color: #fff; cursor: pointer;
+  }
   nav.pager { display: flex; justify-content: space-between; margin-top: 2.5rem; }
   nav.pager a { text-decoration: none; }
   nav.pager .spacer { color: transparent; }
@@ -173,6 +199,8 @@ const STYLES = `
     a { color: #6ea8ff; }
     pre, code { background: #24242b; }
     ul.index .excerpt { color: #b8b8c0; }
+    ul.tags a { border-color: #44444f; color: #b8b8c0; }
+    ul.tags a:hover { border-color: #6ea8ff; color: #6ea8ff; }
     blockquote { border-left-color: #44444f; color: #aaa; }
     th, td { border-color: #33333b; }
     /* highlight.js dark palette (GitHub-dark) */
@@ -284,6 +312,30 @@ function indexHref(page: number): string {
   return page <= 1 ? '/' : `/page/${page}`;
 }
 
+/** Relative href for a tag's listing page `n` (page 1 omits the `/page/n`). */
+function tagHref(tag: string, page = 1): string {
+  const base = `/tags/${encodeURIComponent(tag)}`;
+  return page <= 1 ? base : `${base}/page/${page}`;
+}
+
+/** Absolute URL for a tag's listing page (page 1). */
+function tagUrl(base: string, tag: string): string {
+  return `${base}/tags/${encodeURIComponent(tag)}`;
+}
+
+/**
+ * Render a document's tags as a row of chip links to their listing pages, or an
+ * empty string when there are none. Tag text is escaped; tags are slug-shaped so
+ * encoding is a no-op in practice but applied defensively.
+ */
+function renderTagChips(tags: readonly string[]): string {
+  if (tags.length === 0) return '';
+  const items = tags
+    .map((tag) => `<li><a href="${tagHref(tag)}">${escapeHtml(tag)}</a></li>`)
+    .join('');
+  return `\n            <ul class="tags">${items}</ul>`;
+}
+
 /** Pagination context passed to {@link renderIndexPage}. */
 export interface IndexPageInfo {
   /** 1-based current page number. */
@@ -311,7 +363,7 @@ ${documents
       : '';
     return `          <li>
             <a class="title" href="/${encodeURIComponent(doc.slug)}">${escapeHtml(doc.title)}</a>
-            <div class="meta">${dateLine('Published', doc.createdAt)}</div>${excerptHtml}
+            <div class="meta">${dateLine('Published', doc.createdAt)}</div>${excerptHtml}${renderTagChips(doc.tags)}
           </li>`;
   })
   .join('\n')}
@@ -362,10 +414,11 @@ export function renderDocumentPage(document: Document, options: PageOptions = {}
     inLanguage: 'en',
   };
   if (description) jsonLd.description = description;
+  if (document.tags.length > 0) jsonLd.keywords = document.tags.join(', ');
 
   const main = `<article>
           <h1>${escapeHtml(document.title)}</h1>
-          <div class="meta">${dateLine('Published', document.createdAt)}${updated}</div>
+          <div class="meta">${dateLine('Published', document.createdAt)}${updated}</div>${renderTagChips(document.tags)}
 ${document.renderedHtml}
         </article>`;
   return layout(
@@ -396,6 +449,144 @@ export function renderNotFoundPage(options: PageOptions = {}): string {
 }
 
 /**
+ * Render a list of documents as the shared `<ul class="index">` markup (title,
+ * published date, excerpt, tag chips). Returns an empty string for no documents
+ * so callers can substitute their own context-specific empty message.
+ */
+function renderDocList(documents: readonly Document[]): string {
+  if (documents.length === 0) return '';
+  return `<ul class="index">
+${documents
+  .map((doc) => {
+    const excerpt = deriveExcerpt(doc.bodyMarkdown);
+    const excerptHtml = excerpt
+      ? `\n            <p class="excerpt">${escapeHtml(excerpt)}</p>`
+      : '';
+    return `          <li>
+            <a class="title" href="/${encodeURIComponent(doc.slug)}">${escapeHtml(doc.title)}</a>
+            <div class="meta">${dateLine('Published', doc.createdAt)}</div>${excerptHtml}${renderTagChips(doc.tags)}
+          </li>`;
+  })
+  .join('\n')}
+        </ul>`;
+}
+
+/**
+ * Render a prev/next pager for a paginated listing, given a function mapping a
+ * page number to its href. Returns an empty string when there is a single page.
+ * Both slots are always present (a transparent spacer) so a lone link keeps its
+ * column — matching the index pager.
+ */
+function renderPager(page: number, totalPages: number, href: (page: number) => string): string {
+  if (totalPages <= 1) return '';
+  const prev =
+    page > 1
+      ? `<a rel="prev" href="${href(page - 1)}">&larr; Newer</a>`
+      : `<span class="spacer">&larr; Newer</span>`;
+  const next =
+    page < totalPages
+      ? `<a rel="next" href="${href(page + 1)}">Older &rarr;</a>`
+      : `<span class="spacer">Older &rarr;</span>`;
+  return `\n        <nav class="pager">${prev}${next}</nav>`;
+}
+
+/** Render the tags index: every published tag as a chip with its document count. */
+export function renderTagIndexPage(tags: readonly TagCount[], options: PageOptions = {}): string {
+  const base = normalizeSiteUrl(options.siteUrl);
+  const body =
+    tags.length === 0
+      ? `<p class="empty">No tags yet.</p>`
+      : `<ul class="tags">
+${tags
+  .map(
+    (t) =>
+      `          <li><a href="${tagHref(t.tag)}">${escapeHtml(t.tag)} <span class="count">${t.count}</span></a></li>`,
+  )
+  .join('\n')}
+        </ul>`;
+  return layout(
+    {
+      title: `Tags — ${SITE_NAME}`,
+      description: 'Browse published documents by tag.',
+      canonicalUrl: `${base}/tags`,
+      ogType: 'website',
+    },
+    `<h1>Tags</h1>\n        ${body}`,
+  );
+}
+
+/** Render a single tag's listing page: published documents carrying that tag. */
+export function renderTagPage(
+  tag: string,
+  documents: readonly Document[],
+  info: IndexPageInfo,
+  options: PageOptions = {},
+): string {
+  const base = normalizeSiteUrl(options.siteUrl);
+  const heading = `Tagged &ldquo;${escapeHtml(tag)}&rdquo;`;
+  const list =
+    documents.length === 0
+      ? `<p class="empty">No published documents with this tag.</p>`
+      : renderDocList(documents);
+  const pager = renderPager(info.page, info.totalPages, (p) => tagHref(tag, p));
+  const titleSuffix = info.page > 1 ? ` — Page ${info.page}` : '';
+  return layout(
+    {
+      title: `${tag} — ${SITE_NAME}${titleSuffix}`,
+      description: `Published documents tagged “${tag}”.`,
+      // Page 1 is the canonical tag URL; deeper pages self-canonicalize.
+      canonicalUrl: info.page > 1 ? `${tagUrl(base, tag)}/page/${info.page}` : tagUrl(base, tag),
+      ogType: 'website',
+    },
+    `<h1>${heading}</h1>\n        ${list}${pager}`,
+  );
+}
+
+/**
+ * Render the public search results page: a search form pre-filled with the
+ * query plus the matching published documents (paginated). An empty query shows
+ * just the form; a query with no matches shows an explicit empty message.
+ */
+export function renderSearchPage(
+  query: string,
+  documents: readonly Document[],
+  info: IndexPageInfo,
+  options: PageOptions = {},
+): string {
+  const base = normalizeSiteUrl(options.siteUrl);
+  const trimmed = query.trim();
+  const form = `<form class="search" action="/search" method="get" role="search">
+          <input type="search" name="q" value="${escapeHtml(query)}" placeholder="Search published documents…" aria-label="Search" />
+          <button type="submit">Search</button>
+        </form>`;
+  let body: string;
+  if (trimmed === '') {
+    body = '';
+  } else if (documents.length === 0) {
+    body = `<p class="empty">No results for &ldquo;${escapeHtml(trimmed)}&rdquo;.</p>`;
+  } else {
+    body = `${renderDocList(documents)}${renderPager(info.page, info.totalPages, (p) => searchHref(trimmed, p))}`;
+  }
+  const title = trimmed ? `Search: ${trimmed} — ${SITE_NAME}` : `Search — ${SITE_NAME}`;
+  return layout(
+    {
+      title,
+      description: 'Search published documents.',
+      // Search result pages are not canonical index URLs; point crawlers home.
+      canonicalUrl: `${base}/search`,
+      ogType: 'website',
+    },
+    `<h1>Search</h1>\n        ${form}\n        ${body}`,
+  );
+}
+
+/** Relative href for a search results page (page 1 omits the `page` param). */
+function searchHref(query: string, page = 1): string {
+  const q = `q=${encodeURIComponent(query)}`;
+  return page <= 1 ? `/search?${q}` : `/search?${q}&page=${page}`;
+}
+
+/**
  * Parse a `/page/:n` segment into a 1-based page number, or `null` if it is not
  * a positive integer. Rejects leading zeros, signs, and non-digits so only one
  * canonical spelling of each page exists.
@@ -406,12 +597,65 @@ function parsePageNumber(raw: string): number | null {
   return Number.isSafeInteger(n) ? n : null;
 }
 
+/** A tag in a URL must match the slug grammar (same as a stored tag). */
+const TAG_NAME_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+/**
+ * Route and render the `/tags` surfaces.
+ *   - `GET /tags`               -> index of every published tag (with counts)
+ *   - `GET /tags/:tag`          -> page 1 of documents carrying `:tag`
+ *   - `GET /tags/:tag/page/:n`  -> page N of the same
+ *
+ * A tag with no published documents is treated as unknown (404), as is a
+ * malformed tag segment or a page past the end — mirroring the index's
+ * crawler-friendly 404s.
+ */
+async function handleTagRequest(
+  db: Queryable,
+  segments: readonly string[],
+  options: PageOptions,
+): Promise<PageResponse> {
+  // /tags — the all-tags index.
+  if (segments.length === 1) {
+    const tags = await listPublishedTags(db);
+    return { status: 200, html: renderTagIndexPage(tags, options) };
+  }
+
+  // /tags/:tag  or  /tags/:tag/page/:n
+  const isTagRoot = segments.length === 2;
+  const isTagPaged = segments.length === 4 && segments[2] === 'page';
+  if (!isTagRoot && !isTagPaged) {
+    return { status: 404, html: renderNotFoundPage(options) };
+  }
+
+  const tag = segments[1] as string;
+  if (!TAG_NAME_PATTERN.test(tag)) {
+    return { status: 404, html: renderNotFoundPage(options) };
+  }
+  const page = isTagRoot ? 1 : parsePageNumber(segments[3] as string);
+  if (page === null) return { status: 404, html: renderNotFoundPage(options) };
+
+  const total = await countDocumentsByTag(db, tag, { status: 'published' });
+  // An unknown/empty tag has no public page.
+  if (total === 0) return { status: 404, html: renderNotFoundPage(options) };
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  if (page > totalPages) return { status: 404, html: renderNotFoundPage(options) };
+
+  const docs = await listDocumentsByTag(db, tag, {
+    status: 'published',
+    limit: PAGE_SIZE,
+    offset: (page - 1) * PAGE_SIZE,
+  });
+  return { status: 200, html: renderTagPage(tag, docs, { page, totalPages }, options) };
+}
+
 /**
  * Route and render a single public page request.
  *
  * Recognized routes (GET/HEAD only):
  *   - `GET /`        -> index of published documents (page 1)
  *   - `GET /page/:n` -> index page N (newest first, {@link PAGE_SIZE} per page)
+ *   - `GET /tags`, `GET /tags/:tag[/page/:n]` -> tag index / tag listing pages
  *   - `GET /:slug`   -> a document's public page (404 page if the slug is unknown)
  *
  * Non-GET methods yield 405; any deeper/unrecognized path yields a 404 page. The
@@ -446,6 +690,11 @@ export async function handlePageRequest(
       offset: (page - 1) * PAGE_SIZE,
     });
     return { status: 200, html: renderIndexPage(docs, { page, totalPages }, options) };
+  }
+
+  // Tag surfaces: `/tags` (all tags) and `/tags/:tag[/page/:n]` (one tag's docs).
+  if (req.segments[0] === 'tags') {
+    return await handleTagRequest(db, req.segments, options);
   }
 
   // Single document page. A draft (or unknown slug) renders the 404 page so a

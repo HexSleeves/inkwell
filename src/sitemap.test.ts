@@ -26,7 +26,7 @@ const SEED_API_KEY = 'sitemap-test-key';
 /** Seed a document through the real API path; publish it unless told otherwise. */
 async function seed(
   db: Queryable,
-  body: { title: string; bodyMarkdown: string; slug?: string },
+  body: { title: string; bodyMarkdown: string; slug?: string; tags?: string[] },
   publish = true,
 ): Promise<Document> {
   const res = await handleApiRequest(
@@ -176,5 +176,30 @@ describe('sitemap (node:http transport)', () => {
     const res = await fetch(`${baseUrl}/sitemap.xml`);
     expect(res.status).toBe(200);
     expect(res.headers.get('content-type')).not.toContain('text/html');
+  });
+});
+
+describe('sitemap tag URLs', () => {
+  it('emits the /tags index and one URL per published tag', () => {
+    const xml = buildSitemap([], { siteUrl: 'https://blog.test' }, [
+      { tag: 'rust', count: 2 },
+      { tag: 'sql', count: 1 },
+    ]);
+    expect(xml).toContain('<loc>https://blog.test/tags</loc>');
+    expect(xml).toContain('<loc>https://blog.test/tags/rust</loc>');
+    expect(xml).toContain('<loc>https://blog.test/tags/sql</loc>');
+  });
+
+  it('omits tag URLs entirely when there are none', () => {
+    const xml = buildSitemap([], { siteUrl: 'https://blog.test' }, []);
+    expect(xml).not.toContain('/tags');
+  });
+
+  it('includes published tags from the database', async () => {
+    const db = createMemoryDatabase().db;
+    await migrate(db);
+    await seed(db, { title: 'Tagged', bodyMarkdown: 'x', tags: ['rust'] });
+    const res = await handleSitemapRequest(db, { method: 'GET' }, { siteUrl: 'https://blog.test' });
+    expect(res.xml).toContain('https://blog.test/tags/rust');
   });
 });

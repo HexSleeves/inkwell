@@ -25,7 +25,7 @@ const SEED_API_KEY = 'pages-test-key';
 /** Create a document through the real API path (renders + persists HTML). */
 async function create(
   db: Queryable,
-  body: { title: string; bodyMarkdown: string; slug?: string },
+  body: { title: string; bodyMarkdown: string; slug?: string; tags?: string[] },
 ): Promise<string> {
   const res = await handleApiRequest(
     db,
@@ -42,7 +42,7 @@ async function create(
  */
 async function seed(
   db: Queryable,
-  body: { title: string; bodyMarkdown: string; slug?: string },
+  body: { title: string; bodyMarkdown: string; slug?: string; tags?: string[] },
 ): Promise<void> {
   const slug = await create(db, body);
   const res = await handleApiRequest(
@@ -83,6 +83,59 @@ describe('public pages (handler)', () => {
       expect(res.html).toContain('First Post');
       expect(res.html).toContain('href="/second-post"');
       expect(res.html).toContain('Second Post');
+    });
+  });
+
+  describe('tags', () => {
+    it('renders tag chips on index entries and the document page', async () => {
+      await seed(db, { title: 'Tagged', bodyMarkdown: 'body', tags: ['rust', 'sql'] });
+
+      const index = await handlePageRequest(db, { method: 'GET', segments: [] });
+      expect(index.html).toContain('class="tags"');
+      expect(index.html).toContain('href="/tags/rust"');
+
+      const doc = await handlePageRequest(db, { method: 'GET', segments: ['tagged'] });
+      expect(doc.html).toContain('href="/tags/sql"');
+      // Tags surface in the document's JSON-LD keywords too.
+      expect(doc.html).toContain('rust, sql');
+    });
+
+    it('GET /tags lists every published tag with counts', async () => {
+      await seed(db, { title: 'A', bodyMarkdown: 'x', tags: ['rust', 'sql'] });
+      await seed(db, { title: 'B', bodyMarkdown: 'y', tags: ['rust'] });
+
+      const res = await handlePageRequest(db, { method: 'GET', segments: ['tags'] });
+      expect(res.status).toBe(200);
+      expect(res.html).toContain('href="/tags/rust"');
+      expect(res.html).toContain('href="/tags/sql"');
+    });
+
+    it('GET /tags/:tag lists published documents carrying the tag', async () => {
+      await seed(db, { title: 'Rusty', bodyMarkdown: 'x', tags: ['rust'] });
+      await seed(db, { title: 'Other', bodyMarkdown: 'y', tags: ['sql'] });
+
+      const res = await handlePageRequest(db, { method: 'GET', segments: ['tags', 'rust'] });
+      expect(res.status).toBe(200);
+      expect(res.html).toContain('Rusty');
+      expect(res.html).not.toContain('href="/other"');
+    });
+
+    it('404s an unknown tag and a malformed tag segment', async () => {
+      const unknown = await handlePageRequest(db, { method: 'GET', segments: ['tags', 'ghost'] });
+      expect(unknown.status).toBe(404);
+      const malformed = await handlePageRequest(db, {
+        method: 'GET',
+        segments: ['tags', 'Bad Tag'],
+      });
+      expect(malformed.status).toBe(404);
+    });
+
+    it('does not leak a draft document through its tag page', async () => {
+      // A draft carries the tag, but the public tag page must 404 (no published
+      // doc has it) rather than reveal the draft.
+      await create(db, { title: 'Secret', bodyMarkdown: 'x', tags: ['hidden'], slug: 'secret' });
+      const res = await handlePageRequest(db, { method: 'GET', segments: ['tags', 'hidden'] });
+      expect(res.status).toBe(404);
     });
   });
 

@@ -19,6 +19,7 @@ import { handleApiRequest, type ApiResponse } from './api.js';
 import type { Queryable } from './db/pool.js';
 import { handleFeedRequest, type FeedResponse } from './feed.js';
 import { handlePageRequest, type PageResponse } from './pages.js';
+import { handleSearchRequest, type SearchResponse } from './search.js';
 import { handleSitemapRequest, type SitemapResponse } from './sitemap.js';
 
 /**
@@ -121,6 +122,20 @@ function writeXmlResponse(
 }
 
 /**
+ * Serialize a response whose body is an already-encoded string with its own
+ * content type (the search endpoint, which is JSON or HTML depending on the
+ * request). HEAD requests get the headers but no body.
+ */
+function writeStringResponse(res: ServerResponse, method: string, response: SearchResponse): void {
+  const payload = Buffer.from(response.body, 'utf8');
+  res.writeHead(response.status, {
+    'content-type': response.contentType,
+    'content-length': payload.length,
+  });
+  res.end(method === 'HEAD' ? undefined : payload);
+}
+
+/**
  * Build an HTTP request listener bound to a given database. Exposed separately
  * from {@link createServer} so it can be mounted on an existing server or
  * tested in isolation.
@@ -147,6 +162,18 @@ export function createRequestListener(db: Queryable) {
       if (segments.length === 1 && segments[0] === 'sitemap.xml') {
         const sitemapResponse = await handleSitemapRequest(db, { method }, { siteUrl });
         writeXmlResponse(res, method, sitemapResponse);
+        return;
+      }
+
+      // Full-text search. Fixed top-level path so it never shadows a document
+      // slug; serves JSON (`?format=json`) or the HTML results page.
+      if (segments.length === 1 && segments[0] === 'search') {
+        const searchResponse = await handleSearchRequest(
+          db,
+          { method, query: parseQuery(req.url ?? '/') },
+          { siteUrl },
+        );
+        writeStringResponse(res, method, searchResponse);
         return;
       }
 

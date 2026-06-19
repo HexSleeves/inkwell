@@ -11,11 +11,16 @@
  *
  * The XML is built by hand from template literals — no XML dependency. Every
  * interpolated URL is XML-escaped via {@link escapeXml}. Only `published`
- * documents are listed, so the sitemap never leaks a draft. Tag/collection URLs
- * will be added once tags land (see the discovery ADR and follow-up issue).
+ * documents are listed, so the sitemap never leaks a draft. The `/tags` index
+ * and one `/tags/:tag` URL per published tag are listed alongside documents.
  */
 
-import { listPublishedDocuments, type Document } from './db/documents.js';
+import {
+  listPublishedDocuments,
+  listPublishedTags,
+  type Document,
+  type TagCount,
+} from './db/documents.js';
 import type { Queryable } from './db/pool.js';
 import { normalizeSiteUrl } from './site-url.js';
 
@@ -62,7 +67,11 @@ export function escapeXml(value: string): string {
  * `updatedAt`, or omitted entirely for an empty site. Each document contributes
  * one `<url>` whose `lastmod` is its own `updatedAt`.
  */
-export function buildSitemap(documents: readonly Document[], options: SitemapOptions = {}): string {
+export function buildSitemap(
+  documents: readonly Document[],
+  options: SitemapOptions = {},
+  tags: readonly TagCount[] = [],
+): string {
   const base = normalizeSiteUrl(options.siteUrl);
 
   const homeLastmod = documents[0]?.updatedAt;
@@ -82,7 +91,21 @@ export function buildSitemap(documents: readonly Document[], options: SitemapOpt
     })
     .join('\n');
 
-  const body = urls ? `${home}\n${urls}` : home;
+  // Tag surfaces: the `/tags` index plus one `/tags/:tag` listing per published
+  // tag. No `<lastmod>` — a tag page changes whenever any tagged document does,
+  // which a single timestamp can't capture honestly, so it is omitted (valid).
+  const tagUrls =
+    tags.length === 0
+      ? ''
+      : [
+          `  <url>\n    <loc>${escapeXml(`${base}/tags`)}</loc>\n  </url>`,
+          ...tags.map(
+            (t) =>
+              `  <url>\n    <loc>${escapeXml(`${base}/tags/${encodeURIComponent(t.tag)}`)}</loc>\n  </url>`,
+          ),
+        ].join('\n');
+
+  const body = [home, urls, tagUrls].filter((part) => part !== '').join('\n');
   return `<?xml version="1.0" encoding="utf-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
 ${body}
@@ -105,10 +128,10 @@ export async function handleSitemapRequest(
   if (req.method !== 'GET' && req.method !== 'HEAD') {
     return { status: 405, contentType: SITEMAP_CONTENT_TYPE, xml: '' };
   }
-  const documents = await listPublishedDocuments(db);
+  const [documents, tags] = await Promise.all([listPublishedDocuments(db), listPublishedTags(db)]);
   return {
     status: 200,
     contentType: SITEMAP_CONTENT_TYPE,
-    xml: buildSitemap(documents, options),
+    xml: buildSitemap(documents, options, tags),
   };
 }
