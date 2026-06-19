@@ -236,12 +236,19 @@ Visibility on reads depends on authentication:
 
 **Request bodies.**
 
-- **Create** (`POST /documents`): `{ "title": string, "bodyMarkdown": string, "slug"?: string }`.
+- **Create** (`POST /documents`): `{ "title": string, "bodyMarkdown": string, "slug"?: string, "tags"?: string[] }`.
   `title` and `bodyMarkdown` are required; `slug` is optional and derived from
   the title when omitted. An explicit `slug` must be lowercase alphanumerics
-  separated by single hyphens.
-- **Update** (`PATCH /documents/:slug`): `{ "title"?: string, "bodyMarkdown"?: string }`.
-  At least one field is required.
+  separated by single hyphens. `tags` is optional (defaults to `[]`).
+- **Update** (`PATCH /documents/:slug`): `{ "title"?: string, "bodyMarkdown"?: string, "tags"?: string[] }`.
+  At least one field is required. Supplying `tags` **replaces** the document's
+  tag set (pass `[]` to clear); omitting it leaves tags untouched.
+
+**Tags.** Each tag follows the slug grammar (lowercase alphanumerics, single
+hyphens), so it is a safe URL segment. Tags are normalized on write (trimmed,
+lower-cased, de-duplicated, order preserved) and capped at 20 per document /
+50 chars each — anything else is a `400`. Tags are returned on every document
+read and power the `/tags` listing pages and `sitemap.xml`.
 
 **Listing & pagination.** `GET /documents` accepts `?limit=N` (default `20`,
 clamped to a max of `100`) and `?offset=N` (default `0`). Both must be
@@ -272,6 +279,7 @@ document is returned as:
   "bodyMarkdown": "# Hello",
   "renderedHtml": "<h1>Hello</h1>",
   "status": "draft",
+  "tags": ["rust", "postgres"],
   "createdAt": "2026-01-01T00:00:00.000Z",
   "updatedAt": "2026-01-01T00:00:00.000Z"
 }
@@ -292,25 +300,39 @@ handler returns complete HTML pages with an inlined stylesheet (no static-asset
 pipeline needed for v0.1). The transport adapter routes any path outside the
 reserved API prefixes (`/documents`, `/health`) to the frontend.
 
-| Method | Path           | Description                                        | Success | Errors            |
-| ------ | -------------- | -------------------------------------------------- | ------- | ----------------- |
-| `GET`  | `/`            | Index of published documents, page 1 (newest)      | `200`   | —                 |
-| `GET`  | `/page/:n`     | Index page N (10 per page, newest first)           | `200`   | `404` styled page |
-| `GET`  | `/:slug`       | A document's public reading page (styled HTML)     | `200`   | `404` styled page |
-| `GET`  | `/feed.xml`    | Atom 1.0 feed of recent published documents        | `200`   | `405`             |
-| `GET`  | `/sitemap.xml` | XML sitemap of the home page + published documents | `200`   | `405`             |
+| Method | Path                   | Description                                           | Success | Errors            |
+| ------ | ---------------------- | ----------------------------------------------------- | ------- | ----------------- |
+| Method | Path                   | Description                                           | Success | Errors            |
+| ------ | ---------------------  | --------------------------------------------------    | ------- | ----------------- |
+| `GET`  | `/`                    | Index of published documents, page 1 (newest)         | `200`   | —                 |
+| `GET`  | `/page/:n`             | Index page N (10 per page, newest first)              | `200`   | `404` styled page |
+| `GET`  | `/:slug`               | A document's public reading page (styled HTML)        | `200`   | `404` styled page |
+| `GET`  | `/tags`                | Index of every published tag (with counts)            | `200`   | —                 |
+| `GET`  | `/tags/:tag[/page/:n]` | Published documents carrying `:tag` (paginated)       | `200`   | `404` styled page |
+| `GET`  | `/search?q=`           | Search results page (HTML), or JSON via `format=json` | `200`   | `405`             |
+| `GET`  | `/feed.xml`            | Atom 1.0 feed of recent published documents           | `200`   | `405`             |
+| `GET`  | `/sitemap.xml`         | XML sitemap of home + documents + tag pages           | `200`   | `405`             |
+
+**Search.** `GET /search?q=<query>` searches the title and body of **published**
+documents (case-insensitive substring match; title hits rank first) and renders
+a paginated results page. Add `&format=json` for the JSON API:
+`{ "query", "page", "pageSize", "total", "results": [{ "slug", "title", "excerpt", "tags", "createdAt", "updatedAt" }] }`.
+An empty `q` returns the search form (HTML) or an empty result set (JSON).
 
 A document's `renderedHtml` is sanitized at write time by the
 [rendering pipeline](#rendering-pipeline), so it is embedded verbatim; every
-other interpolated value (titles, excerpts, etc.) is HTML-escaped. Because the
-frontend shares the root with the API, a document whose slug is exactly
-`documents`, `health`, `feed.xml`, or `sitemap.xml` is unreachable as a public
-page — those words are reserved.
+other interpolated value (titles, excerpts, tags, etc.) is HTML-escaped. Because
+the frontend shares the root with the API, a document whose slug is exactly
+`documents`, `health`, `feed.xml`, `sitemap.xml`, `search`, or `tags` is
+unreachable as a public page — those words are reserved.
 
 **Discovery & SEO.** The index is paginated (`/page/:n`, 10 per page) and each
-entry shows a derived excerpt. Every page emits a canonical link, OpenGraph and
-Twitter Card tags, and a feed auto-discovery link; document pages also embed a
-JSON-LD `BlogPosting`. `sitemap.xml` and the feed advertise all published URLs.
+entry shows a derived excerpt and its tag chips. Readers can browse by tag
+(`/tags`, `/tags/:tag`) or search published content (`/search`). Every page
+emits a canonical link, OpenGraph and Twitter Card tags, and a feed
+auto-discovery link; document pages also embed a JSON-LD `BlogPosting` (with
+`keywords` from its tags). `sitemap.xml` and the feed advertise all published
+URLs, including tag pages.
 Absolute URLs (canonical/OpenGraph/sitemap/feed) are built from the public
 origin in the `INKWELL_SITE_URL` environment variable (e.g.
 `https://blog.example.com`); when unset it falls back to `http://localhost`. Only

@@ -83,6 +83,56 @@ close the `<script>` element or inject markup. Discovery surfaces only ever read
   it can be indexed; recorded here so the follow-up starts from the decision
   rather than re-litigating it.
 
+## Update — phases 2 & 3 shipped (CYP-23)
+
+The deferred phases later shipped under CYP-23. The schema decisions:
+
+### Phase 2 — tags
+
+- **Storage: a `tags text[]` column on `documents`, not a `document_tags` join
+  table** (migration `0003`, GIN-indexed). Tags are a small, unordered set that
+  is always read and written with the document and never queried independently of
+  it, so an array keeps reads single-row and writes atomic with no join. A join
+  table buys a referential tag entity (descriptions, colours, rename-with-history)
+  that v0.x does not need; it can be migrated to later. Existing rows backfill to
+  `'{}'` so none is left NULL.
+- **Grammar:** tags reuse the slug grammar (lowercase alphanumerics, single
+  hyphens) so each is a safe `/tags/:tag` URL segment. The API normalizes on
+  write (trim, lower-case, de-dupe, order-preserved) and caps at 20 per document /
+  50 chars each.
+- **Queries:** containment via `tag = ANY(tags)` (GIN-accelerated). The distinct
+  published-tag set (for the `/tags` index and sitemap) is aggregated in
+  application code rather than with `unnest(tags) … GROUP BY`, because the test
+  harness `pg-mem` does not implement `unnest`; the published tag set is small so
+  this is well within budget.
+
+### Phase 3 — search
+
+- **Intended:** Postgres `tsvector` + GIN, as recorded above.
+- **Shipped:** a case-insensitive substring match (`ILIKE` over `title` and
+  `body_markdown`, title hits ranked first, LIKE metacharacters escaped). **This
+  is a deliberate divergence from the intended `tsvector` approach** because
+  `pg-mem` does not implement the `tsvector` type or `to_tsvector` /
+  `plainto_tsquery`, and the data-access tests run their migrations against
+  `pg-mem`. Adding a `tsvector` column/index to the shared migration would break
+  the entire test suite. Using one `ILIKE` code path keeps tests and production
+  identical and honours the issue's documented fallback.
+- **Migration path:** once tests run against a real Postgres (e.g. a containerized
+  instance), add a migration with a generated `tsvector` column + GIN index and
+  switch `searchPublishedDocuments` to `@@ plainto_tsquery`, keeping `ILIKE` as
+  the `pg-mem` fallback if the dual harness is retained.
+- **Surfaces:** `GET /search?q=` serves an HTML results page (search form +
+  paginated published matches) or JSON via `?format=json`. Drafts never match.
+  Both are dispatched at a fixed top-level path (like `feed.xml`/`sitemap.xml`),
+  so a document slug `search` is reserved.
+
+### Discovery surfaces
+
+Tag chips render on index entries and document pages; document JSON-LD gains a
+`keywords` field from its tags. `sitemap.xml` lists the `/tags` index plus one
+`/tags/:tag` URL per published tag (no `<lastmod>` — a tag page's freshness is
+not captured by a single timestamp).
+
 ## Alternatives considered
 
 - **A static-asset pipeline / templating engine** — rejected; the hand-built
