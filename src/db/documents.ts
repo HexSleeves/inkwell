@@ -9,13 +9,24 @@
 
 import type { Queryable } from './pool.js';
 
-/** A published document as stored in Postgres, mapped to domain shape. */
+/**
+ * Publication lifecycle of a document. `draft` is private (author-only);
+ * `published` is publicly visible. Stored as a CHECK-constrained text column
+ * (see migration `0002`).
+ */
+export type DocumentStatus = 'draft' | 'published';
+
+/** The full set of valid statuses, for validation at the edges. */
+export const DOCUMENT_STATUSES: readonly DocumentStatus[] = ['draft', 'published'];
+
+/** A document as stored in Postgres, mapped to domain shape. */
 export interface Document {
   readonly id: string;
   readonly slug: string;
   readonly title: string;
   readonly bodyMarkdown: string;
   readonly renderedHtml: string;
+  readonly status: DocumentStatus;
   readonly createdAt: Date;
   readonly updatedAt: Date;
 }
@@ -42,6 +53,7 @@ interface DocumentRow {
   title: string;
   body_markdown: string;
   rendered_html: string;
+  status: DocumentStatus;
   created_at: Date;
   updated_at: Date;
 }
@@ -79,12 +91,13 @@ function toDocument(row: DocumentRow): Document {
     title: row.title,
     bodyMarkdown: row.body_markdown,
     renderedHtml: row.rendered_html,
+    status: row.status,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
 }
 
-const RETURNING = `id, slug, title, body_markdown, rendered_html, created_at, updated_at`;
+const RETURNING = `id, slug, title, body_markdown, rendered_html, status, created_at, updated_at`;
 
 /**
  * Insert a new document and return the persisted row.

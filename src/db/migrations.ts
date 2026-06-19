@@ -42,5 +42,26 @@ const createDocuments: Migration = {
   down: `DROP TABLE documents;`,
 };
 
+/**
+ * Documents carry a publication lifecycle: `draft` (private, author-only) or
+ * `published` (publicly visible). New rows default to `draft` so nothing leaks
+ * before an author opts in. Existing rows predate this column and were already
+ * served publicly, so they are backfilled to `published` to preserve behavior.
+ *
+ * The status is a CHECK-constrained text column rather than a native enum so a
+ * future value can be added with a plain migration (no `ALTER TYPE` dance).
+ */
+const addDocumentStatus: Migration = {
+  id: '0002',
+  name: 'add_document_status',
+  up: `
+    ALTER TABLE documents
+      ADD COLUMN status text NOT NULL DEFAULT 'draft'
+      CHECK (status IN ('draft', 'published'));
+    UPDATE documents SET status = 'published';
+  `,
+  down: `ALTER TABLE documents DROP COLUMN status;`,
+};
+
 /** All migrations, in apply order. */
-export const MIGRATIONS: readonly Migration[] = [createDocuments];
+export const MIGRATIONS: readonly Migration[] = [createDocuments, addDocumentStatus];

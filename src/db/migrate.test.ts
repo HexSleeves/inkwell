@@ -15,7 +15,7 @@ describe('migrate', () => {
   it('applies all migrations to a fresh database', async () => {
     const applied = await migrate(db);
     expect(applied).toEqual(MIGRATIONS.map((m) => m.id));
-    expect(await appliedMigrationIds(db)).toEqual(['0001']);
+    expect(await appliedMigrationIds(db)).toEqual(['0001', '0002']);
   });
 
   it('records the migration name in the ledger', async () => {
@@ -23,7 +23,10 @@ describe('migrate', () => {
     const ledger = await db.query<{ id: string; name: string }>(
       `SELECT id, name FROM schema_migrations ORDER BY id`,
     );
-    expect(ledger.rows).toEqual([{ id: '0001', name: 'create_documents' }]);
+    expect(ledger.rows).toEqual([
+      { id: '0001', name: 'create_documents' },
+      { id: '0002', name: 'add_document_status' },
+    ]);
   });
 
   it('creates a usable documents table', async () => {
@@ -40,16 +43,28 @@ describe('migrate', () => {
     await migrate(db);
     const secondRun = await migrate(db);
     expect(secondRun).toEqual([]);
-    expect(await appliedMigrationIds(db)).toEqual(['0001']);
+    expect(await appliedMigrationIds(db)).toEqual(['0001', '0002']);
   });
 
   it('rolls back the most recent migration', async () => {
     await migrate(db);
     const reverted = await rollback(db);
-    expect(reverted).toEqual(['0001']);
+    expect(reverted).toEqual(['0002']);
+    expect(await appliedMigrationIds(db)).toEqual(['0001']);
+
+    // The 0002 down SQL ran: the status column is gone but the table remains.
+    await expect(db.query(`SELECT status FROM documents`)).rejects.toThrow();
+    const stillThere = await db.query(`SELECT slug FROM documents`);
+    expect(stillThere.rows).toEqual([]);
+  });
+
+  it('rolls back every migration when asked', async () => {
+    await migrate(db);
+    const reverted = await rollback(db, { steps: MIGRATIONS.length });
+    expect(reverted).toEqual(['0002', '0001']);
     expect(await appliedMigrationIds(db)).toEqual([]);
 
-    // The down SQL ran: the documents table is gone.
+    // The 0001 down SQL ran: the documents table is gone.
     await expect(db.query(`SELECT 1 FROM documents`)).rejects.toThrow();
 
     // NOTE: re-applying in the same instance is intentionally not asserted

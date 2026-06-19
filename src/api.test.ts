@@ -42,11 +42,7 @@ describe('documents HTTP API (handler)', () => {
   // valid key is presented by default so the CRUD suites exercise authorized
   // requests. The dedicated auth suite overrides the header to test rejection.
   const call = (req: ApiRequest): Promise<ApiResponse> =>
-    handleApiRequest(
-      db,
-      { headers: { 'x-api-key': API_KEY }, ...req },
-      { apiKey: API_KEY },
-    );
+    handleApiRequest(db, { headers: { 'x-api-key': API_KEY }, ...req }, { apiKey: API_KEY });
 
   const createSample = (overrides: Record<string, unknown> = {}): Promise<ApiResponse> =>
     call({

@@ -17,6 +17,7 @@ import {
 
 import { handleApiRequest, type ApiResponse } from './api.js';
 import type { Queryable } from './db/pool.js';
+import { handleFeedRequest, type FeedResponse } from './feed.js';
 import { handlePageRequest, type PageResponse } from './pages.js';
 
 /**
@@ -100,6 +101,17 @@ function writeHtmlResponse(res: ServerResponse, method: string, response: PageRe
   res.end(method === 'HEAD' ? undefined : payload);
 }
 
+/** Serialize an Atom feed response from the syndication module. */
+function writeFeedResponse(res: ServerResponse, method: string, response: FeedResponse): void {
+  const payload = Buffer.from(response.xml, 'utf8');
+  res.writeHead(response.status, {
+    'content-type': response.contentType,
+    'content-length': payload.length,
+  });
+  // HEAD requests get headers (including content-length) but no body.
+  res.end(method === 'HEAD' ? undefined : payload);
+}
+
 /**
  * Build an HTTP request listener bound to a given database. Exposed separately
  * from {@link createServer} so it can be mounted on an existing server or
@@ -110,6 +122,18 @@ export function createRequestListener(db: Queryable) {
     try {
       const segments = splitPath(req.url ?? '/');
       const method = (req.method ?? 'GET').toUpperCase();
+
+      // Atom syndication feed. Lives at a fixed top-level path so it never
+      // shadows a document slug; served with its own XML content type.
+      if (segments.length === 1 && segments[0] === 'feed.xml') {
+        const feedResponse = await handleFeedRequest(
+          db,
+          { method },
+          { siteUrl: process.env.INKWELL_SITE_URL },
+        );
+        writeFeedResponse(res, method, feedResponse);
+        return;
+      }
 
       // Anything outside the reserved API prefixes is a public HTML page.
       if (segments.length === 0 || !API_PREFIXES.has(segments[0] as string)) {
