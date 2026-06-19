@@ -71,7 +71,8 @@ md.renderer.rules.fence = (tokens, idx, options) => {
   if (!token) return '';
   const info = token.info ? md.utils.unescapeAll(token.info).trim() : '';
   const lang = info.split(/\s+/, 1)[0] ?? '';
-  const highlighted = options.highlight?.(token.content, lang, '') ?? md.utils.escapeHtml(token.content);
+  const highlighted =
+    options.highlight?.(token.content, lang, '') ?? md.utils.escapeHtml(token.content);
   const langClass = lang ? ` language-${md.utils.escapeHtml(lang)}` : '';
   return `<pre><code class="hljs${langClass}">${highlighted}</code></pre>\n`;
 };

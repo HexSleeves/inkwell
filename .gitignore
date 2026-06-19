@@ -22,3 +22,6 @@ pnpm-debug.log*
 .idea/
 .vscode/
 *.swp
+
+# Local agent/tool working state (opencode worktrees, etc.)
+.claude/
