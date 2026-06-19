@@ -10,6 +10,7 @@ coverage/
 # Logs
 *.log
 npm-debug.log*
+pnpm-debug.log*
 
 # Env & secrets
 .env

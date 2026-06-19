@@ -9,17 +9,17 @@ tagged release: a self-hostable, API-first Markdown publishing core.
 - [ ] Markdown → sanitized HTML rendering pipeline.
 - [ ] PostgreSQL persistence with migrations.
 - [ ] Public web frontend (index + per-document reading pages).
-- [ ] Runnable server entrypoint (`npm start`) configured via environment.
+- [ ] Runnable server entrypoint (`pnpm start`) configured via environment.
 
 ## Pre-release verification
 
-- [ ] `npm ci` installs cleanly from the lockfile.
-- [ ] `npm run ci` is green (lint + format check + typecheck + tests + build).
+- [ ] `pnpm install --frozen-lockfile` installs cleanly from the lockfile.
+- [ ] `pnpm run ci` is green (lint + format check + typecheck + tests + build).
 - [ ] Fresh-clone smoke test: follow the README ["Run Inkwell"](../README.md#run-inkwell)
       steps end to end and confirm you can publish, view, update, and delete a
       document with nothing but the README.
-- [ ] `npm run db:migrate` applies cleanly against an empty database, and
-      `npm run db:rollback` reverses the latest migration.
+- [ ] `pnpm run db:migrate` applies cleanly against an empty database, and
+      `pnpm run db:rollback` reverses the latest migration.
 - [ ] No secrets, credentials, or real connection strings committed (grep the
       diff and tracked files).
 

@@ -41,7 +41,7 @@ closed.
 - The frontend is integration-tested against the data-access layer on `pg-mem`
   and over a real `node:http` server (asserting `text/html` content type, the
   embedded rendered HTML, title escaping, and that script never re-enters the
-  page). `npm test` needs no database server.
+  page). `pnpm test` needs no database server.
 - Sharing the root path between API and pages keeps the surface tiny but couples
   slug space to the reserved API prefixes; revisit (e.g. mount the API under
   `/api`) before the reserved-word list grows or slug collisions matter.

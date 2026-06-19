@@ -3,11 +3,11 @@
  *
  * Wires a real Postgres pool (resolved from `DATABASE_URL`) to the HTTP server
  * and listens on `PORT`. This is the runnable counterpart to the migration CLI
- * in `src/db/cli.ts`. Build first (`npm run build`), then:
+ * in `src/db/cli.ts`. Build first (`pnpm run build`), then:
  *
  *   node dist/main.js
  *
- * The repo exposes this as `npm start`. Configuration is read from the
+ * The repo exposes this as `pnpm start`. Configuration is read from the
  * environment:
  *
  *   DATABASE_URL   Postgres connection string (required)

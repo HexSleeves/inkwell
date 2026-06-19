@@ -2,13 +2,13 @@
  * Migration CLI.
  *
  * Operates the migration runner against a real Postgres database resolved from
- * `DATABASE_URL`. Build first (`npm run build`), then:
+ * `DATABASE_URL`. Build first (`pnpm run build`), then:
  *
  *   node dist/db/cli.js migrate        # apply all pending migrations
  *   node dist/db/cli.js rollback [n]   # roll back the last n migrations (default 1)
  *   node dist/db/cli.js status         # list applied migration ids
  *
- * The repo exposes these as `npm run db:migrate` / `db:rollback` / `db:status`.
+ * The repo exposes these as `pnpm run db:migrate` / `db:rollback` / `db:status`.
  */
 
 import { appliedMigrationIds, migrate, rollback } from './migrate.js';

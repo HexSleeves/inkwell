@@ -21,37 +21,38 @@ the public web frontend) is being built on top of this toolchain.
 
 ## Tech stack
 
-| Concern     | Choice                                           |
-| ----------- | ------------------------------------------------ |
-| Language    | TypeScript (ESM, `NodeNext`)                     |
-| Runtime     | Node.js ≥ 20                                     |
-| Persistence | PostgreSQL via [`pg`](https://node-postgres.com) |
-| Test runner | [Vitest](https://vitest.dev)                     |
-| Lint        | ESLint 9 (flat config) + typescript-eslint       |
-| Format      | Prettier                                         |
-| CI          | GitHub Actions                                   |
+| Concern        | Choice                                           |
+| -------------- | ------------------------------------------------ |
+| Language       | TypeScript (ESM, `NodeNext`)                     |
+| Runtime        | Node.js ≥ 20                                     |
+| Package manager| pnpm                                             |
+| Persistence    | PostgreSQL via [`pg`](https://node-postgres.com) |
+| Test runner    | [Vitest](https://vitest.dev)                     |
+| Lint           | ESLint 10 (flat config) + typescript-eslint      |
+| Format         | Prettier                                         |
+| CI             | GitHub Actions                                   |
 
 See [`docs/adr/0001-toolchain.md`](docs/adr/0001-toolchain.md) for the rationale
 behind these choices.
 
 ## Getting started
 
-Requires Node.js ≥ 20 and npm.
+Requires Node.js ≥ 20 and pnpm.
 
 ```bash
 # Install dependencies
-npm install
+pnpm install
 
 # Run the test suite once
-npm test
+pnpm test
 
 # Type-check, lint, and check formatting
-npm run typecheck
-npm run lint
-npm run format:check
+pnpm run typecheck
+pnpm run lint
+pnpm run format:check
 
 # Build the library to ./dist
-npm run build
+pnpm run build
 ```
 
 ## Environment variables
@@ -93,17 +94,17 @@ assume a reachable PostgreSQL instance.
 
 ```bash
 # 1. Install dependencies and compile to ./dist
-npm install
-npm run build
+pnpm install
+pnpm run build
 
 # 2. Point Inkwell at your database
 export DATABASE_URL=postgres://user:pass@localhost:5432/inkwell
 
 # 3. Create the schema
-npm run db:migrate
+pnpm run db:migrate
 
 # 4. Start the server (defaults to http://0.0.0.0:3000)
-npm start
+pnpm start
 ```
 
 You should see `Inkwell listening on http://0.0.0.0:3000`. Leave it running and,
@@ -142,26 +143,26 @@ curl -sS -X DELETE http://localhost:3000/documents/hello-world -o /dev/null -w '
 
 See [API](#api) below for the full endpoint reference.
 
-## npm scripts
+## pnpm scripts
 
 | Script                  | What it does                                     |
 | ----------------------- | ------------------------------------------------ |
-| `npm start`             | Run the compiled server (`dist/main.js`)         |
-| `npm run build`         | Compile `src/` to `dist/` with type declarations |
-| `npm run typecheck`     | Type-check without emitting                      |
-| `npm run lint`          | Lint with ESLint                                 |
-| `npm run lint:fix`      | Lint and auto-fix                                |
-| `npm run format`        | Format the repo with Prettier                    |
-| `npm run format:check`  | Verify formatting (used in CI)                   |
-| `npm test`              | Run the test suite once                          |
-| `npm run test:watch`    | Run tests in watch mode                          |
-| `npm run test:coverage` | Run tests with V8 coverage                       |
-| `npm run db:migrate`    | Apply pending migrations (needs `DATABASE_URL`)  |
-| `npm run db:rollback`   | Roll back the last migration (`[n]` for more)    |
-| `npm run db:status`     | List applied migration ids                       |
-| `npm run ci`            | Lint + format check + typecheck + test + build   |
+| `pnpm start`            | Run the compiled server (`dist/main.js`)         |
+| `pnpm run build`        | Compile `src/` to `dist/` with type declarations |
+| `pnpm run typecheck`    | Type-check without emitting                      |
+| `pnpm run lint`         | Lint with ESLint                                 |
+| `pnpm run lint:fix`     | Lint and auto-fix                                |
+| `pnpm run format`       | Format the repo with Prettier                    |
+| `pnpm run format:check` | Verify formatting (used in CI)                   |
+| `pnpm test`             | Run the test suite once                          |
+| `pnpm run test:watch`   | Run tests in watch mode                          |
+| `pnpm run test:coverage`| Run tests with V8 coverage                       |
+| `pnpm run db:migrate`   | Apply pending migrations (needs `DATABASE_URL`)  |
+| `pnpm run db:rollback`  | Roll back the last migration (`[n]` for more)    |
+| `pnpm run db:status`    | List applied migration ids                       |
+| `pnpm run ci`           | Lint + format check + typecheck + test + build   |
 
-The `db:*` scripts run against compiled output, so `npm run build` first.
+The `db:*` scripts run against compiled output, so `pnpm run build` first.
 
 ## Project layout
 
@@ -174,7 +175,7 @@ The `db:*` scripts run against compiled output, so `npm run build` first.
 │   ├── api.ts           # Framework-free HTTP request handler (routing/validation)
 │   ├── pages.ts         # Public HTML frontend (index + document pages)
 │   ├── server.ts        # node:http transport adapter (routes API vs. pages)
-│   ├── main.ts          # Server entrypoint (npm start): pool + server + listen
+│   ├── main.ts          # Server entrypoint (pnpm start): pool + server + listen
 │   ├── db/              # Postgres schema, migrations, data-access layer
 │   └── *.test.ts        # Co-located tests
 ├── docs/adr/            # Architecture Decision Records
@@ -277,7 +278,7 @@ document is returned as:
 ```
 
 The API is integration-tested end to end against the data-access layer (and a
-real `node:http` server) using the in-memory Postgres double, so `npm test`
+real `node:http` server) using the in-memory Postgres double, so `pnpm test`
 needs no database. See
 [`docs/adr/0004-http-api.md`](docs/adr/0004-http-api.md) for the design
 rationale.
@@ -356,9 +357,9 @@ Point the runner at a database and apply them:
 
 ```bash
 export DATABASE_URL=postgres://user:pass@localhost:5432/inkwell
-npm run build && npm run db:migrate     # apply pending migrations
-npm run db:status                       # list applied migration ids
-npm run db:rollback                     # roll back the most recent migration
+pnpm run build && pnpm run db:migrate     # apply pending migrations
+pnpm run db:status                       # list applied migration ids
+pnpm run db:rollback                     # roll back the most recent migration
 ```
 
 The data-access layer maps rows to `camelCase` domain objects:
@@ -376,13 +377,13 @@ The data-access layer maps rows to `camelCase` domain objects:
 
 The automated test suite runs the migration + CRUD coverage against an in-memory
 Postgres ([`pg-mem`](https://github.com/oguimbal/pg-mem)), so no database server
-is needed for `npm test`.
+is needed for `pnpm test`.
 
 ## Contributing
 
 1. Branch from `main`.
 2. Keep the core small and tested — add tests alongside features.
-3. Ensure `npm run ci` passes before opening a pull request.
+3. Ensure `pnpm run ci` passes before opening a pull request.
 
 Releases follow the [v0.1 release checklist](docs/RELEASE-CHECKLIST.md).
 

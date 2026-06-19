@@ -48,7 +48,7 @@ would enlarge the dependency surface of a deliberately small core.
 - The full request path (routing → validation → rendering → SQL) is
   integration-tested against the data-access layer on `pg-mem`, with an
   additional suite that binds a real `node:http` server and drives it over
-  `fetch`. `npm test` needs no database server.
+  `fetch`. `pnpm test` needs no database server.
 - Hand-rolled routing is fine at this size but does not scale to many resources;
   revisit the no-framework decision before the route count grows substantially.
 - The handler is transport-agnostic, so a future framework or serverless adapter

@@ -25,7 +25,7 @@ everywhere.
   ordered, immutable `{ id, name, up, down }` records applied in id order and
   recorded in a `schema_migrations` ledger, so runs are idempotent and a partial
   failure is resumable. Rollback runs the reverse SQL newest-first. A small CLI
-  (`npm run db:migrate` / `db:rollback` / `db:status`) operates it against
+  (`pnpm run db:migrate` / `db:rollback` / `db:status`) operates it against
   `DATABASE_URL`.
 - **Driver-agnostic data-access layer.** All persistence functions take a small
   `Queryable` interface (anything with a compatible `query` method), not a
@@ -38,12 +38,12 @@ everywhere.
 
 ## Consequences
 
-- `npm test` exercises migrate + insert/select/update/delete with zero infra.
+- `pnpm test` exercises migrate + insert/select/update/delete with zero infra.
 - pg-mem implements only a subset of Postgres, so the test harness registers
   `gen_random_uuid()` and enables `noAstCoverageCheck`. Two real-Postgres
   behaviours pg-mem cannot model (re-creating a table after `DROP` in the same
   instance) are documented in the tests rather than asserted. Validating against
-  a real Postgres is a `npm run db:migrate` away and a good candidate for a
+  a real Postgres is a `pnpm run db:migrate` away and a good candidate for a
   future CI service-container job.
 - No ORM means schema changes are explicit SQL migrations — more typing, but no
   hidden magic and full control over generated DDL.

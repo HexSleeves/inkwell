@@ -26,10 +26,13 @@ maintenance burden.
   ESLint rules so the two never fight).
 - **GitHub Actions** for CI: lint → format check → typecheck → test → build,
   across Node 20 and 22.
+- **pnpm** as the package manager. Strict, content-addressed `node_modules`
+  via a virtual store saves disk and enforces correct dependency resolution;
+  the version is pinned via `packageManager` and corepack.
 
 ## Consequences
 
-- A single `npm run ci` reproduces the CI gate locally.
+- A single `pnpm run ci` reproduces the CI gate locally.
 - Build output (`dist/`) ships compiled JS plus `.d.ts` declarations, so the
   package is consumable as a library while the HTTP service is built out.
 - Postgres is the planned persistence layer (typed schemas + migrations) but is

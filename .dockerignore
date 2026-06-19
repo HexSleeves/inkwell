@@ -1,4 +1,4 @@
-# Dependencies — reinstalled in-image via `npm ci` against the lockfile.
+# Dependencies — reinstalled in-image via `pnpm install --frozen-lockfile`.
 node_modules/
 
 # Build output — recompiled in the builder stage.
@@ -19,6 +19,7 @@ vitest.config.ts
 eslint.config.js
 .prettierrc.json
 .prettierignore
+.npmrc
 
 # Docs and markdown.
 *.md
@@ -36,6 +37,7 @@ docs/
 *.swp
 *.log
 npm-debug.log*
+pnpm-debug.log*
 
 # Docker files themselves.
 Dockerfile
