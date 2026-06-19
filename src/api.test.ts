@@ -116,19 +116,117 @@ describe('documents HTTP API (handler)', () => {
     });
   });
 
+  interface ListBody {
+    documents: DocumentBody[];
+    total: number;
+    limit: number;
+    offset: number;
+  }
+
   describe('GET /documents', () => {
-    it('lists documents', async () => {
+    it('lists documents in a paginated envelope', async () => {
       await createSample({ slug: 'a' });
       await createSample({ slug: 'b' });
       const res = await call({ method: 'GET', segments: ['documents'] });
       expect(res.status).toBe(200);
-      expect((res.body as DocumentBody[]).map((d) => d.slug).sort()).toEqual(['a', 'b']);
+      const page = res.body as ListBody;
+      expect(page.documents.map((d) => d.slug).sort()).toEqual(['a', 'b']);
+      expect(page.total).toBe(2);
+      expect(page.limit).toBe(20);
+      expect(page.offset).toBe(0);
     });
 
-    it('returns an empty array when there are no documents', async () => {
+    it('returns an empty page when there are no documents', async () => {
       const res = await call({ method: 'GET', segments: ['documents'] });
       expect(res.status).toBe(200);
-      expect(res.body).toEqual([]);
+      expect(res.body).toEqual({ documents: [], total: 0, limit: 20, offset: 0 });
+    });
+
+    describe('pagination', () => {
+      // Seed N documents; created_at ordering is newest-first, so the most
+      // recently inserted slug lands at index 0 of the unpaged list.
+      const seed = async (count: number): Promise<void> => {
+        for (let i = 0; i < count; i += 1) {
+          // Pad so lexical and insertion order agree for readable assertions.
+          const res = await createSample({ slug: `doc-${String(i).padStart(2, '0')}` });
+          expect(res.status).toBe(201);
+        }
+      };
+
+      it('applies a custom limit and reports the full total', async () => {
+        await seed(5);
+        const res = await call({ method: 'GET', segments: ['documents'], query: { limit: '2' } });
+        expect(res.status).toBe(200);
+        const page = res.body as ListBody;
+        expect(page.documents).toHaveLength(2);
+        expect(page.total).toBe(5);
+        expect(page.limit).toBe(2);
+        expect(page.offset).toBe(0);
+      });
+
+      it('walks pages with limit + offset without overlap', async () => {
+        await seed(5);
+        const first = (
+          await call({ method: 'GET', segments: ['documents'], query: { limit: '2', offset: '0' } })
+        ).body as ListBody;
+        const second = (
+          await call({ method: 'GET', segments: ['documents'], query: { limit: '2', offset: '2' } })
+        ).body as ListBody;
+        const firstSlugs = first.documents.map((d) => d.slug);
+        const secondSlugs = second.documents.map((d) => d.slug);
+        expect(firstSlugs).toHaveLength(2);
+        expect(secondSlugs).toHaveLength(2);
+        // Disjoint pages, and each reports the same unpaged total.
+        expect(firstSlugs.some((s) => secondSlugs.includes(s))).toBe(false);
+        expect(first.total).toBe(5);
+        expect(second.total).toBe(5);
+      });
+
+      it('returns an empty page past the end while keeping the total', async () => {
+        await seed(3);
+        const res = await call({
+          method: 'GET',
+          segments: ['documents'],
+          query: { offset: '10' },
+        });
+        const page = res.body as ListBody;
+        expect(page.documents).toEqual([]);
+        expect(page.total).toBe(3);
+        expect(page.offset).toBe(10);
+      });
+
+      it('clamps a limit above the max to 100', async () => {
+        const res = await call({
+          method: 'GET',
+          segments: ['documents'],
+          query: { limit: '500' },
+        });
+        expect(res.status).toBe(200);
+        expect((res.body as ListBody).limit).toBe(100);
+      });
+
+      it('rejects a non-numeric limit with 400', async () => {
+        const res = await call({
+          method: 'GET',
+          segments: ['documents'],
+          query: { limit: 'abc' },
+        });
+        expect(res.status).toBe(400);
+      });
+
+      it('rejects a zero limit with 400', async () => {
+        const res = await call({ method: 'GET', segments: ['documents'], query: { limit: '0' } });
+        expect(res.status).toBe(400);
+      });
+
+      it('rejects a negative offset with 400', async () => {
+        const res = await call({
+          method: 'GET',
+          segments: ['documents'],
+          query: { offset: '-1' },
+        });
+        expect(res.status).toBe(400);
+      });
     });
   });
 

@@ -20,10 +20,12 @@ export {
   getDocumentBySlug,
   getDocumentById,
   listDocuments,
+  countDocuments,
   updateDocumentBySlug,
   deleteDocumentBySlug,
   DuplicateSlugError,
   type Document,
   type NewDocument,
   type DocumentPatch,
+  type ListOptions,
 } from './documents.js';

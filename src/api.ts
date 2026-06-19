@@ -22,6 +22,7 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 
 import {
   DuplicateSlugError,
+  countDocuments,
   createDocument,
   deleteDocumentBySlug,
   getDocumentBySlug,
@@ -52,6 +53,13 @@ export interface ApiRequest {
    * supplies no headers (e.g. direct handler tests).
    */
   readonly headers?: Readonly<Record<string, string | string[] | undefined>>;
+  /**
+   * Parsed URL query parameters, lower-cased values as supplied by the client.
+   * Each key holds the first value seen (repeated params collapse to the
+   * first). `undefined` when the transport supplies none. Used by the list
+   * route for `limit`/`offset` paging.
+   */
+  readonly query?: Readonly<Record<string, string | undefined>>;
 }
 
 /** Server-side options for {@link handleApiRequest}. */
@@ -92,6 +100,10 @@ export class ApiError extends Error {
 const SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const MAX_SLUG_LENGTH = 200;
 const MAX_TITLE_LENGTH = 500;
+
+/** Pagination defaults/bounds for the list route. */
+const DEFAULT_LIMIT = 20;
+const MAX_LIMIT = 100;
 
 function errorResponse(
   status: number,
@@ -135,6 +147,41 @@ function resolveSlug(rawSlug: unknown, title: string): string {
     );
   }
   return rawSlug;
+}
+
+/**
+ * Parse a query param that must be a non-negative integer. Only digit strings
+ * are accepted, so negatives, floats, and junk like `"12abc"` are rejected with
+ * a 400 — keeping numeric validation consistent with the strict field checks
+ * used by the write routes.
+ */
+function parseNonNegativeInt(value: string | undefined, field: string): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!/^\d+$/.test(value)) {
+    throw new ApiError(400, `Query param "${field}" must be a non-negative integer.`);
+  }
+  return Number(value);
+}
+
+/**
+ * Resolve `limit`/`offset` from the query string into a validated window.
+ *   - `limit` defaults to {@link DEFAULT_LIMIT}, must be >= 1, and is clamped
+ *     down to {@link MAX_LIMIT} rather than rejected when too large.
+ *   - `offset` defaults to 0 and rejects negative values.
+ */
+function parsePagination(query: ApiRequest['query']): { limit: number; offset: number } {
+  let limit = DEFAULT_LIMIT;
+  const rawLimit = parseNonNegativeInt(query?.limit, 'limit');
+  if (rawLimit !== undefined) {
+    if (rawLimit < 1) {
+      throw new ApiError(400, 'Query param "limit" must be at least 1.');
+    }
+    limit = Math.min(rawLimit, MAX_LIMIT);
+  }
+  const offset = parseNonNegativeInt(query?.offset, 'offset') ?? 0;
+  return { limit, offset };
 }
 
 function asObject(body: unknown): Record<string, unknown> {
@@ -201,10 +248,20 @@ async function handleGet(db: Queryable, slug: string): Promise<ApiResponse> {
   return { status: 200, body: doc };
 }
 
-/** GET /documents — list documents, newest first. */
-async function handleList(db: Queryable): Promise<ApiResponse> {
-  const docs = await listDocuments(db);
-  return { status: 200, body: docs };
+/**
+ * GET /documents — list documents, newest first, one page at a time.
+ *
+ * Reads `?limit=N&offset=N` (see {@link parsePagination}) and returns the page
+ * alongside the unpaged `total` so clients can compute how many pages exist:
+ * `{ documents, total, limit, offset }`.
+ */
+async function handleList(db: Queryable, query: ApiRequest['query']): Promise<ApiResponse> {
+  const { limit, offset } = parsePagination(query);
+  const [documents, total] = await Promise.all([
+    listDocuments(db, { limit, offset }),
+    countDocuments(db),
+  ]);
+  return { status: 200, body: { documents, total, limit, offset } };
 }
 
 /** PATCH /documents/:slug — partial update of `{ title?, bodyMarkdown? }`. */
@@ -289,7 +346,7 @@ export async function handleApiRequest(
     if (slug === undefined) {
       switch (req.method) {
         case 'GET':
-          return await handleList(db);
+          return await handleList(db, req.query);
         case 'POST':
           requireApiKey(req, options.apiKey);
           return await handleCreate(db, req.body);

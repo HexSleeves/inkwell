@@ -197,7 +197,7 @@ All request and response bodies are JSON. Errors share one shape:
 | -------- | ------------------ | ---------------------------------- | ------- | ------------------------------ |
 | `GET`    | `/health`          | Liveness check                     | `200`   | —                              |
 | `POST`   | `/documents`       | Create a document                  | `201`   | `400` invalid, `409` dup slug  |
-| `GET`    | `/documents`       | List documents (newest first)      | `200`   | —                              |
+| `GET`    | `/documents`       | List documents (newest first, paged) | `200` | `400` invalid paging           |
 | `GET`    | `/documents/:slug` | Fetch one document by slug         | `200`   | `404` not found                |
 | `PATCH`  | `/documents/:slug` | Partial update (`PUT` is an alias) | `200`   | `400` invalid, `404` not found |
 | `DELETE` | `/documents/:slug` | Delete a document                  | `204`   | `404` not found                |
@@ -213,6 +213,21 @@ Unknown paths return `404`; a known path with an unsupported method returns
   separated by single hyphens.
 - **Update** (`PATCH /documents/:slug`): `{ "title"?: string, "bodyMarkdown"?: string }`.
   At least one field is required.
+
+**Listing & pagination.** `GET /documents` accepts `?limit=N` (default `20`,
+clamped to a max of `100`) and `?offset=N` (default `0`). Both must be
+non-negative integers and `limit` must be at least `1`; anything else is a
+`400`. The response wraps the page with the unpaged total so clients can page
+through the full set:
+
+```json
+{
+  "documents": [ /* document objects, newest first */ ],
+  "total": 42,
+  "limit": 20,
+  "offset": 0
+}
+```
 
 `renderedHtml` is always derived server-side from `bodyMarkdown` via the
 [rendering pipeline](#rendering-pipeline) — clients never supply HTML. A

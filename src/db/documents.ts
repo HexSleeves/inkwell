@@ -127,12 +127,75 @@ export async function getDocumentById(db: Queryable, id: string): Promise<Docume
   return row ? toDocument(row) : null;
 }
 
-/** List documents, newest first. */
-export async function listDocuments(db: Queryable): Promise<Document[]> {
-  const result = await db.query<DocumentRow>(
-    `SELECT ${RETURNING} FROM documents ORDER BY created_at DESC, id DESC`,
-  );
+/** Optional paging window for {@link listDocuments}. */
+export interface ListOptions {
+  /** Maximum number of rows to return. Omitted means "no limit". */
+  readonly limit?: number;
+  /** Number of rows to skip from the start of the ordering. Defaults to 0. */
+  readonly offset?: number;
+}
+
+/**
+ * List documents, newest first.
+ *
+ * When `limit`/`offset` are supplied the query returns a single page of the
+ * ordering; the ordering is stable (`created_at`, then `id`) so paging never
+ * skips or repeats a row. Use {@link countDocuments} for the unpaged total.
+ */
+export async function listDocuments(db: Queryable, options: ListOptions = {}): Promise<Document[]> {
+  const clauses = [`SELECT ${RETURNING} FROM documents ORDER BY created_at DESC, id DESC`];
+  const params: unknown[] = [];
+  if (options.limit !== undefined) {
+    params.push(options.limit);
+    clauses.push(`LIMIT $${params.length}`);
+  }
+  if (options.offset !== undefined) {
+    params.push(options.offset);
+    clauses.push(`OFFSET $${params.length}`);
+  }
+  const result = await db.query<DocumentRow>(clauses.join(' '), params);
   return result.rows.map(toDocument);
+}
+
+/** Options for {@link listPublishedDocuments}. */
+export interface ListPublishedOptions {
+  /** Maximum number of rows to return. Omitted means "no limit". */
+  readonly limit?: number;
+}
+
+/**
+ * List only `published` documents, newest first.
+ *
+ * The publication-aware read for public surfaces such as the Atom feed: drafts
+ * are never returned. Filtering happens in SQL (before any `LIMIT`) so a page of
+ * N rows is N *published* documents, not N rows that may include hidden drafts.
+ */
+export async function listPublishedDocuments(
+  db: Queryable,
+  options: ListPublishedOptions = {},
+): Promise<Document[]> {
+  const params: unknown[] = ['published'];
+  let sql = `SELECT ${RETURNING} FROM documents WHERE status = $1 ORDER BY created_at DESC, id DESC`;
+  if (options.limit !== undefined) {
+    params.push(options.limit);
+    sql += ` LIMIT $${params.length}`;
+  }
+  const result = await db.query<DocumentRow>(sql, params);
+  return result.rows.map(toDocument);
+}
+
+/**
+ * Count all documents. Kept alongside {@link listDocuments} so paginated reads
+ * can report a total; when row-level filters are added to listing they should
+ * be applied here too so the count stays consistent with the page.
+ */
+export async function countDocuments(db: Queryable): Promise<number> {
+  const result = await db.query<{ count: number | string }>(
+    `SELECT count(*)::int AS count FROM documents`,
+  );
+  // `count(*)` comes back as a number with the `::int` cast, but coerce
+  // defensively in case a driver hands it back as a string.
+  return Number(result.rows[0]?.count ?? 0);
 }
 
 /**
