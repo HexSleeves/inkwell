@@ -18,6 +18,8 @@
  *     the API derive it from the title via {@link slugify}.
  */
 
+import { createHash, timingSafeEqual } from 'node:crypto';
+
 import {
   DuplicateSlugError,
   createDocument,
@@ -43,6 +45,24 @@ export interface ApiRequest {
    * a request reaches the handler the body is already an `unknown` value.
    */
   readonly body?: unknown;
+  /**
+   * Request headers with lower-cased names, matching Node's
+   * `IncomingHttpHeaders` shape. Used for the shared-secret API key check; a
+   * repeated header may arrive as a `string[]`. `undefined` when the transport
+   * supplies no headers (e.g. direct handler tests).
+   */
+  readonly headers?: Readonly<Record<string, string | string[] | undefined>>;
+}
+
+/** Server-side options for {@link handleApiRequest}. */
+export interface ApiOptions {
+  /**
+   * The shared secret required on mutating requests (POST/PATCH/PUT/DELETE to
+   * `/documents`), read from `INKWELL_API_KEY`. When `undefined` or empty, no
+   * key can match and all mutations are rejected with 401 — a misconfigured
+   * server fails closed rather than serving writes unauthenticated.
+   */
+  readonly apiKey?: string | undefined;
 }
 
 /** A response to be serialized as JSON by the transport adapter. */
@@ -122,6 +142,32 @@ function asObject(body: unknown): Record<string, unknown> {
     throw new ApiError(400, 'Request body must be a JSON object.');
   }
   return body as Record<string, unknown>;
+}
+
+/**
+ * Constant-time comparison of two secrets. Both are SHA-256 hashed first so the
+ * comparison runs over fixed-length digests — this avoids leaking the secret's
+ * length and keeps `timingSafeEqual` (which throws on length mismatch) safe to
+ * call with attacker-controlled input.
+ */
+function secretsMatch(provided: string, expected: string): boolean {
+  const a = createHash('sha256').update(provided).digest();
+  const b = createHash('sha256').update(expected).digest();
+  return timingSafeEqual(a, b);
+}
+
+/**
+ * Enforce the shared-secret API key on a mutating request. The client must send
+ * the configured secret in the `X-API-Key` header. A missing, malformed, or
+ * non-matching key — or an unconfigured server secret — results in a 401.
+ */
+function requireApiKey(req: ApiRequest, configuredKey: string | undefined): void {
+  const header = req.headers?.['x-api-key'];
+  // A repeated header arrives as an array; reject the ambiguity outright.
+  const provided = typeof header === 'string' ? header : undefined;
+  if (!configuredKey || !provided || !secretsMatch(provided, configuredKey)) {
+    throw new ApiError(401, 'Missing or invalid API key.');
+  }
 }
 
 /** POST /documents — create a document from `{ title, bodyMarkdown, slug? }`. */
@@ -216,8 +262,16 @@ function methodNotAllowed(allowed: string[]): ApiResponse {
  * known paths with an unsupported method return 405. Any {@link ApiError}
  * thrown by a handler is mapped to its status; anything else surfaces as a 500
  * without leaking internal detail to the client.
+ *
+ * Mutating routes (`POST`/`PATCH`/`PUT`/`DELETE` under `/documents`) require the
+ * shared secret in `options.apiKey` to be presented via the `X-API-Key` header;
+ * reads and the health check stay open. See {@link requireApiKey}.
  */
-export async function handleApiRequest(db: Queryable, req: ApiRequest): Promise<ApiResponse> {
+export async function handleApiRequest(
+  db: Queryable,
+  req: ApiRequest,
+  options: ApiOptions = {},
+): Promise<ApiResponse> {
   try {
     const [resource, slug, ...rest] = req.segments;
 
@@ -237,6 +291,7 @@ export async function handleApiRequest(db: Queryable, req: ApiRequest): Promise<
         case 'GET':
           return await handleList(db);
         case 'POST':
+          requireApiKey(req, options.apiKey);
           return await handleCreate(db, req.body);
         default:
           return methodNotAllowed(['GET', 'POST']);
@@ -249,8 +304,10 @@ export async function handleApiRequest(db: Queryable, req: ApiRequest): Promise<
         return await handleGet(db, slug);
       case 'PATCH':
       case 'PUT':
+        requireApiKey(req, options.apiKey);
         return await handleUpdate(db, slug, req.body);
       case 'DELETE':
+        requireApiKey(req, options.apiKey);
         return await handleDelete(db, slug);
       default:
         return methodNotAllowed(['GET', 'PATCH', 'PUT', 'DELETE']);

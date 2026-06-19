@@ -64,6 +64,24 @@ required; the rest have sensible defaults.
 | `DATABASE_URL` | yes      | —         | server, `db:*` scripts | Postgres connection string, e.g. `postgres://user:pass@host:5432/inkwell`. Startup fails loudly if unset. |
 | `PORT`         | no       | `3000`    | server                 | TCP port the HTTP server listens on.                                                                      |
 | `HOST`         | no       | `0.0.0.0` | server                 | Address to bind. Use `127.0.0.1` to restrict to localhost.                                                |
+| `INKWELL_API_KEY` | no    | —         | server                 | Shared secret required on mutating requests via the `X-API-Key` header (see below). Unset locks down all writes. |
+
+### Write authentication
+
+Mutating API requests — `POST`, `PATCH`/`PUT`, and `DELETE` on `/documents` —
+require the shared secret `INKWELL_API_KEY` to be presented in an `X-API-Key`
+header; missing or wrong keys get `401`. Reads (`GET /documents`,
+`GET /documents/:slug`) and the public HTML frontend stay open. If
+`INKWELL_API_KEY` is unset or empty the server fails closed: no key can match,
+so every write is rejected. Set it before allowing writes:
+
+```bash
+export INKWELL_API_KEY=$(openssl rand -hex 32)
+curl -X POST http://localhost:3000/documents \
+  -H "content-type: application/json" \
+  -H "x-api-key: $INKWELL_API_KEY" \
+  -d '{"title":"Hello","bodyMarkdown":"# Hi"}'
+```
 
 ## Run Inkwell
 

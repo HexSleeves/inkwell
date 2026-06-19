@@ -28,6 +28,8 @@ interface DocumentBody {
   updatedAt: string;
 }
 
+const API_KEY = 'test-secret-key';
+
 describe('documents HTTP API (handler)', () => {
   let db: Queryable;
 
@@ -36,7 +38,15 @@ describe('documents HTTP API (handler)', () => {
     await migrate(db);
   });
 
-  const call = (req: ApiRequest): Promise<ApiResponse> => handleApiRequest(db, req);
+  // The configured shared secret is supplied on every handler call, and the
+  // valid key is presented by default so the CRUD suites exercise authorized
+  // requests. The dedicated auth suite overrides the header to test rejection.
+  const call = (req: ApiRequest): Promise<ApiResponse> =>
+    handleApiRequest(
+      db,
+      { headers: { 'x-api-key': API_KEY }, ...req },
+      { apiKey: API_KEY },
+    );
 
   const createSample = (overrides: Record<string, unknown> = {}): Promise<ApiResponse> =>
     call({
@@ -211,13 +221,93 @@ describe('documents HTTP API (handler)', () => {
       expect(res.body).toEqual({ status: 'ok' });
     });
   });
+
+  describe('API key authentication', () => {
+    const auth = (req: ApiRequest): Promise<ApiResponse> =>
+      handleApiRequest(db, req, { apiKey: API_KEY });
+
+    const sample = { title: 'Auth Doc', bodyMarkdown: '# Auth' };
+
+    it('rejects POST with a missing key (401)', async () => {
+      const res = await auth({ method: 'POST', segments: ['documents'], body: sample });
+      expect(res.status).toBe(401);
+      expect((res.body as { error: { message: string } }).error.message).toMatch(/api key/i);
+    });
+
+    it('rejects POST with a wrong key (401)', async () => {
+      const res = await auth({
+        method: 'POST',
+        segments: ['documents'],
+        body: sample,
+        headers: { 'x-api-key': 'wrong' },
+      });
+      expect(res.status).toBe(401);
+    });
+
+    it('accepts POST with the correct key (201)', async () => {
+      const res = await auth({
+        method: 'POST',
+        segments: ['documents'],
+        body: sample,
+        headers: { 'x-api-key': API_KEY },
+      });
+      expect(res.status).toBe(201);
+    });
+
+    it('rejects PATCH without a key even when the document exists (401)', async () => {
+      await createSample();
+      const res = await auth({
+        method: 'PATCH',
+        segments: ['documents', 'hello-world'],
+        body: { title: 'Nope' },
+      });
+      expect(res.status).toBe(401);
+    });
+
+    it('rejects DELETE without a key (401)', async () => {
+      await createSample();
+      const res = await auth({ method: 'DELETE', segments: ['documents', 'hello-world'] });
+      expect(res.status).toBe(401);
+    });
+
+    it('leaves GET (list and item) open without a key', async () => {
+      await createSample();
+      const list = await auth({ method: 'GET', segments: ['documents'] });
+      expect(list.status).toBe(200);
+      const item = await auth({ method: 'GET', segments: ['documents', 'hello-world'] });
+      expect(item.status).toBe(200);
+    });
+
+    it('rejects an array-valued x-api-key header (401)', async () => {
+      const res = await auth({
+        method: 'POST',
+        segments: ['documents'],
+        body: sample,
+        headers: { 'x-api-key': [API_KEY, API_KEY] },
+      });
+      expect(res.status).toBe(401);
+    });
+
+    it('rejects all mutations when no server key is configured (401)', async () => {
+      const res = await handleApiRequest(
+        db,
+        { method: 'POST', segments: ['documents'], body: sample, headers: { 'x-api-key': '' } },
+        {},
+      );
+      expect(res.status).toBe(401);
+    });
+  });
 });
 
 describe('documents HTTP API (node:http transport)', () => {
   let server: Server;
   let baseUrl: string;
+  let previousApiKey: string | undefined;
 
   beforeEach(async () => {
+    // The transport adapter reads the secret from the environment.
+    previousApiKey = process.env.INKWELL_API_KEY;
+    process.env.INKWELL_API_KEY = API_KEY;
     const db = createMemoryDatabase().db;
     await migrate(db);
     server = createServer(db);
@@ -227,6 +317,11 @@ describe('documents HTTP API (node:http transport)', () => {
   });
 
   afterEach(async () => {
+    if (previousApiKey === undefined) {
+      delete process.env.INKWELL_API_KEY;
+    } else {
+      process.env.INKWELL_API_KEY = previousApiKey;
+    }
     await new Promise<void>((resolve, reject) =>
       server.close((err) => (err ? reject(err) : resolve())),
     );
@@ -235,7 +330,7 @@ describe('documents HTTP API (node:http transport)', () => {
   it('round-trips create -> fetch over HTTP', async () => {
     const createRes = await fetch(`${baseUrl}/documents`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', 'x-api-key': API_KEY },
       body: JSON.stringify({ title: 'Over The Wire', bodyMarkdown: '# Wire' }),
     });
     expect(createRes.status).toBe(201);
@@ -245,6 +340,15 @@ describe('documents HTTP API (node:http transport)', () => {
     const getRes = await fetch(`${baseUrl}/documents/over-the-wire`);
     expect(getRes.status).toBe(200);
     expect(((await getRes.json()) as DocumentBody).title).toBe('Over The Wire');
+  });
+
+  it('rejects an unauthenticated POST over HTTP with 401', async () => {
+    const res = await fetch(`${baseUrl}/documents`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ title: 'No Key', bodyMarkdown: '# Nope' }),
+    });
+    expect(res.status).toBe(401);
   });
 
   it('returns 400 for malformed JSON', async () => {

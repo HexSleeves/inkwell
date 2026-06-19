@@ -19,12 +19,19 @@ import { migrate } from './db/migrate.js';
 import { createMemoryDatabase } from './db/test-helpers.js';
 import type { Queryable } from './db/pool.js';
 
+/** Shared secret used to authorize the seed writes below. */
+const SEED_API_KEY = 'pages-test-key';
+
 /** Seed a document through the real API create path (renders + persists HTML). */
 async function seed(
   db: Queryable,
   body: { title: string; bodyMarkdown: string; slug?: string },
 ): Promise<void> {
-  const res = await handleApiRequest(db, { method: 'POST', segments: ['documents'], body });
+  const res = await handleApiRequest(
+    db,
+    { method: 'POST', segments: ['documents'], body, headers: { 'x-api-key': SEED_API_KEY } },
+    { apiKey: SEED_API_KEY },
+  );
   expect(res.status).toBe(201);
 }
 

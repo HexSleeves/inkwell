@@ -117,7 +117,14 @@ export function createRequestListener(db: Queryable) {
         }
       }
 
-      const response = await handleApiRequest(db, { method, segments, body });
+      // The shared secret is read per request so it can be rotated by
+      // restarting with a new env value (and so tests can set it freely).
+      const apiKey = process.env.INKWELL_API_KEY;
+      const response = await handleApiRequest(
+        db,
+        { method, segments, body, headers: req.headers },
+        { apiKey },
+      );
       writeResponse(res, response);
     } catch (error) {
       const tooLarge = error instanceof Error && error.message === 'Request body too large.';
