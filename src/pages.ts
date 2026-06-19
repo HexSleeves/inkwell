@@ -2,24 +2,33 @@
  * Public web frontend — server-rendered HTML pages for published documents.
  *
  * Where {@link handleApiRequest} (see `src/api.ts`) speaks JSON for programmatic
- * clients, this module renders the *human-facing* surface: a styled index of
- * published documents and a clean reading page per document. Like the API
- * handler it is framework-free — {@link handlePageRequest} takes a normalized
+ * clients, this module renders the *human-facing* surface: a styled, paginated
+ * index of published documents and a clean reading page per document. Like the
+ * API handler it is framework-free — {@link handlePageRequest} takes a normalized
  * {@link PageRequest} plus a {@link Queryable} and returns a {@link PageResponse}
  * (status + HTML string), so the routing and templating are integration-tested
  * directly against the data-access layer without binding a socket. The thin
  * `node:http` adapter in `src/server.ts` decides whether a path is an API route
  * or a page route and dispatches accordingly.
  *
+ * Discovery & SEO: every page carries a canonical link plus OpenGraph, Twitter
+ * Card, and (for document pages) JSON-LD `BlogPosting` metadata, so published
+ * content is rich and rankable when shared or crawled. Absolute URLs are built
+ * from the configured site origin (see `src/site-url.ts`).
+ *
  * Safety note: a document's `renderedHtml` is already sanitized at write time by
  * the rendering pipeline (see `src/rendering.ts`), so it is embedded verbatim.
- * Every *other* value interpolated into a template — titles, the requested slug
- * echoed back on a 404 — is plain text and is HTML-escaped via {@link escapeHtml}
- * before insertion.
+ * Every *other* value interpolated into a template — titles, excerpts, meta
+ * descriptions, the JSON-LD payload — is plain text and is escaped for its
+ * context (HTML, attribute, or JSON) before insertion.
  */
 
-import { getDocumentBySlug, listDocuments, type Document } from './db/documents.js';
+import { countDocuments, getDocumentBySlug, listDocuments, type Document } from './db/documents.js';
 import type { Queryable } from './db/pool.js';
+import { normalizeSiteUrl } from './site-url.js';
+
+/** Number of documents shown per index page. */
+export const PAGE_SIZE = 10;
 
 /** A normalized inbound page request, independent of any HTTP framework. */
 export interface PageRequest {
@@ -36,6 +45,19 @@ export interface PageResponse {
   readonly html: string;
 }
 
+/** Server-side options for the page handler (absolute-URL construction). */
+export interface PageOptions {
+  /**
+   * The public origin the site is served from, e.g. `https://blog.example.com`.
+   * Used to build canonical/OpenGraph/JSON-LD absolute URLs. Read from
+   * `INKWELL_SITE_URL`; falls back to a localhost origin. Trailing slash trimmed.
+   */
+  readonly siteUrl?: string | undefined;
+}
+
+/** The site/brand name surfaced in titles, OpenGraph `og:site_name`, and JSON-LD. */
+const SITE_NAME = 'Inkwell';
+
 /** Escape the five characters that are unsafe in HTML text/attribute contexts. */
 export function escapeHtml(value: string): string {
   return value
@@ -44,6 +66,48 @@ export function escapeHtml(value: string): string {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
+}
+
+/**
+ * Serialize a value as JSON safe to embed inside a `<script>` element. JSON is
+ * not HTML-escaped by browsers, so the only injection risk is a literal `</`
+ * sequence (notably `</script>`); escaping `<`, `>`, and `&` to their unicode
+ * escapes neutralizes that while keeping the JSON valid.
+ */
+function jsonForScript(value: unknown): string {
+  return JSON.stringify(value)
+    .replace(/</g, '\\u003c')
+    .replace(/>/g, '\\u003e')
+    .replace(/&/g, '\\u0026');
+}
+
+/**
+ * Derive a short plain-text excerpt from a document's Markdown body, suitable
+ * for an index summary and a `<meta name="description">`. This is intentionally
+ * lightweight — strip the most common Markdown syntax, collapse whitespace, and
+ * truncate on a word boundary — rather than re-parsing to an AST. Returns an
+ * empty string for empty/whitespace-only input.
+ */
+export function deriveExcerpt(markdown: string, maxLength = 160): string {
+  const text = markdown
+    .replace(/```[\s\S]*?```/g, ' ') // fenced code blocks
+    .replace(/`([^`]*)`/g, '$1') // inline code -> its text
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ') // images -> drop
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1') // links -> link text
+    .replace(/^\s{0,3}#{1,6}\s+/gm, '') // ATX heading markers
+    .replace(/^\s{0,3}>\s?/gm, '') // blockquote markers
+    .replace(/^\s{0,3}(?:[-*+]|\d+\.)\s+/gm, '') // list markers
+    .replace(/[*_~]/g, '') // emphasis/strikethrough
+    .replace(/<[^>]+>/g, ' ') // any inline HTML tags
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (text.length <= maxLength) return text;
+  // Truncate at the last word boundary within the budget, then add an ellipsis.
+  const clipped = text.slice(0, maxLength);
+  const lastSpace = clipped.lastIndexOf(' ');
+  const head = lastSpace > 0 ? clipped.slice(0, lastSpace) : clipped;
+  return `${head.trimEnd()}…`;
 }
 
 /**
@@ -95,15 +159,20 @@ const STYLES = `
   th, td { border: 1px solid #e0e0e6; padding: 0.4rem 0.6rem; text-align: left; }
   .meta { color: #777; font-size: 0.875rem; }
   ul.index { list-style: none; padding: 0; }
-  ul.index li { margin: 0 0 1.25rem; }
-  ul.index a { font-size: 1.15rem; font-weight: 600; text-decoration: none; }
-  ul.index a:hover { text-decoration: underline; }
+  ul.index li { margin: 0 0 1.75rem; }
+  ul.index a.title { font-size: 1.15rem; font-weight: 600; text-decoration: none; }
+  ul.index a.title:hover { text-decoration: underline; }
+  ul.index .excerpt { margin: 0.35rem 0 0; color: #444; }
+  nav.pager { display: flex; justify-content: space-between; margin-top: 2.5rem; }
+  nav.pager a { text-decoration: none; }
+  nav.pager .spacer { color: transparent; }
   .empty { color: #777; font-style: italic; }
   footer.site { margin-top: 4rem; color: #aaa; font-size: 0.8rem; }
   @media (prefers-color-scheme: dark) {
     body { color: #e6e6e6; background: #16161a; }
     a { color: #6ea8ff; }
     pre, code { background: #24242b; }
+    ul.index .excerpt { color: #b8b8c0; }
     blockquote { border-left-color: #44444f; color: #aaa; }
     th, td { border-color: #33333b; }
     /* highlight.js dark palette (GitHub-dark) */
@@ -122,19 +191,67 @@ const STYLES = `
   }
 `;
 
+/** SEO/social metadata for a page's `<head>`. */
+interface HeadMeta {
+  /** Full `<title>` text (already includes any site-name suffix). */
+  readonly title: string;
+  /** Plain-text description for `<meta name="description">` and OpenGraph. */
+  readonly description?: string | undefined;
+  /** Absolute canonical URL for this page. */
+  readonly canonicalUrl: string;
+  /** OpenGraph object type. */
+  readonly ogType: 'website' | 'article';
+  /** Optional JSON-LD payload embedded as `application/ld+json`. */
+  readonly jsonLd?: Record<string, unknown> | undefined;
+}
+
+/** Build the discovery/SEO `<meta>`/`<link>` block for a page head. */
+function renderHead(meta: HeadMeta): string {
+  const tags: string[] = [
+    `<meta charset="utf-8" />`,
+    `<meta name="viewport" content="width=device-width, initial-scale=1" />`,
+    `<title>${escapeHtml(meta.title)}</title>`,
+    `<link rel="canonical" href="${escapeHtml(meta.canonicalUrl)}" />`,
+    `<link rel="alternate" type="application/atom+xml" title="${escapeHtml(SITE_NAME)}" href="/feed.xml" />`,
+  ];
+  if (meta.description) {
+    tags.push(`<meta name="description" content="${escapeHtml(meta.description)}" />`);
+  }
+  // OpenGraph.
+  tags.push(
+    `<meta property="og:type" content="${meta.ogType}" />`,
+    `<meta property="og:site_name" content="${escapeHtml(SITE_NAME)}" />`,
+    `<meta property="og:title" content="${escapeHtml(meta.title)}" />`,
+    `<meta property="og:url" content="${escapeHtml(meta.canonicalUrl)}" />`,
+  );
+  if (meta.description) {
+    tags.push(`<meta property="og:description" content="${escapeHtml(meta.description)}" />`);
+  }
+  // Twitter Card.
+  tags.push(
+    `<meta name="twitter:card" content="summary" />`,
+    `<meta name="twitter:title" content="${escapeHtml(meta.title)}" />`,
+  );
+  if (meta.description) {
+    tags.push(`<meta name="twitter:description" content="${escapeHtml(meta.description)}" />`);
+  }
+  if (meta.jsonLd) {
+    tags.push(`<script type="application/ld+json">${jsonForScript(meta.jsonLd)}</script>`);
+  }
+  return tags.map((tag) => `    ${tag}`).join('\n');
+}
+
 /** Wrap page-specific `<main>` markup in the shared HTML shell + styles. */
-function layout(title: string, main: string): string {
+function layout(meta: HeadMeta, main: string): string {
   return `<!doctype html>
 <html lang="en">
   <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>${escapeHtml(title)}</title>
+${renderHead(meta)}
     <style>${STYLES}</style>
   </head>
   <body>
     <div class="wrap">
-      <header class="site"><a class="brand" href="/">Inkwell</a></header>
+      <header class="site"><a class="brand" href="/">${escapeHtml(SITE_NAME)}</a></header>
       <main>
 ${main}
       </main>
@@ -152,65 +269,183 @@ function dateLine(label: string, date: Date): string {
   return `<time datetime="${iso}">${label} ${human}</time>`;
 }
 
-/** Render the index: a list of published documents, newest first. */
-export function renderIndexPage(documents: readonly Document[]): string {
-  const main =
+/** Absolute URL for a document's public page. */
+function documentUrl(base: string, slug: string): string {
+  return `${base}/${encodeURIComponent(slug)}`;
+}
+
+/** Absolute URL for index page `n` (page 1 is the bare site root). */
+function indexUrl(base: string, page: number): string {
+  return page <= 1 ? `${base}/` : `${base}/page/${page}`;
+}
+
+/** Relative href for index page `n` (page 1 is `/`). */
+function indexHref(page: number): string {
+  return page <= 1 ? '/' : `/page/${page}`;
+}
+
+/** Pagination context passed to {@link renderIndexPage}. */
+export interface IndexPageInfo {
+  /** 1-based current page number. */
+  readonly page: number;
+  /** Total number of index pages (at least 1). */
+  readonly totalPages: number;
+}
+
+/** Render the index: a list of published documents, newest first, paginated. */
+export function renderIndexPage(
+  documents: readonly Document[],
+  info: IndexPageInfo,
+  options: PageOptions = {},
+): string {
+  const base = normalizeSiteUrl(options.siteUrl);
+  const list =
     documents.length === 0
       ? `<p class="empty">No documents published yet.</p>`
       : `<ul class="index">
 ${documents
-  .map(
-    (doc) => `          <li>
-            <a href="/${encodeURIComponent(doc.slug)}">${escapeHtml(doc.title)}</a>
-            <div class="meta">${dateLine('Published', doc.createdAt)}</div>
-          </li>`,
-  )
+  .map((doc) => {
+    const excerpt = deriveExcerpt(doc.bodyMarkdown);
+    const excerptHtml = excerpt
+      ? `\n            <p class="excerpt">${escapeHtml(excerpt)}</p>`
+      : '';
+    return `          <li>
+            <a class="title" href="/${encodeURIComponent(doc.slug)}">${escapeHtml(doc.title)}</a>
+            <div class="meta">${dateLine('Published', doc.createdAt)}</div>${excerptHtml}
+          </li>`;
+  })
   .join('\n')}
         </ul>`;
-  return layout('Inkwell', main);
+
+  // Prev/next pager. Keep both slots present (a transparent spacer) so the
+  // single remaining link stays in its column.
+  const prev =
+    info.page > 1
+      ? `<a rel="prev" href="${indexHref(info.page - 1)}">&larr; Newer</a>`
+      : `<span class="spacer">&larr; Newer</span>`;
+  const next =
+    info.page < info.totalPages
+      ? `<a rel="next" href="${indexHref(info.page + 1)}">Older &rarr;</a>`
+      : `<span class="spacer">Older &rarr;</span>`;
+  const pager = info.totalPages > 1 ? `\n        <nav class="pager">${prev}${next}</nav>` : '';
+
+  const title = info.page > 1 ? `${SITE_NAME} — Page ${info.page}` : SITE_NAME;
+  return layout(
+    {
+      title,
+      description: 'An open, API-first Markdown publishing platform.',
+      canonicalUrl: indexUrl(base, info.page),
+      ogType: 'website',
+    },
+    `${list}${pager}`,
+  );
 }
 
 /** Render a single document's public reading page. */
-export function renderDocumentPage(document: Document): string {
-  const updated =
-    document.updatedAt.getTime() !== document.createdAt.getTime()
-      ? ` &middot; ${dateLine('Updated', document.updatedAt)}`
-      : '';
+export function renderDocumentPage(document: Document, options: PageOptions = {}): string {
+  const base = normalizeSiteUrl(options.siteUrl);
+  const url = documentUrl(base, document.slug);
+  const description = deriveExcerpt(document.bodyMarkdown);
+  const isUpdated = document.updatedAt.getTime() !== document.createdAt.getTime();
+  const updated = isUpdated ? ` &middot; ${dateLine('Updated', document.updatedAt)}` : '';
+
+  // JSON-LD BlogPosting: the structured-data view search engines consume.
+  const jsonLd: Record<string, unknown> = {
+    '@context': 'https://schema.org',
+    '@type': 'BlogPosting',
+    headline: document.title,
+    datePublished: document.createdAt.toISOString(),
+    dateModified: document.updatedAt.toISOString(),
+    url,
+    mainEntityOfPage: { '@type': 'WebPage', '@id': url },
+    publisher: { '@type': 'Organization', name: SITE_NAME },
+    inLanguage: 'en',
+  };
+  if (description) jsonLd.description = description;
+
   const main = `<article>
           <h1>${escapeHtml(document.title)}</h1>
           <div class="meta">${dateLine('Published', document.createdAt)}${updated}</div>
 ${document.renderedHtml}
         </article>`;
-  return layout(document.title, main);
+  return layout(
+    {
+      title: `${document.title} — ${SITE_NAME}`,
+      description: description || undefined,
+      canonicalUrl: url,
+      ogType: 'article',
+      jsonLd,
+    },
+    main,
+  );
 }
 
 /** Render a styled 404 page for an unknown path/slug. */
-export function renderNotFoundPage(): string {
+export function renderNotFoundPage(options: PageOptions = {}): string {
+  const base = normalizeSiteUrl(options.siteUrl);
   const main = `<h1>Not found</h1>
         <p>That page does not exist. <a href="/">Back to the index.</a></p>`;
-  return layout('Not found — Inkwell', main);
+  return layout(
+    {
+      title: `Not found — ${SITE_NAME}`,
+      canonicalUrl: `${base}/`,
+      ogType: 'website',
+    },
+    main,
+  );
+}
+
+/**
+ * Parse a `/page/:n` segment into a 1-based page number, or `null` if it is not
+ * a positive integer. Rejects leading zeros, signs, and non-digits so only one
+ * canonical spelling of each page exists.
+ */
+function parsePageNumber(raw: string): number | null {
+  if (!/^[1-9][0-9]*$/.test(raw)) return null;
+  const n = Number.parseInt(raw, 10);
+  return Number.isSafeInteger(n) ? n : null;
 }
 
 /**
  * Route and render a single public page request.
  *
  * Recognized routes (GET/HEAD only):
- *   - `GET /`        -> index of published documents
+ *   - `GET /`        -> index of published documents (page 1)
+ *   - `GET /page/:n` -> index page N (newest first, {@link PAGE_SIZE} per page)
  *   - `GET /:slug`   -> a document's public page (404 page if the slug is unknown)
  *
- * Non-GET methods yield 405; any deeper path yields a 404 page. The `/documents`
- * and `/health` prefixes are reserved for the JSON API and never reach here —
- * the transport adapter dispatches those to {@link handleApiRequest} instead.
+ * Non-GET methods yield 405; any deeper/unrecognized path yields a 404 page. The
+ * `/documents` and `/health` prefixes are reserved for the JSON API and never
+ * reach here — the transport adapter dispatches those to {@link handleApiRequest}.
  */
-export async function handlePageRequest(db: Queryable, req: PageRequest): Promise<PageResponse> {
+export async function handlePageRequest(
+  db: Queryable,
+  req: PageRequest,
+  options: PageOptions = {},
+): Promise<PageResponse> {
   if (req.method !== 'GET' && req.method !== 'HEAD') {
-    return { status: 405, html: renderNotFoundPage() };
+    return { status: 405, html: renderNotFoundPage(options) };
   }
 
-  // Index — the public frontend only ever surfaces published documents.
-  if (req.segments.length === 0) {
-    const docs = await listDocuments(db, { status: 'published' });
-    return { status: 200, html: renderIndexPage(docs) };
+  // Index, optionally paginated. The public frontend only surfaces published docs.
+  const isRoot = req.segments.length === 0;
+  const isPaged = req.segments.length === 2 && req.segments[0] === 'page';
+  if (isRoot || isPaged) {
+    const page = isRoot ? 1 : parsePageNumber(req.segments[1] as string);
+    if (page === null) return { status: 404, html: renderNotFoundPage(options) };
+
+    const total = await countDocuments(db, { status: 'published' });
+    const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+    // A page past the end (other than page 1 on an empty site) does not exist —
+    // 404 rather than serve an empty page, so crawlers don't chase phantom pages.
+    if (page > totalPages) return { status: 404, html: renderNotFoundPage(options) };
+
+    const docs = await listDocuments(db, {
+      status: 'published',
+      limit: PAGE_SIZE,
+      offset: (page - 1) * PAGE_SIZE,
+    });
+    return { status: 200, html: renderIndexPage(docs, { page, totalPages }, options) };
   }
 
   // Single document page. A draft (or unknown slug) renders the 404 page so a
@@ -218,10 +453,10 @@ export async function handlePageRequest(db: Queryable, req: PageRequest): Promis
   if (req.segments.length === 1) {
     const doc = await getDocumentBySlug(db, req.segments[0] as string, { status: 'published' });
     if (doc) {
-      return { status: 200, html: renderDocumentPage(doc) };
+      return { status: 200, html: renderDocumentPage(doc, options) };
     }
   }
 
   // Unknown slug or a path too deep to be a public page.
-  return { status: 404, html: renderNotFoundPage() };
+  return { status: 404, html: renderNotFoundPage(options) };
 }

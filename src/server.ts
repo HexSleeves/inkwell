@@ -19,6 +19,7 @@ import { handleApiRequest, type ApiResponse } from './api.js';
 import type { Queryable } from './db/pool.js';
 import { handleFeedRequest, type FeedResponse } from './feed.js';
 import { handlePageRequest, type PageResponse } from './pages.js';
+import { handleSitemapRequest, type SitemapResponse } from './sitemap.js';
 
 /**
  * Path prefixes reserved for the JSON API. Any other path is served by the
@@ -101,8 +102,15 @@ function writeHtmlResponse(res: ServerResponse, method: string, response: PageRe
   res.end(method === 'HEAD' ? undefined : payload);
 }
 
-/** Serialize an Atom feed response from the syndication module. */
-function writeFeedResponse(res: ServerResponse, method: string, response: FeedResponse): void {
+/**
+ * Serialize an XML response (Atom feed or sitemap) from one of the syndication
+ * modules. Both responses share the same `{ status, contentType, xml }` shape.
+ */
+function writeXmlResponse(
+  res: ServerResponse,
+  method: string,
+  response: FeedResponse | SitemapResponse,
+): void {
   const payload = Buffer.from(response.xml, 'utf8');
   res.writeHead(response.status, {
     'content-type': response.contentType,
@@ -123,21 +131,28 @@ export function createRequestListener(db: Queryable) {
       const segments = splitPath(req.url ?? '/');
       const method = (req.method ?? 'GET').toUpperCase();
 
+      // The configured public origin, used to build absolute URLs across the
+      // feed, sitemap, and the HTML pages' canonical/OpenGraph metadata.
+      const siteUrl = process.env.INKWELL_SITE_URL;
+
       // Atom syndication feed. Lives at a fixed top-level path so it never
       // shadows a document slug; served with its own XML content type.
       if (segments.length === 1 && segments[0] === 'feed.xml') {
-        const feedResponse = await handleFeedRequest(
-          db,
-          { method },
-          { siteUrl: process.env.INKWELL_SITE_URL },
-        );
-        writeFeedResponse(res, method, feedResponse);
+        const feedResponse = await handleFeedRequest(db, { method }, { siteUrl });
+        writeXmlResponse(res, method, feedResponse);
+        return;
+      }
+
+      // sitemap.xml — fixed top-level path, served as XML, listing public URLs.
+      if (segments.length === 1 && segments[0] === 'sitemap.xml') {
+        const sitemapResponse = await handleSitemapRequest(db, { method }, { siteUrl });
+        writeXmlResponse(res, method, sitemapResponse);
         return;
       }
 
       // Anything outside the reserved API prefixes is a public HTML page.
       if (segments.length === 0 || !API_PREFIXES.has(segments[0] as string)) {
-        const pageResponse = await handlePageRequest(db, { method, segments });
+        const pageResponse = await handlePageRequest(db, { method, segments }, { siteUrl });
         writeHtmlResponse(res, method, pageResponse);
         return;
       }

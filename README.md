@@ -21,16 +21,16 @@ the public web frontend) is being built on top of this toolchain.
 
 ## Tech stack
 
-| Concern        | Choice                                           |
-| -------------- | ------------------------------------------------ |
-| Language       | TypeScript (ESM, `NodeNext`)                     |
-| Runtime        | Node.js ≥ 20                                     |
-| Package manager| pnpm                                             |
-| Persistence    | PostgreSQL via [`pg`](https://node-postgres.com) |
-| Test runner    | [Vitest](https://vitest.dev)                     |
-| Lint           | ESLint 10 (flat config) + typescript-eslint      |
-| Format         | Prettier                                         |
-| CI             | GitHub Actions                                   |
+| Concern         | Choice                                           |
+| --------------- | ------------------------------------------------ |
+| Language        | TypeScript (ESM, `NodeNext`)                     |
+| Runtime         | Node.js ≥ 20                                     |
+| Package manager | pnpm                                             |
+| Persistence     | PostgreSQL via [`pg`](https://node-postgres.com) |
+| Test runner     | [Vitest](https://vitest.dev)                     |
+| Lint            | ESLint 10 (flat config) + typescript-eslint      |
+| Format          | Prettier                                         |
+| CI              | GitHub Actions                                   |
 
 See [`docs/adr/0001-toolchain.md`](docs/adr/0001-toolchain.md) for the rationale
 behind these choices.
@@ -145,22 +145,22 @@ See [API](#api) below for the full endpoint reference.
 
 ## pnpm scripts
 
-| Script                  | What it does                                     |
-| ----------------------- | ------------------------------------------------ |
-| `pnpm start`            | Run the compiled server (`dist/main.js`)         |
-| `pnpm run build`        | Compile `src/` to `dist/` with type declarations |
-| `pnpm run typecheck`    | Type-check without emitting                      |
-| `pnpm run lint`         | Lint with ESLint                                 |
-| `pnpm run lint:fix`     | Lint and auto-fix                                |
-| `pnpm run format`       | Format the repo with Prettier                    |
-| `pnpm run format:check` | Verify formatting (used in CI)                   |
-| `pnpm test`             | Run the test suite once                          |
-| `pnpm run test:watch`   | Run tests in watch mode                          |
-| `pnpm run test:coverage`| Run tests with V8 coverage                       |
-| `pnpm run db:migrate`   | Apply pending migrations (needs `DATABASE_URL`)  |
-| `pnpm run db:rollback`  | Roll back the last migration (`[n]` for more)    |
-| `pnpm run db:status`    | List applied migration ids                       |
-| `pnpm run ci`           | Lint + format check + typecheck + test + build   |
+| Script                   | What it does                                     |
+| ------------------------ | ------------------------------------------------ |
+| `pnpm start`             | Run the compiled server (`dist/main.js`)         |
+| `pnpm run build`         | Compile `src/` to `dist/` with type declarations |
+| `pnpm run typecheck`     | Type-check without emitting                      |
+| `pnpm run lint`          | Lint with ESLint                                 |
+| `pnpm run lint:fix`      | Lint and auto-fix                                |
+| `pnpm run format`        | Format the repo with Prettier                    |
+| `pnpm run format:check`  | Verify formatting (used in CI)                   |
+| `pnpm test`              | Run the test suite once                          |
+| `pnpm run test:watch`    | Run tests in watch mode                          |
+| `pnpm run test:coverage` | Run tests with V8 coverage                       |
+| `pnpm run db:migrate`    | Apply pending migrations (needs `DATABASE_URL`)  |
+| `pnpm run db:rollback`   | Roll back the last migration (`[n]` for more)    |
+| `pnpm run db:status`     | List applied migration ids                       |
+| `pnpm run ci`            | Lint + format check + typecheck + test + build   |
 
 The `db:*` scripts run against compiled output, so `pnpm run build` first.
 
@@ -292,33 +292,49 @@ handler returns complete HTML pages with an inlined stylesheet (no static-asset
 pipeline needed for v0.1). The transport adapter routes any path outside the
 reserved API prefixes (`/documents`, `/health`) to the frontend.
 
-| Method | Path     | Description                                    | Success | Errors            |
-| ------ | -------- | ---------------------------------------------- | ------- | ----------------- |
-| `GET`  | `/`      | Index of published documents (newest first)    | `200`   | —                 |
-| `GET`  | `/:slug` | A document's public reading page (styled HTML) | `200`   | `404` styled page |
+| Method | Path           | Description                                        | Success | Errors            |
+| ------ | -------------- | -------------------------------------------------- | ------- | ----------------- |
+| `GET`  | `/`            | Index of published documents, page 1 (newest)      | `200`   | —                 |
+| `GET`  | `/page/:n`     | Index page N (10 per page, newest first)           | `200`   | `404` styled page |
+| `GET`  | `/:slug`       | A document's public reading page (styled HTML)     | `200`   | `404` styled page |
+| `GET`  | `/feed.xml`    | Atom 1.0 feed of recent published documents        | `200`   | `405`             |
+| `GET`  | `/sitemap.xml` | XML sitemap of the home page + published documents | `200`   | `405`             |
 
 A document's `renderedHtml` is sanitized at write time by the
 [rendering pipeline](#rendering-pipeline), so it is embedded verbatim; every
-other interpolated value (titles, etc.) is HTML-escaped. Because the frontend
-shares the root with the API, a document whose slug is exactly `documents` or
-`health` is unreachable as a public page — those words are reserved.
+other interpolated value (titles, excerpts, etc.) is HTML-escaped. Because the
+frontend shares the root with the API, a document whose slug is exactly
+`documents`, `health`, `feed.xml`, or `sitemap.xml` is unreachable as a public
+page — those words are reserved.
+
+**Discovery & SEO.** The index is paginated (`/page/:n`, 10 per page) and each
+entry shows a derived excerpt. Every page emits a canonical link, OpenGraph and
+Twitter Card tags, and a feed auto-discovery link; document pages also embed a
+JSON-LD `BlogPosting`. `sitemap.xml` and the feed advertise all published URLs.
+Absolute URLs (canonical/OpenGraph/sitemap/feed) are built from the public
+origin in the `INKWELL_SITE_URL` environment variable (e.g.
+`https://blog.example.com`); when unset it falls back to `http://localhost`. Only
+published documents appear on any discovery surface. See
+[`docs/adr/0006-content-discovery-and-seo.md`](docs/adr/0006-content-discovery-and-seo.md).
 
 The current public module surface is:
 
-| Export                      | Description                                                 |
-| --------------------------- | ----------------------------------------------------------- |
-| `NAME`, `VERSION`           | Package metadata constants                                  |
-| `slugify(title)`            | Derive a URL-safe slug from a document title                |
-| `renderMarkdown(markdown)`  | Render Markdown to sanitized, XSS-safe HTML                 |
-| `renderDocumentHtml(body)`  | Produce a document's `rendered_html` from its Markdown body |
-| `createServer(db)`          | Build a `node:http` server for the documents API            |
-| `createRequestListener(db)` | Bare request listener, for mounting on an existing server   |
-| `handleApiRequest(db, req)` | Framework-free request handler (routing + validation)       |
-| `ApiError`                  | Error type carrying an HTTP status                          |
-| `handlePageRequest(db,req)` | Framework-free HTML page handler (index + document pages)   |
-| `renderIndexPage(docs)`     | Render the index page from a list of documents              |
-| `renderDocumentPage(doc)`   | Render a single document's public reading page              |
-| `escapeHtml(value)`         | HTML-escape a plain-text value for safe interpolation       |
+| Export                       | Description                                                 |
+| ---------------------------- | ----------------------------------------------------------- |
+| `NAME`, `VERSION`            | Package metadata constants                                  |
+| `slugify(title)`             | Derive a URL-safe slug from a document title                |
+| `renderMarkdown(markdown)`   | Render Markdown to sanitized, XSS-safe HTML                 |
+| `renderDocumentHtml(body)`   | Produce a document's `rendered_html` from its Markdown body |
+| `createServer(db)`           | Build a `node:http` server for the documents API            |
+| `createRequestListener(db)`  | Bare request listener, for mounting on an existing server   |
+| `handleApiRequest(db, req)`  | Framework-free request handler (routing + validation)       |
+| `ApiError`                   | Error type carrying an HTTP status                          |
+| `handlePageRequest(db,req)`  | Framework-free HTML page handler (index + document pages)   |
+| `renderIndexPage(docs,info)` | Render a paginated index page from a list of documents      |
+| `renderDocumentPage(doc)`    | Render a single document's public reading page (with SEO)   |
+| `deriveExcerpt(markdown)`    | Derive a short plain-text excerpt/meta description          |
+| `escapeHtml(value)`          | HTML-escape a plain-text value for safe interpolation       |
+| `handleSitemapRequest(db,r)` | Framework-free `sitemap.xml` handler (published URLs)       |
 
 ### Rendering pipeline
 

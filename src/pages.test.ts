@@ -12,7 +12,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { AddressInfo } from 'node:net';
 import type { Server } from 'node:http';
 
-import { handlePageRequest } from './pages.js';
+import { PAGE_SIZE, deriveExcerpt, handlePageRequest } from './pages.js';
 import { createServer } from './server.js';
 import { handleApiRequest } from './api.js';
 import { migrate } from './db/migrate.js';
@@ -95,7 +95,7 @@ describe('public pages (handler)', () => {
       // Page shell + styling present.
       expect(res.html).toContain('<!doctype html>');
       expect(res.html).toContain('<style>');
-      expect(res.html).toContain('<title>Hello World</title>');
+      expect(res.html).toContain('<title>Hello World — Inkwell</title>');
       // The document's rendered HTML is embedded.
       expect(res.html).toContain('<h1>Hi</h1>');
       expect(res.html).toContain('<strong>bold</strong>');
@@ -162,6 +162,153 @@ describe('public pages (handler)', () => {
   });
 });
 
+describe('deriveExcerpt', () => {
+  it('returns empty string for empty/whitespace-only input', () => {
+    expect(deriveExcerpt('')).toBe('');
+    expect(deriveExcerpt('   \n  ')).toBe('');
+  });
+
+  it('strips common Markdown syntax to plain text', () => {
+    const md = '# Title\n\nSome **bold** and _italic_ and `code` and [a link](https://x).';
+    expect(deriveExcerpt(md)).toBe('Title Some bold and italic and code and a link.');
+  });
+
+  it('drops fenced code blocks and images', () => {
+    const md = 'Intro text.\n\n```ts\nconst x = 1;\n```\n\n![alt](img.png) tail.';
+    expect(deriveExcerpt(md)).toBe('Intro text. tail.');
+  });
+
+  it('truncates on a word boundary and appends an ellipsis', () => {
+    const md = 'alpha bravo charlie delta echo foxtrot golf';
+    const out = deriveExcerpt(md, 20);
+    expect(out.endsWith('…')).toBe(true);
+    // Trimmed at a space within the 20-char budget, no partial word.
+    expect(out.length).toBeLessThanOrEqual(21);
+    expect(out).toBe('alpha bravo charlie…');
+  });
+});
+
+describe('SEO metadata', () => {
+  let db: Queryable;
+
+  beforeEach(async () => {
+    db = createMemoryDatabase().db;
+    await migrate(db);
+  });
+
+  it('emits canonical, OpenGraph, Twitter, and JSON-LD on a document page', async () => {
+    await seed(db, { title: 'Hello World', bodyMarkdown: 'A short body about cats.' });
+
+    const res = await handlePageRequest(
+      db,
+      { method: 'GET', segments: ['hello-world'] },
+      { siteUrl: 'https://blog.example.com' },
+    );
+    expect(res.status).toBe(200);
+    expect(res.html).toContain(
+      '<link rel="canonical" href="https://blog.example.com/hello-world" />',
+    );
+    expect(res.html).toContain('<meta property="og:type" content="article" />');
+    expect(res.html).toContain(
+      '<meta property="og:url" content="https://blog.example.com/hello-world" />',
+    );
+    expect(res.html).toContain('<meta name="twitter:card" content="summary" />');
+    expect(res.html).toContain('<meta name="description" content="A short body about cats." />');
+    // JSON-LD BlogPosting block with the canonical URL.
+    expect(res.html).toContain('<script type="application/ld+json">');
+    expect(res.html).toContain('"@type":"BlogPosting"');
+    expect(res.html).toContain('"headline":"Hello World"');
+    expect(res.html).toContain('"url":"https://blog.example.com/hello-world"');
+  });
+
+  it('escapes JSON-LD so a title cannot break out of the script element', async () => {
+    await seed(db, {
+      title: 'Evil </script> title',
+      slug: 'evil',
+      bodyMarkdown: 'body',
+    });
+    const res = await handlePageRequest(db, { method: 'GET', segments: ['evil'] });
+    // The literal closing tag must not appear inside the JSON-LD payload.
+    expect(res.html).not.toContain('Evil </script> title');
+    expect(res.html).toContain('\\u003c/script\\u003e');
+  });
+
+  it('marks the index as og:type website with a canonical root URL', async () => {
+    const res = await handlePageRequest(
+      db,
+      { method: 'GET', segments: [] },
+      { siteUrl: 'https://blog.example.com' },
+    );
+    expect(res.html).toContain('<meta property="og:type" content="website" />');
+    expect(res.html).toContain('<link rel="canonical" href="https://blog.example.com/" />');
+    // Discovery: every page advertises the Atom feed.
+    expect(res.html).toContain('<link rel="alternate" type="application/atom+xml"');
+  });
+});
+
+describe('index pagination & excerpts', () => {
+  let db: Queryable;
+
+  beforeEach(async () => {
+    db = createMemoryDatabase().db;
+    await migrate(db);
+  });
+
+  it('shows an excerpt under each index entry', async () => {
+    await seed(db, { title: 'Cats', bodyMarkdown: '# Cats\n\nAll about cats and how they nap.' });
+    const res = await handlePageRequest(db, { method: 'GET', segments: [] });
+    expect(res.html).toContain('class="excerpt"');
+    expect(res.html).toContain('All about cats and how they nap.');
+  });
+
+  it('does not paginate when there is only a single page of documents', async () => {
+    await seed(db, { title: 'Only One', bodyMarkdown: 'hi' });
+    const res = await handlePageRequest(db, { method: 'GET', segments: [] });
+    expect(res.html).not.toContain('class="pager"');
+  });
+
+  it('paginates across multiple pages with prev/next links', async () => {
+    // One more than a full page so a second page exists.
+    for (let i = 0; i < PAGE_SIZE + 1; i++) {
+      await seed(db, { title: `Post ${i}`, bodyMarkdown: `Body ${i}`, slug: `post-${i}` });
+    }
+
+    const page1 = await handlePageRequest(db, { method: 'GET', segments: [] });
+    expect(page1.status).toBe(200);
+    // Newest-first: the most recent post (PAGE_SIZE) is on page 1; the oldest is not.
+    expect(page1.html).toContain('href="/post-10"');
+    expect(page1.html).not.toContain('href="/post-0"');
+    expect(page1.html).toContain('class="pager"');
+    expect(page1.html).toContain('href="/page/2"');
+
+    const page2 = await handlePageRequest(db, { method: 'GET', segments: ['page', '2'] });
+    expect(page2.status).toBe(200);
+    // The oldest post falls onto page 2, with a link back to page 1 (root).
+    expect(page2.html).toContain('href="/post-0"');
+    expect(page2.html).toContain('rel="prev" href="/"');
+    expect(page2.html).toContain('<link rel="canonical" href="http://localhost/page/2" />');
+  });
+
+  it('404s a page number past the end and a malformed page number', async () => {
+    await seed(db, { title: 'Lonely', bodyMarkdown: 'hi' });
+    expect((await handlePageRequest(db, { method: 'GET', segments: ['page', '2'] })).status).toBe(
+      404,
+    );
+    expect((await handlePageRequest(db, { method: 'GET', segments: ['page', '0'] })).status).toBe(
+      404,
+    );
+    expect((await handlePageRequest(db, { method: 'GET', segments: ['page', 'x'] })).status).toBe(
+      404,
+    );
+  });
+
+  it('serves page 1 (empty) on a site with no documents', async () => {
+    const res = await handlePageRequest(db, { method: 'GET', segments: [] });
+    expect(res.status).toBe(200);
+    expect(res.html).toContain('No documents published yet.');
+  });
+});
+
 describe('public pages (node:http transport)', () => {
   let server: Server;
   let baseUrl: string;
@@ -189,7 +336,7 @@ describe('public pages (node:http transport)', () => {
     expect(res.status).toBe(200);
     expect(res.headers.get('content-type')).toContain('text/html');
     const html = await res.text();
-    expect(html).toContain('<title>Over The Wire</title>');
+    expect(html).toContain('<title>Over The Wire — Inkwell</title>');
     expect(html).toContain('<h1>Wire</h1>');
   });
 
