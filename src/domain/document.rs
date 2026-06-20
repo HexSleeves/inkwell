@@ -7,6 +7,10 @@ pub const MAX_TITLE_LENGTH: usize = 500;
 pub const MAX_TAG_LENGTH: usize = 50;
 pub const MAX_TAGS: usize = 20;
 pub const MAX_BODY_MARKDOWN_LENGTH: usize = 262_144;
+/// Upper bound on the raw request body accepted by the authoring API, checked
+/// before JSON parsing. Sized above `MAX_BODY_MARKDOWN_LENGTH` to leave room
+/// for envelope fields while still bounding per-request memory.
+pub const MAX_REQUEST_BODY_BYTES: usize = 1_000_000;
 pub const DEFAULT_LIMIT: u32 = 20;
 pub const MAX_LIMIT: u32 = 100;
 

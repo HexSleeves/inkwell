@@ -10,7 +10,7 @@ use tokio::time::{Duration, timeout};
 use crate::db::documents;
 use crate::domain::document::{
     DEFAULT_LIMIT, Document, DocumentPatch, DocumentStatus, MAX_BODY_MARKDOWN_LENGTH, MAX_LIMIT,
-    MAX_TITLE_LENGTH, NewDocument, StatusFilter,
+    MAX_REQUEST_BODY_BYTES, MAX_TITLE_LENGTH, NewDocument, StatusFilter,
 };
 use crate::domain::slug::{is_valid_slug, slugify};
 use crate::domain::tags::normalize_tags;
@@ -169,13 +169,7 @@ async fn create_document(
     body: Bytes,
 ) -> Result<Response, AppError> {
     require_api_key(&headers, state.config.api_key.as_deref())?;
-    if body.len() > 1_000_000 {
-        return Ok((
-            StatusCode::PAYLOAD_TOO_LARGE,
-            Json(serde_json::json!({"error": {"message": "Request body too large."}})),
-        )
-            .into_response());
-    }
+    enforce_body_limit(&body)?;
     let value = parse_json_body(body)?;
     let map = require_object(value)?;
     let title = required_string(map.get("title"), "title", MAX_TITLE_LENGTH)?;
@@ -267,6 +261,7 @@ async fn update_document(
     body: Bytes,
 ) -> Result<Response, AppError> {
     require_api_key(&headers, state.config.api_key.as_deref())?;
+    enforce_body_limit(&body)?;
     let value = parse_json_body(body)?;
     let map = require_object(value)?;
     let mut patch = DocumentPatch::default();
@@ -404,5 +399,36 @@ fn require_api_key(headers: &HeaderMap, configured_key: Option<&str>) -> Result<
         Ok(())
     } else {
         Err(AppError::Unauthorized)
+    }
+}
+
+/// Reject request bodies that exceed the authoring API limit before any JSON
+/// parsing or allocation-heavy work. Applied uniformly to create and update so
+/// neither path can be used to force a large in-memory parse.
+fn enforce_body_limit(body: &Bytes) -> Result<(), AppError> {
+    if body.len() > MAX_REQUEST_BODY_BYTES {
+        Err(AppError::PayloadTooLarge)
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn enforce_body_limit_accepts_bodies_at_or_below_the_cap() {
+        let body = Bytes::from(vec![b'a'; MAX_REQUEST_BODY_BYTES]);
+        assert!(enforce_body_limit(&body).is_ok());
+    }
+
+    #[test]
+    fn enforce_body_limit_rejects_oversized_bodies() {
+        let body = Bytes::from(vec![b'a'; MAX_REQUEST_BODY_BYTES + 1]);
+        assert!(matches!(
+            enforce_body_limit(&body),
+            Err(AppError::PayloadTooLarge)
+        ));
     }
 }

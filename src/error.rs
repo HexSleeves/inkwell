@@ -11,6 +11,8 @@ pub enum AppError {
     BadRequest(String),
     #[error("Missing or invalid API key.")]
     Unauthorized,
+    #[error("Request body too large.")]
+    PayloadTooLarge,
     #[error("{0}")]
     NotFound(String),
     #[error("Method not allowed.")]
@@ -44,6 +46,12 @@ impl IntoResponse for AppError {
             Self::Unauthorized => json_error(
                 StatusCode::UNAUTHORIZED,
                 "Missing or invalid API key.",
+                None,
+                None,
+            ),
+            Self::PayloadTooLarge => json_error(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "Request body too large.",
                 None,
                 None,
             ),
