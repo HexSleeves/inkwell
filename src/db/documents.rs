@@ -3,7 +3,6 @@ use crate::domain::document::{
     SearchOptions, StatusFilter, TagCount,
 };
 use sqlx::{PgPool, Postgres, QueryBuilder};
-use uuid::Uuid;
 
 const UNIQUE_VIOLATION: &str = "23505";
 
@@ -67,19 +66,6 @@ pub async fn get_document_by_slug(
             .await
         }
     }
-}
-
-pub async fn get_document_by_id(pool: &PgPool, id: Uuid) -> Result<Option<Document>, sqlx::Error> {
-    sqlx::query_as::<Postgres, Document>(
-        r#"
-        SELECT id, slug, title, body_markdown, rendered_html, status, tags, created_at, updated_at
-        FROM documents
-        WHERE id = $1
-        "#,
-    )
-    .bind(id)
-    .fetch_optional(pool)
-    .await
 }
 
 pub async fn list_documents(
