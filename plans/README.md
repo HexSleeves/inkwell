@@ -5,36 +5,14 @@ plan fully and run its `Drift check` header FIRST**, honor its STOP conditions, 
 update your row below when done. Plans are self-contained — no plan assumes another
 has run unless its "Depends on" says so.
 
-## ⚠ Drift advisory — read before executing anything
+## Drift advisory
 
-This repo moved **twice during the audit** (a parallel agent was actively shipping):
+Plans 001, 004, 006, 007, 010, 012, 014, and 015 were rewritten against the Rust
+codebase at `8bcd1ea`. Plans 016-019 were also authored against `8bcd1ea`.
+Run each plan's drift check before editing; if an in-scope file changed, compare
+the plan excerpts with live code and stop on mismatch.
 
-```
-2369ea8   ← advisor recon snapshot (audit read here)
-   ↓  feat(api): v0.1 hardening — markdown DoS cap, DB-aware /health, coverage gate
-6bf6a27   ← findings verified + all plans STAMPED here
-   ↓  CYP-23: tags DAL → tag API → tag pages + full-text search + sitemap tag URLs → docs
-10ee86c   ← HEAD at hand-off (+1281 lines, new src/search.ts)
-```
-
-Consequences for these plans:
-
-- Every plan's `Planned at` is `6bf6a27`. **HEAD is `10ee86c` or later.** Each plan's
-  `Drift check` header is authoritative — run it first; on a mismatch the plan tells
-  you to STOP and reconcile rather than edit blind.
-- **Two findings were fixed by the hardening commit and are NOT in this set** (see
-  "Considered & rejected" below): the `bodyMarkdown` DoS cap and the DB-aware health
-  check.
-- **Tags + full-text search shipped** (CYP-23). Plan **013** (tags spike) is therefore
-  **superseded** — it was auto-reframed into a *post-ship* decision ADR; treat it as
-  optional, not a feature build.
-- Plans **001** and **013** were reconciled to live HEAD `10ee86c` by their authors.
-  Plans **003, 009, 010, 011** still carry `6bf6a27` excerpts in churned files
-  (`api.ts`, `documents.ts`, `pages.ts`, `README.md`) — their drift checks will fire;
-  **refresh the "Current state" excerpts before executing.**
-
-Because the repo is a moving target, re-confirm `git rev-parse --short HEAD` and run
-each plan's drift check immediately before starting it.
+Removed stale TypeScript-era plan files: 002, 003, 005, 008, 009, 011, and 013.
 
 ## Execution order & status
 
@@ -44,14 +22,14 @@ each plan's drift check immediately before starting it.
 | 017 | Remove the Tailwind browser runtime from rendered pages | security/perf | P1 | S | none | current @8bcd1ea | TODO |
 | 018 | Make database-backed tests explicit instead of silently skipped | tests/DX | P2 | S | none | current @8bcd1ea | TODO |
 | 019 | Bound sitemap generation before it becomes an unbounded read path | perf/SEO | P2 | M | none | current @8bcd1ea | TODO |
-| 001 | Add Postgres index for the hot status-ordered list query | perf/migration | P2 | S | none | finding still valid; plan file obsolete TS | BLOCKED: rewrite for Rust migrations |
-| 004 | Make docker-compose fail closed (drop default API key) | security | P1 | S | none | finding still valid; compose still defaults key | BLOCKED: rewrite against Rust code/docs |
-| 006 | Add committed `.env.example` | dx | P2 | S | none | finding still valid; no `.env.example` exists | BLOCKED: rewrite against Rust envs |
-| 007 | ETag + Cache-Control + conditional GET (304) on HTML/XML | perf | P3 | M | none | finding partly valid; Rust has no caching | BLOCKED: rewrite after 016/019 |
-| 010 | Resolve `getDocumentById` asymmetry (drop export or add id route) | tech-debt | P3 | S | none | finding still valid; Rust has unused helper | BLOCKED: rewrite against `src/db/documents.rs` |
-| 012 | Add CSP + hardening headers to HTML pages | security | P3 | S-M | 017 | finding valid after Tailwind removal | BLOCKED: rewrite after 017 |
-| 014 | Design spike: first-class authoring CLI | direction | P2 | M | none | product gap still valid; plan file obsolete TS | BLOCKED: rewrite as Rust CLI/ADR spike |
-| 015 | Design spike: per-author identity + scoped tokens + audit | direction/security | P3 | L | 004 | product/security gap still valid; plan file obsolete TS | BLOCKED: rewrite as Rust ADR spike |
+| 001 | Add Postgres index for the hot status-ordered list query | perf/migration | P2 | S | none | rewritten @8bcd1ea for Rust | TODO |
+| 004 | Make Docker Compose require an explicit API key | security | P1 | S | none | rewritten @8bcd1ea for Rust | TODO |
+| 006 | Add committed `.env.example` | dx | P2 | S | none | rewritten @8bcd1ea for Rust | TODO |
+| 007 | ETag + Cache-Control + conditional GET (304) on HTML/XML | perf | P3 | M | 016; coordinate 019 | rewritten @8bcd1ea for Rust | TODO |
+| 010 | Resolve `get_document_by_id` asymmetry | tech-debt | P3 | S | none | rewritten @8bcd1ea for Rust | TODO |
+| 012 | Add CSP + hardening headers to HTML pages | security | P3 | S-M | 017 | rewritten @8bcd1ea for Rust | TODO |
+| 014 | Design spike: first-class authoring CLI | direction | P2 | M | none | rewritten @8bcd1ea for Rust | TODO |
+| 015 | Design spike: scoped author tokens + audit | direction/security | P3 | L | 004 | rewritten @8bcd1ea for Rust | TODO |
 | 002 | Enforce coverage gate in GitHub Actions CI | dx | - | S | - | obsolete Node/Vitest coverage plan | REJECTED: remove |
 | 003 | Fix README export-surface + env-var drift | docs | - | S | - | obsolete package-export docs plan | REJECTED: remove |
 | 005 | Dedupe `escapeXml` + `normalizeSiteUrl` | tech-debt | - | S | - | fixed by Rust layout helpers | REJECTED: remove |
@@ -62,16 +40,15 @@ each plan's drift check immediately before starting it.
 
 Status values: `TODO` · `IN PROGRESS` · `DONE` · `BLOCKED` (one-line reason) · `REJECTED` (one-line rationale).
 
-Suggested order: execute 016, 017, 018, and 019 first. Then rewrite only the retained blocked plans that still matter: 004, 006, 001, 012, 014, and 015. Treat 007 and 010 as optional low-priority rewrites.
+Suggested order: P1 (016, 017, 004) -> P2 (018, 019, 006, 001, 014) -> P3 (012 after 017, 015 after 004, 007 after 016/coordinate 019, 010). Rejected plan files 002, 003, 005, 008, 009, 011, and 013 were removed.
 
-Deep Rust audit addendum at `8bcd1ea`: execute 016 and 017 before the older stale TypeScript-era plans. Plans 001-015 predate the Rust migration in their excerpts; treat them as historical until reconciled or rewritten against `src/**/*.rs`.
+Deep Rust audit addendum at `8bcd1ea`: plans 001, 004, 006, 007, 010, 012, 014, and 015 have now been rewritten against the Rust codebase. Rejected stale plan files were removed.
 
 ## Dependency notes
 
-- **013 superseded by shipped code** — tags (`tags text[]` + GIN index, migration `0003`) and ILIKE search (`src/search.ts`) already landed (CYP-23). The plan file was auto-reframed into a "when do we graduate to a join table / per-tag feeds / `tsvector`?" decision ADR; keep it only if that decision record is wanted.
 - **001 is independent** but is the foundation for any future list/tag perf work; its index is `(status, created_at DESC, id DESC)` — distinct from the existing `documents_tags_idx` GIN index.
 - **015 relates to 004**: the per-author token model changes how the bootstrap shared key (that 004 hardens) is used; sequence 004 first.
-- **007 and 009** both touch the read path; if 009's list projection lands, re-check 007's ETag derivation still hashes the right payload.
+- **007 and 019** both touch public read paths; run 019 before 007 if sitemap routes change.
 - **016 should land before 019** if both are selected, so sitemap work does not preserve the existing swallowed database error behavior.
 - **017 should land before any CSP/header plan** because removing the Tailwind runtime avoids baking third-party script allowances into the policy.
 
@@ -79,11 +56,11 @@ Deep Rust audit addendum at `8bcd1ea`: execute 016 and 017 before the older stal
 
 - **`bodyMarkdown` synchronous-render DoS** — REJECTED: already fixed at `6bf6a27` (`MAX_BODY_MARKDOWN_LENGTH = 256 KiB` enforced before render in `handleCreate`/`handleUpdate`, with tests). Was prior-audit C2.
 - **`GET /health` doesn't ping the DB** — REJECTED: already fixed at `6bf6a27` (`handleHealth` runs `SELECT 1` under a 1 s timeout, returns `503 db:down`). Was prior-audit C3.
-- **Tags / collections + full-text search "missing"** — REJECTED as a *gap*: shipped in CYP-23 (`6bf6a27..10ee86c`). Remaining open questions captured in Plan 013 (optional decision ADR).
+- **Tags / collections + full-text search "missing"** — REJECTED as a *gap*: shipped in CYP-23 (`6bf6a27..10ee86c`). Deleted stale Plan 013.
 - **Unbounded public index, no SEO surface, no sitemap/OG/JSON-LD** — REJECTED: fixed before this audit (paginated index, `sitemap.xml`, OpenGraph/Twitter/JSON-LD all present). Was prior-audit C1 / product-gap #1.
 - **No rate limiting / no write audit log** — NOTED, not separately planned: rate-limiting urgency is blunted by the 256 KiB body cap + constant-time key compare; the audit log pairs naturally with Plan 015 (token model) and is folded into its scope.
-- **Plan 011 (list/count consistency)** — kept but advisor verdict is "document, don't fix": true transactional consistency needs client-based `BEGIN/COMMIT` plumbing that the pooled `Queryable` + pg-mem tests don't exercise, which is disproportionate to the benign skew. The plan defaults to a comment + invariant test, with the transaction path gated behind explicit operator request.
-- **Older plans 001-015 as direct execution artifacts** — STALE after ADR 0007 Rust migration: many excerpts cite removed TypeScript files. Keep their findings for context, but do not execute them without reconciliation against the Rust codebase.
+- **Plan 011 (list/count consistency)** — REJECTED and deleted: true transactional consistency is disproportionate to the benign skew.
+- **Older TypeScript-era plans 002, 003, 005, 008, 009, 011, 013** — REJECTED and deleted after the Rust migration review.
 
 ## Deep audit 2026-06-19 @8bcd1ea
 
