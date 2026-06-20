@@ -1,12 +1,26 @@
 use anyhow::{Result, anyhow};
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Config {
     pub database_url: String,
     pub host: String,
     pub port: u16,
     pub api_key: Option<String>,
     pub site_url: Option<String>,
+}
+
+impl std::fmt::Debug for Config {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Never print secrets: `api_key` is the shared write credential and
+        // `database_url` may embed a password in the DSN.
+        f.debug_struct("Config")
+            .field("database_url", &"<redacted>")
+            .field("host", &self.host)
+            .field("port", &self.port)
+            .field("api_key", &self.api_key.as_ref().map(|_| "<redacted>"))
+            .field("site_url", &self.site_url)
+            .finish()
+    }
 }
 
 impl Config {
@@ -39,5 +53,25 @@ impl Config {
             api_key,
             site_url,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn debug_does_not_leak_api_key_or_dsn_password() {
+        let config = Config {
+            database_url: "postgres://user:supersecret@localhost/db".to_string(),
+            host: "0.0.0.0".to_string(),
+            port: 3000,
+            api_key: Some("sentinel-key-value".to_string()),
+            site_url: None,
+        };
+        let rendered = format!("{config:?}");
+        assert!(!rendered.contains("sentinel-key-value"));
+        assert!(!rendered.contains("supersecret"));
+        assert!(rendered.contains("<redacted>"));
     }
 }

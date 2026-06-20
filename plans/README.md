@@ -30,6 +30,9 @@ Removed stale TypeScript-era plan files: 002, 003, 005, 008, 009, 011, and 013.
 | 012 | Add CSP + hardening headers to HTML pages | security | P3 | S-M | 017 | rewritten @8bcd1ea for Rust | DONE |
 | 014 | Design spike: first-class authoring CLI | direction | P2 | M | none | rewritten @8bcd1ea for Rust | DONE |
 | 015 | Design spike: scoped author tokens + audit | direction/security | P3 | L | 004 | rewritten @8bcd1ea for Rust | DONE |
+| 020 | `derive_excerpt` truncates on a char boundary (UTF-8 panic fix) | bug | P1 | S | none | new @c7b0a46 | DONE |
+| 021 | Consolidate the duplicated document-list rendering | tech-debt | P3 | S | none (coord. 020) | new @c7b0a46 | TODO |
+| 022 | Redact the API key in `Config`'s `Debug` impl | security | P3 | S | none | new @c7b0a46 | TODO |
 | 002 | Enforce coverage gate in GitHub Actions CI | dx | - | S | - | obsolete Node/Vitest coverage plan | REJECTED: remove |
 | 003 | Fix README export-surface + env-var drift | docs | - | S | - | obsolete package-export docs plan | REJECTED: remove |
 | 005 | Dedupe `escapeXml` + `normalizeSiteUrl` | tech-debt | - | S | - | fixed by Rust layout helpers | REJECTED: remove |
@@ -124,3 +127,60 @@ debt, dependencies, DX, docs, direction), each candidate finding adversarially v
 against the cited code before it earned a plan. No source code was modified by the
 advisor — these plans are the deliverable. Source excerpts in each plan come from direct
 reads; still, **trust the live code over the excerpt** and run the drift check first.
+
+## Deep audit 2026-06-20 @c7b0a46 (reconcile + new findings)
+
+**Reconcile.** Since the prior deep audit at `8bcd1ea`, every active plan
+(001, 004, 006, 007, 010, 012, 014, 015, 016, 017, 018, 019) has been
+**executed and is marked DONE**. Spot-verified against current HEAD `c7b0a46`:
+
+- 017 — Tailwind browser CDN removed: `grep tailwind src/views/layout.rs` is
+  empty; `tests/view_layout_contract.rs` asserts no `<script` runtime.
+- 012 — CSP is nonce-based (`src/http/security_headers.rs`) with
+  `script-src 'self' 'nonce-…'` and **no** CDN allowance — the 017→012 order
+  was honored (no third-party script baked into the policy).
+- 007 — conditional-GET caching present (`src/http/cache.rs`, `tests/http_caching.rs`, 266 lines).
+- 019 — sitemap bounded (`src/http/sitemap.rs` rewritten, ~397 lines added).
+- 016 — public read handlers now return `500` on DB error instead of empty 200/404 (`src/http/pages.rs` `Err(_) => error_page(...)`).
+- 018 — DB-backed contracts required (`tests/db_requirements.rs`); 001 — list index migration `0004`; 010 — `get_document_by_id` removed; 014/015 — authoring-CLI and scoped-token ADRs added.
+
+No drift issues; the reconcile found no regressions in the merged work.
+
+**New findings (this pass, vetted against `c7b0a46`).** A fresh deep fan-out
+across all nine categories surfaced three new, code-confirmed items → plans
+020–022 above.
+
+| # | Finding | Category | Impact | Effort | Risk | Confidence | Evidence |
+|---|---------|----------|--------|--------|------|------------|----------|
+| 020 | `derive_excerpt` byte-slices a `&str`, panicking on a multibyte char at the boundary | bug | 500 / DoS of public index, tag, search, and document-meta pages from ordinary non-ASCII content | S | LOW | HIGH | `src/views/layout.rs:296` |
+| 021 | `render_doc_list` duplicated verbatim in three views | tech-debt | List-item markup drifts across surfaces; fixes must land in 3 places | S | LOW | HIGH | `src/views/tags.rs:8`, `src/views/search.rs:8`, `src/views/index.rs:18` |
+| 022 | `Config` derives `Debug`, printing the API key verbatim | security | Future `{config:?}` log/panic leaks the shared god-key | S | LOW | HIGH | `src/config.rs:3` |
+
+**Considered and rejected this pass (so they are not re-audited):**
+
+- **`date_line` `&text[..10]` byte slice** (`src/views/layout.rs:310`) — SAFE by
+  construction: the input is an RFC3339 timestamp whose first 10 bytes are always
+  the ASCII `YYYY-MM-DD` date (4-digit year), and the value comes from the DB, not
+  request input. Not a finding.
+- **Pagination offset overflow** (`(page-1)*PAGE_SIZE`) — bounded: handlers return
+  404 when `page > total_pages` *before* computing the offset, and `total_pages`
+  is derived from the row count, so the multiply cannot overflow `i64`. Not a finding.
+- **Public read routes "untested"** — REJECTED as stale: `tests/http_caching.rs`
+  exercises `/`, `/feed.xml`, `/sitemap.xml`, `/search`, `/tags`, `/tags/rust`;
+  `tests/security_headers_contract.rs` covers HTML routes. Read-route coverage exists.
+- **Ammonia `Builder::default()` per write** (`src/rendering/sanitize.rs:48`) and
+  **hardcoded `max_connections(10)`** (`src/db/pool.rs:6`) — NOTED, not planned:
+  micro-optimizations; comrak dominates write latency and the pool size is a
+  one-line config change to make only if production load shows contention.
+- **Write/auth/validation API contract coverage thin** (`tests/api_contract.rs`
+  has one test) — NOTED, optional: read paths are covered (above) and mutations are
+  gated by constant-time auth; a broader write-path contract suite is a reasonable
+  but non-urgent follow-up, not planned here.
+- **No root `CLAUDE.md`/`AGENTS.md`** — NOTED, marginal: README already documents
+  the full `fmt`/`clippy`/`test`/`build` verification sequence; low leverage.
+- **API page size 20 vs HTML 10** (`DEFAULT_LIMIT` vs `PAGE_SIZE`) — by-design, not a finding.
+
+Verification this pass: read-only. `grep`/`git` confirmation of merged plan
+state; no source modified by the advisor. Not audited: `node_modules/`,
+`target/`, live-browser runtime behavior, production deployment beyond the
+checked Docker/CI files.
