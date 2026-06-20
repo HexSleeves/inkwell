@@ -7,7 +7,7 @@ pub struct MigrationDef {
     pub down_sql: &'static str,
 }
 
-pub const MIGRATIONS: [MigrationDef; 3] = [
+pub const MIGRATIONS: [MigrationDef; 4] = [
     MigrationDef {
         version: 1,
         description: "create_documents",
@@ -22,6 +22,11 @@ pub const MIGRATIONS: [MigrationDef; 3] = [
         version: 3,
         description: "add_document_tags",
         down_sql: "DROP INDEX IF EXISTS documents_tags_idx; ALTER TABLE documents DROP COLUMN IF EXISTS tags;",
+    },
+    MigrationDef {
+        version: 4,
+        description: "add_documents_list_index",
+        down_sql: "DROP INDEX IF EXISTS documents_status_created_at_id_idx;",
     },
 ];
 
@@ -69,4 +74,29 @@ pub async fn status(pool: &PgPool) -> Result<Vec<AppliedMigration>> {
     .fetch_all(pool)
     .await
     .map_err(Into::into)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::MIGRATIONS;
+    use std::fs;
+
+    #[test]
+    fn includes_documents_list_index_migration_definition() {
+        let migration = MIGRATIONS
+            .iter()
+            .find(|migration| migration.version == 4)
+            .expect("version 4 migration definition should exist");
+
+        assert_eq!(migration.description, "add_documents_list_index");
+        assert_eq!(
+            migration.down_sql,
+            "DROP INDEX IF EXISTS documents_status_created_at_id_idx;"
+        );
+        assert_eq!(
+            fs::read_to_string("migrations/0004_add_documents_list_index.sql")
+                .expect("migration 0004 should exist"),
+            "CREATE INDEX IF NOT EXISTS documents_status_created_at_id_idx\n    ON documents (status, created_at DESC, id DESC);\n"
+        );
+    }
 }
