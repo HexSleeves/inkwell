@@ -40,25 +40,31 @@ each plan's drift check immediately before starting it.
 
 | Plan | Title | Category | Priority | Effort | Depends on | Drift vs HEAD | Status |
 |------|-------|----------|----------|--------|------------|---------------|--------|
-| 001 | Add Postgres index for the hot status-ordered list query | perf/migration | P1 | S | none | ✅ reconciled @10ee86c (migration 0004) | TODO |
-| 002 | Enforce coverage gate in GitHub Actions CI | dx | P1 | S | none | ✅ current (ci.yml unchanged) | TODO |
-| 003 | Fix README export-surface + env-var drift | docs | P1 | S | none | ⚠ refresh (README moved; add `handleSearchRequest`/`tags` too) | TODO |
-| 004 | Make docker-compose fail closed (drop default API key) | security | P1 | S | none | ✅ current (compose unchanged) | TODO |
-| 005 | Dedupe `escapeXml` + `normalizeSiteUrl` | tech-debt | P2 | S | none | ⚠ verify (sitemap.ts gained tag URLs; feed.ts unchanged) | TODO |
-| 006 | Add committed `.env.example` | dx | P2 | S | none | ✅ current | TODO |
-| 007 | ETag + Cache-Control + conditional GET (304) on HTML/XML | perf | P2 | M | none | ✅ current (server.ts has no caching) | TODO |
-| 008 | Minimal structured request logging + request id | dx | P2 | M | none | ✅ current (server.ts has no logging) | TODO |
-| 009 | Stop over-fetching `rendered_html` on list views | perf | P3 | S | none | ⚠ refresh (`RETURNING` now includes `tags`) | TODO |
-| 010 | Resolve `getDocumentById` asymmetry (drop export or add id route) | tech-debt | P3 | S | none | ⚠ refresh (api.ts/documents.ts churned) | TODO |
-| 011 | Document list/count consistency trade-off | bug | P3 | S | none | ⚠ refresh (handleList lines moved) | TODO |
-| 012 | Add CSP + hardening headers to HTML pages | security | P3 | S–M | none | ✅ current (server.ts has no CSP) | TODO |
-| 014 | Design spike: first-class authoring CLI | direction | P2 | M | none | ✅ current (no CLI shipped) | TODO |
-| 015 | Design spike: per-author identity + scoped tokens + audit | direction/security | P3 | L | relates 004 | ✅ current (still single shared key) | TODO |
-| 013 | Design spike: tags/collections | direction | — | L | — | ❌ SUPERSEDED (tags+search shipped CYP-23) | REJECTED |
+| 016 | Propagate database errors on public read surfaces | bug/observability | P1 | M | none | current @8bcd1ea | TODO |
+| 017 | Remove the Tailwind browser runtime from rendered pages | security/perf | P1 | S | none | current @8bcd1ea | TODO |
+| 018 | Make database-backed tests explicit instead of silently skipped | tests/DX | P2 | S | none | current @8bcd1ea | TODO |
+| 019 | Bound sitemap generation before it becomes an unbounded read path | perf/SEO | P2 | M | none | current @8bcd1ea | TODO |
+| 001 | Add Postgres index for the hot status-ordered list query | perf/migration | P2 | S | none | finding still valid; plan file obsolete TS | BLOCKED: rewrite for Rust migrations |
+| 004 | Make docker-compose fail closed (drop default API key) | security | P1 | S | none | finding still valid; compose still defaults key | BLOCKED: rewrite against Rust code/docs |
+| 006 | Add committed `.env.example` | dx | P2 | S | none | finding still valid; no `.env.example` exists | BLOCKED: rewrite against Rust envs |
+| 007 | ETag + Cache-Control + conditional GET (304) on HTML/XML | perf | P3 | M | none | finding partly valid; Rust has no caching | BLOCKED: rewrite after 016/019 |
+| 010 | Resolve `getDocumentById` asymmetry (drop export or add id route) | tech-debt | P3 | S | none | finding still valid; Rust has unused helper | BLOCKED: rewrite against `src/db/documents.rs` |
+| 012 | Add CSP + hardening headers to HTML pages | security | P3 | S-M | 017 | finding valid after Tailwind removal | BLOCKED: rewrite after 017 |
+| 014 | Design spike: first-class authoring CLI | direction | P2 | M | none | product gap still valid; plan file obsolete TS | BLOCKED: rewrite as Rust CLI/ADR spike |
+| 015 | Design spike: per-author identity + scoped tokens + audit | direction/security | P3 | L | 004 | product/security gap still valid; plan file obsolete TS | BLOCKED: rewrite as Rust ADR spike |
+| 002 | Enforce coverage gate in GitHub Actions CI | dx | - | S | - | obsolete Node/Vitest coverage plan | REJECTED: remove |
+| 003 | Fix README export-surface + env-var drift | docs | - | S | - | obsolete package-export docs plan | REJECTED: remove |
+| 005 | Dedupe `escapeXml` + `normalizeSiteUrl` | tech-debt | - | S | - | fixed by Rust layout helpers | REJECTED: remove |
+| 008 | Minimal structured request logging + request id | dx | - | M | - | mostly superseded by TraceLayer/json tracing | REJECTED: remove; create narrower request-id plan only if needed |
+| 009 | Stop over-fetching `rendered_html` on list views | perf | - | S | - | low leverage after Rust; overlaps future DAL projection work | REJECTED: remove |
+| 011 | Document list/count consistency trade-off | bug | - | S | - | not worth carrying; benign and previously documented | REJECTED: remove |
+| 013 | Design spike: tags/collections | direction | - | L | - | superseded by shipped tags/search | REJECTED: remove |
 
 Status values: `TODO` · `IN PROGRESS` · `DONE` · `BLOCKED` (one-line reason) · `REJECTED` (one-line rationale).
 
-Suggested order: P1 (001, 002, 003, 004) → P2 (005, 006, 007, 008) → P3 (009, 010, 011, 012) → spikes (014, 015). Plan 013 is optional (reframed as a post-ship decision ADR).
+Suggested order: execute 016, 017, 018, and 019 first. Then rewrite only the retained blocked plans that still matter: 004, 006, 001, 012, 014, and 015. Treat 007 and 010 as optional low-priority rewrites.
+
+Deep Rust audit addendum at `8bcd1ea`: execute 016 and 017 before the older stale TypeScript-era plans. Plans 001-015 predate the Rust migration in their excerpts; treat them as historical until reconciled or rewritten against `src/**/*.rs`.
 
 ## Dependency notes
 
@@ -66,6 +72,8 @@ Suggested order: P1 (001, 002, 003, 004) → P2 (005, 006, 007, 008) → P3 (009
 - **001 is independent** but is the foundation for any future list/tag perf work; its index is `(status, created_at DESC, id DESC)` — distinct from the existing `documents_tags_idx` GIN index.
 - **015 relates to 004**: the per-author token model changes how the bootstrap shared key (that 004 hardens) is used; sequence 004 first.
 - **007 and 009** both touch the read path; if 009's list projection lands, re-check 007's ETag derivation still hashes the right payload.
+- **016 should land before 019** if both are selected, so sitemap work does not preserve the existing swallowed database error behavior.
+- **017 should land before any CSP/header plan** because removing the Tailwind runtime avoids baking third-party script allowances into the policy.
 
 ## Findings considered & rejected (so they are not re-audited)
 
@@ -75,6 +83,62 @@ Suggested order: P1 (001, 002, 003, 004) → P2 (005, 006, 007, 008) → P3 (009
 - **Unbounded public index, no SEO surface, no sitemap/OG/JSON-LD** — REJECTED: fixed before this audit (paginated index, `sitemap.xml`, OpenGraph/Twitter/JSON-LD all present). Was prior-audit C1 / product-gap #1.
 - **No rate limiting / no write audit log** — NOTED, not separately planned: rate-limiting urgency is blunted by the 256 KiB body cap + constant-time key compare; the audit log pairs naturally with Plan 015 (token model) and is folded into its scope.
 - **Plan 011 (list/count consistency)** — kept but advisor verdict is "document, don't fix": true transactional consistency needs client-based `BEGIN/COMMIT` plumbing that the pooled `Queryable` + pg-mem tests don't exercise, which is disproportionate to the benign skew. The plan defaults to a comment + invariant test, with the transaction path gated behind explicit operator request.
+- **Older plans 001-015 as direct execution artifacts** — STALE after ADR 0007 Rust migration: many excerpts cite removed TypeScript files. Keep their findings for context, but do not execute them without reconciliation against the Rust codebase.
+
+## Deep audit 2026-06-19 @8bcd1ea
+
+Verification run:
+
+- `cargo fmt --check` — passed.
+- `cargo clippy --all-targets --all-features -- -D warnings` — passed.
+- `cargo test --all` — passed locally, but DB-backed API coverage silently skipped without `DATABASE_URL` (captured in Plan 018).
+- `cargo audit` — available and returned no reported advisories.
+
+Vetted findings:
+
+| # | Finding | Category | Impact | Effort | Risk | Evidence |
+|---|---------|----------|--------|--------|------|----------|
+| 016 | Public read handlers swallow database failures | bug/observability | DB outages can become 200 empty pages/feed/sitemap or misleading 404s | M | MED | `src/http/pages.rs:45`, `src/http/pages.rs:99`, `src/http/feed.rs:22`, `src/http/sitemap.rs:22`, `src/http/search.rs:55` |
+| 017 | Rendered pages depend on Tailwind's browser CDN runtime | security/perf | Adds third-party script execution and blocks a tight CSP | S | MED | `src/views/layout.rs:122`, `src/views/layout.rs:192`, `tests/view_layout_contract.rs:35` |
+| 018 | DB-backed tests pass as skipped when `DATABASE_URL` is absent | tests/DX | Local green test runs may not exercise API/SQL/migrations | S | LOW | `tests/common/mod.rs:9`, `tests/api_contract.rs:9`, `.github/workflows/ci.yml:31` |
+| 019 | Sitemap generation fetches every published document | perf/SEO | Unbounded public XML path can exceed memory/latency/protocol limits as content grows | M | MED | `src/http/sitemap.rs:13`, `src/http/sitemap.rs:16` |
+
+Direction options:
+
+- First-class authoring UX remains the main product gap; current README exposes an API-first platform but no CLI/admin authoring surface. The old Plan 014 should be rewritten for Rust before execution.
+- Per-author/scoped tokens remain the main product-security unlock; current auth is still a single shared `INKWELL_API_KEY` in `src/http/auth.rs` and `src/config.rs`. The old Plan 015 should be rewritten for Rust before execution.
+- Search is intentionally `ILIKE`-based per ADR 0006/0007. Do not treat that as a bug; revisit only when content size or ranking requirements justify a `tsvector` migration.
+
+Not audited: generated dependency internals under `node_modules/` and `target/`; runtime behavior under a live browser; production deployment outside the checked Docker/GitHub Actions files.
+
+## Plan retention review 2026-06-20
+
+Reviewed plans 001-015 against the Rust codebase at `8bcd1ea`.
+
+Keep only as findings; rewrite before execution:
+
+| Plan | Verdict | Reason |
+|---|---|---|
+| 001 | rewrite | Composite list index is still useful, but the plan edits removed TypeScript migration files. |
+| 004 | rewrite | `docker-compose.yml` still has `INKWELL_API_KEY: ${INKWELL_API_KEY:-changeme-local-dev-key}`, but Rust auth/docs references are different. |
+| 006 | rewrite | `.env.example` is still absent and `.gitignore` still whitelists it, but env source paths changed to Rust. |
+| 007 | optional rewrite | No ETag/Cache-Control path exists yet, but it should follow 016 and 019 so errors and sitemap shape are settled first. |
+| 010 | optional rewrite | `get_document_by_id` still exists unused, but the cleanup is low leverage. |
+| 012 | rewrite after 017 | CSP/hardening still matters, but the policy should be designed after the Tailwind runtime is removed. |
+| 014 | rewrite | Authoring CLI remains a valid product direction, but the plan references TypeScript exports and pnpm commands. |
+| 015 | rewrite | Scoped tokens/audit remain valid, but the plan references TypeScript auth and migration files. |
+
+Remove:
+
+| Plan | Reason |
+|---|---|
+| 002 | Obsolete Node/Vitest coverage-gate plan; Rust CI has no Vitest coverage config. Plan 018 covers the more immediate test false-green issue. |
+| 003 | Obsolete package-export README drift plan; Rust README no longer documents a public TypeScript module surface. |
+| 005 | Fixed by Rust consolidation: feed and sitemap import `escape_xml` and `normalize_site_url` from `src/views/layout.rs`. |
+| 008 | Mostly superseded by Rust `TraceLayer` plus JSON tracing. A future plan should be a narrower request-id/correlation-id plan if desired. |
+| 009 | Low leverage and stale; Rust list/search/tag projections can be revisited with a broader DAL projection cleanup later. |
+| 011 | Not worth retaining; count/list skew is benign for this app and cheaper to tolerate than to transactionalize. |
+| 013 | Superseded; tags and search already shipped and ADR 0006/0007 capture the intended parity decisions. |
 
 ## How these were produced
 
