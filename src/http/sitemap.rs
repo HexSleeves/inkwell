@@ -1,10 +1,11 @@
 use axum::extract::{Path, State};
-use axum::http::{HeaderValue, StatusCode, header};
+use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 
 use crate::db::documents;
 use crate::domain::document::{Document, DocumentStatus, ListOptions, TagCount};
 use crate::http::AppState;
+use crate::http::cache;
 use crate::views::layout::{escape_xml, normalize_site_url};
 
 pub const SITEMAP_CONTENT_TYPE: &str = "application/xml; charset=utf-8";
@@ -16,25 +17,29 @@ enum SitemapShape {
     Index { document_pages: u32, tag_pages: u32 },
 }
 
-pub async fn sitemap(State(state): State<AppState>) -> Response {
+pub async fn sitemap(State(state): State<AppState>, headers: HeaderMap) -> Response {
     let base = normalize_site_url(state.config.site_url.as_deref());
-    let document_count = documents::count_documents(
+    let document_count = match documents::count_documents(
         &state.pool,
         crate::domain::document::StatusFilter {
             status: Some(DocumentStatus::Published),
         },
     )
     .await
-    .unwrap_or_default();
-    let tag_count = documents::count_published_tags(&state.pool)
-        .await
-        .unwrap_or_default();
+    {
+        Ok(count) => count,
+        Err(_) => return xml_error_response(),
+    };
+    let tag_count = match documents::count_published_tags(&state.pool).await {
+        Ok(count) => count,
+        Err(_) => return xml_error_response(),
+    };
 
     match plan_sitemap_shape(document_count, tag_count) {
         SitemapShape::Single => {
             let document_limit = clamp_count_to_u32(document_count);
             let tag_limit = clamp_count_to_u32(tag_count);
-            let documents = documents::list_documents(
+            let documents = match documents::list_documents(
                 &state.pool,
                 ListOptions {
                     limit: Some(document_limit),
@@ -43,34 +48,55 @@ pub async fn sitemap(State(state): State<AppState>) -> Response {
                 },
             )
             .await
-            .unwrap_or_default();
+            {
+                Ok(documents) => documents,
+                Err(_) => return xml_error_response(),
+            };
             let tags = if tag_limit == 0 {
                 Vec::new()
             } else {
-                documents::list_published_tags_page(&state.pool, tag_limit, 0)
-                    .await
-                    .unwrap_or_default()
+                match documents::list_published_tags_page(&state.pool, tag_limit, 0).await {
+                    Ok(tags) => tags,
+                    Err(_) => return xml_error_response(),
+                }
             };
-            xml_response(
+            cache::xml_response(
+                &headers,
+                "sitemap",
                 StatusCode::OK,
+                SITEMAP_CONTENT_TYPE,
                 render_small_sitemap(&base, &documents, &tags),
             )
         }
-        shape => xml_response(StatusCode::OK, render_sitemap_index(&base, shape)),
+        shape => cache::xml_response(
+            &headers,
+            "sitemap",
+            StatusCode::OK,
+            SITEMAP_CONTENT_TYPE,
+            render_sitemap_index(&base, shape),
+        ),
     }
 }
 
-pub async fn sitemap_static(State(state): State<AppState>) -> Response {
+pub async fn sitemap_static(State(state): State<AppState>, headers: HeaderMap) -> Response {
     let base = normalize_site_url(state.config.site_url.as_deref());
-    let tag_count = documents::count_published_tags(&state.pool)
-        .await
-        .unwrap_or_default();
+    let tag_count = match documents::count_published_tags(&state.pool).await {
+        Ok(count) => count,
+        Err(_) => return xml_error_response(),
+    };
     let xml = render_static_sitemap(&base, tag_count > 0);
-    xml_response(StatusCode::OK, xml)
+    cache::xml_response(
+        &headers,
+        "sitemap-static",
+        StatusCode::OK,
+        SITEMAP_CONTENT_TYPE,
+        xml,
+    )
 }
 
 pub async fn sitemap_documents_page(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(page): Path<String>,
 ) -> Response {
     let Some(page) = parse_page_number(&page) else {
@@ -78,14 +104,23 @@ pub async fn sitemap_documents_page(
     };
 
     let base = normalize_site_url(state.config.site_url.as_deref());
-    let documents = documents::list_documents(&state.pool, published_document_page_options(page))
-        .await
-        .unwrap_or_default();
-    xml_response(StatusCode::OK, render_document_sitemap(&base, &documents))
+    let documents =
+        match documents::list_documents(&state.pool, published_document_page_options(page)).await {
+            Ok(documents) => documents,
+            Err(_) => return xml_error_response(),
+        };
+    cache::xml_response(
+        &headers,
+        "sitemaps-documents",
+        StatusCode::OK,
+        SITEMAP_CONTENT_TYPE,
+        render_document_sitemap(&base, &documents),
+    )
 }
 
 pub async fn sitemap_tags_page(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(page): Path<String>,
 ) -> Response {
     let Some(page) = parse_page_number(&page) else {
@@ -93,14 +128,23 @@ pub async fn sitemap_tags_page(
     };
 
     let base = normalize_site_url(state.config.site_url.as_deref());
-    let tags = documents::list_published_tags_page(
+    let tags = match documents::list_published_tags_page(
         &state.pool,
         SITEMAP_MAX_URLS,
         sitemap_page_offset(page),
     )
     .await
-    .unwrap_or_default();
-    xml_response(StatusCode::OK, render_tag_sitemap(&base, &tags))
+    {
+        Ok(tags) => tags,
+        Err(_) => return xml_error_response(),
+    };
+    cache::xml_response(
+        &headers,
+        "sitemaps-tags",
+        StatusCode::OK,
+        SITEMAP_CONTENT_TYPE,
+        render_tag_sitemap(&base, &tags),
+    )
 }
 
 fn clamp_count_to_u32(count: i64) -> u32 {
@@ -280,6 +324,10 @@ fn xml_response(status: StatusCode, xml: String) -> Response {
         xml,
     )
         .into_response()
+}
+
+fn xml_error_response() -> Response {
+    xml_response(StatusCode::INTERNAL_SERVER_ERROR, String::new())
 }
 
 #[cfg(test)]

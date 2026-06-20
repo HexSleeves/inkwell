@@ -1,16 +1,17 @@
 use axum::extract::State;
-use axum::http::{HeaderValue, StatusCode, header};
-use axum::response::IntoResponse;
+use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
+use axum::response::{IntoResponse, Response};
 
 use crate::db::documents;
 use crate::http::AppState;
+use crate::http::cache;
 use crate::views::layout::{escape_xml, normalize_site_url};
 
 pub const ATOM_CONTENT_TYPE: &str = "application/atom+xml; charset=utf-8";
 const FEED_MAX_ENTRIES: u32 = 20;
 
-pub async fn feed(State(state): State<AppState>) -> impl IntoResponse {
-    let documents = documents::list_documents(
+pub async fn feed(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let documents = match documents::list_documents(
         &state.pool,
         crate::domain::document::ListOptions {
             limit: Some(FEED_MAX_ENTRIES),
@@ -19,7 +20,11 @@ pub async fn feed(State(state): State<AppState>) -> impl IntoResponse {
         },
     )
     .await
-    .unwrap_or_default();
+    {
+        Ok(documents) => documents,
+        Err(_) => return xml_error_response(),
+    };
+
     let base = normalize_site_url(state.config.site_url.as_deref());
     let updated = documents
         .first()
@@ -37,11 +42,18 @@ pub async fn feed(State(state): State<AppState>) -> impl IntoResponse {
         escape_xml(&base),
         entries
     );
+
+    cache::xml_response(&headers, "feed", StatusCode::OK, ATOM_CONTENT_TYPE, xml)
+}
+
+fn xml_error_response() -> Response {
     (
+        StatusCode::INTERNAL_SERVER_ERROR,
         [(
             header::CONTENT_TYPE,
             HeaderValue::from_static(ATOM_CONTENT_TYPE),
         )],
-        (StatusCode::OK, xml),
+        String::new(),
     )
+        .into_response()
 }

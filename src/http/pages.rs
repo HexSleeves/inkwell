@@ -1,31 +1,34 @@
 use axum::extract::{Path, State};
-use axum::http::StatusCode;
-use axum::response::{Html, IntoResponse};
+use axum::http::{HeaderMap, StatusCode};
+use axum::response::{Html, IntoResponse, Response};
 
 use crate::db::documents;
 use crate::domain::document::{DocumentStatus, ListByTagOptions, ListOptions, StatusFilter};
 use crate::http::AppState;
+use crate::http::cache;
 use crate::views::document::{render_document_page, render_not_found_page};
 use crate::views::index::render_index_page;
 use crate::views::layout::PAGE_SIZE;
 use crate::views::tags::{render_tag_index_page, render_tag_page};
 
-pub async fn index(State(state): State<AppState>) -> impl IntoResponse {
-    render_index(&state, 1).await
+pub async fn index(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    render_index(&state, &headers, 1).await
 }
 
 pub async fn index_page(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(page): Path<String>,
-) -> impl IntoResponse {
+) -> Response {
     let page = parse_page_number(&page).unwrap_or(0);
-    render_index(&state, page).await
+    render_index(&state, &headers, page).await
 }
 
 pub async fn document_page(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(slug): Path<String>,
-) -> impl IntoResponse {
+) -> Response {
     match documents::get_document_by_slug(
         &state.pool,
         &slug,
@@ -35,76 +38,87 @@ pub async fn document_page(
     )
     .await
     {
-        Ok(Some(document)) => (
+        Ok(Some(document)) => cache::html_response(
+            &headers,
+            "document",
             StatusCode::OK,
-            Html(render_document_page(
-                &document,
-                state.config.site_url.as_deref(),
-            )),
+            render_document_page(&document, state.config.site_url.as_deref()),
         ),
-        _ => (
+        Ok(None) => (
             StatusCode::NOT_FOUND,
             Html(render_not_found_page(state.config.site_url.as_deref())),
-        ),
+        )
+            .into_response(),
+        Err(_) => error_page(&state),
     }
 }
 
-pub async fn tags_index(State(state): State<AppState>) -> impl IntoResponse {
+pub async fn tags_index(State(state): State<AppState>, headers: HeaderMap) -> Response {
     match documents::list_published_tags(&state.pool).await {
-        Ok(tags) => (
+        Ok(tags) => cache::html_response(
+            &headers,
+            "tags-index",
             StatusCode::OK,
-            Html(render_tag_index_page(
-                &tags,
-                state.config.site_url.as_deref(),
-            )),
+            render_tag_index_page(&tags, state.config.site_url.as_deref()),
         ),
-        Err(_) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Html(render_not_found_page(state.config.site_url.as_deref())),
-        ),
+        Err(_) => error_page(&state),
     }
 }
 
-pub async fn tag_page(State(state): State<AppState>, Path(tag): Path<String>) -> impl IntoResponse {
-    render_tag_listing(&state, tag, 1).await
+pub async fn tag_page(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(tag): Path<String>,
+) -> Response {
+    render_tag_listing(&state, &headers, tag, 1).await
 }
 
 pub async fn tag_page_numbered(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path((tag, page)): Path<(String, String)>,
-) -> impl IntoResponse {
+) -> Response {
     let Some(page) = parse_page_number(&page) else {
         return (
             StatusCode::NOT_FOUND,
             Html(render_not_found_page(state.config.site_url.as_deref())),
-        );
+        )
+            .into_response();
     };
-    render_tag_listing(&state, tag, page).await
+    render_tag_listing(&state, &headers, tag, page).await
 }
 
-async fn render_index(state: &AppState, page: i64) -> (StatusCode, Html<String>) {
+async fn render_index(state: &AppState, headers: &HeaderMap, page: i64) -> Response {
     if page < 1 {
         return (
             StatusCode::NOT_FOUND,
             Html(render_not_found_page(state.config.site_url.as_deref())),
-        );
+        )
+            .into_response();
     }
-    let total = documents::count_documents(
+
+    let total = match documents::count_documents(
         &state.pool,
         StatusFilter {
             status: Some(DocumentStatus::Published),
         },
     )
     .await
-    .unwrap_or_default();
+    {
+        Ok(total) => total,
+        Err(_) => return error_page(state),
+    };
+
     let total_pages = std::cmp::max(1, (total + PAGE_SIZE - 1) / PAGE_SIZE);
     if page > total_pages {
         return (
             StatusCode::NOT_FOUND,
             Html(render_not_found_page(state.config.site_url.as_deref())),
-        );
+        )
+            .into_response();
     }
-    let docs = documents::list_documents(
+
+    let docs = match documents::list_documents(
         &state.pool,
         ListOptions {
             limit: Some(PAGE_SIZE as u32),
@@ -113,30 +127,34 @@ async fn render_index(state: &AppState, page: i64) -> (StatusCode, Html<String>)
         },
     )
     .await
-    .unwrap_or_default();
-    (
+    {
+        Ok(docs) => docs,
+        Err(_) => return error_page(state),
+    };
+
+    cache::html_response(
+        headers,
+        "index",
         StatusCode::OK,
-        Html(render_index_page(
-            &docs,
-            page,
-            total_pages,
-            state.config.site_url.as_deref(),
-        )),
+        render_index_page(&docs, page, total_pages, state.config.site_url.as_deref()),
     )
 }
 
 async fn render_tag_listing(
     state: &AppState,
+    headers: &HeaderMap,
     tag: String,
     page: i64,
-) -> (StatusCode, Html<String>) {
+) -> Response {
     if !is_valid_tag(&tag) || page < 1 {
         return (
             StatusCode::NOT_FOUND,
             Html(render_not_found_page(state.config.site_url.as_deref())),
-        );
+        )
+            .into_response();
     }
-    let total = documents::count_documents_by_tag(
+
+    let total = match documents::count_documents_by_tag(
         &state.pool,
         &tag,
         StatusFilter {
@@ -144,21 +162,29 @@ async fn render_tag_listing(
         },
     )
     .await
-    .unwrap_or_default();
+    {
+        Ok(total) => total,
+        Err(_) => return error_page(state),
+    };
+
     if total == 0 {
         return (
             StatusCode::NOT_FOUND,
             Html(render_not_found_page(state.config.site_url.as_deref())),
-        );
+        )
+            .into_response();
     }
+
     let total_pages = std::cmp::max(1, (total + PAGE_SIZE - 1) / PAGE_SIZE);
     if page > total_pages {
         return (
             StatusCode::NOT_FOUND,
             Html(render_not_found_page(state.config.site_url.as_deref())),
-        );
+        )
+            .into_response();
     }
-    let docs = documents::list_documents_by_tag(
+
+    let docs = match documents::list_documents_by_tag(
         &state.pool,
         &tag,
         ListByTagOptions {
@@ -168,17 +194,31 @@ async fn render_tag_listing(
         },
     )
     .await
-    .unwrap_or_default();
-    (
+    {
+        Ok(docs) => docs,
+        Err(_) => return error_page(state),
+    };
+
+    cache::html_response(
+        headers,
+        "tag-page",
         StatusCode::OK,
-        Html(render_tag_page(
+        render_tag_page(
             &tag,
             &docs,
             page,
             total_pages,
             state.config.site_url.as_deref(),
-        )),
+        ),
     )
+}
+
+fn error_page(state: &AppState) -> Response {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Html(render_not_found_page(state.config.site_url.as_deref())),
+    )
+        .into_response()
 }
 
 fn parse_page_number(value: &str) -> Option<i64> {

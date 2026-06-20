@@ -1,11 +1,13 @@
 use axum::Json;
 use axum::extract::{Query, State};
-use axum::response::{Html, IntoResponse};
+use axum::http::{HeaderMap, StatusCode};
+use axum::response::{IntoResponse, Response};
 use serde::Serialize;
 
 use crate::db::documents;
 use crate::domain::document::SearchOptions;
 use crate::http::AppState;
+use crate::http::cache;
 use crate::views::layout::{PAGE_SIZE, derive_excerpt};
 use crate::views::search::render_search_page;
 
@@ -41,8 +43,9 @@ struct SearchResponse {
 
 pub async fn search(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Query(query): Query<SearchQuery>,
-) -> impl IntoResponse {
+) -> Response {
     let raw_query = query.q.unwrap_or_default();
     let trimmed = raw_query.trim().to_string();
     let page = parse_page(query.page.as_deref());
@@ -50,15 +53,16 @@ pub async fn search(
     let total = if trimmed.is_empty() {
         0
     } else {
-        documents::count_search_published_documents(&state.pool, &trimmed)
-            .await
-            .unwrap_or_default()
+        match documents::count_search_published_documents(&state.pool, &trimmed).await {
+            Ok(total) => total,
+            Err(_) => return error_page(),
+        }
     };
     let total_pages = std::cmp::max(1, (total + PAGE_SIZE - 1) / PAGE_SIZE);
     let docs = if trimmed.is_empty() {
         Vec::new()
     } else {
-        documents::search_published_documents(
+        match documents::search_published_documents(
             &state.pool,
             &trimmed,
             SearchOptions {
@@ -67,8 +71,12 @@ pub async fn search(
             },
         )
         .await
-        .unwrap_or_default()
+        {
+            Ok(docs) => docs,
+            Err(_) => return error_page(),
+        }
     };
+
     if wants_json {
         let payload = SearchResponse {
             query: trimmed,
@@ -89,14 +97,18 @@ pub async fn search(
         };
         Json(payload).into_response()
     } else {
-        Html(render_search_page(
-            &raw_query,
-            &docs,
-            page,
-            total_pages,
-            state.config.site_url.as_deref(),
-        ))
-        .into_response()
+        cache::html_response(
+            &headers,
+            "search-html",
+            StatusCode::OK,
+            render_search_page(
+                &raw_query,
+                &docs,
+                page,
+                total_pages,
+                state.config.site_url.as_deref(),
+            ),
+        )
     }
 }
 
@@ -107,4 +119,8 @@ fn parse_page(value: Option<&str>) -> i64 {
         }
         _ => 1,
     }
+}
+
+fn error_page() -> Response {
+    StatusCode::INTERNAL_SERVER_ERROR.into_response()
 }
