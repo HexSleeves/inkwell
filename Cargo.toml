@@ -9,6 +9,7 @@ ammonia = "4"
 anyhow = "1"
 axum = { version = "0.8", features = ["json"] }
 comrak = "0.52"
+dotenvy = "0.15"
 http = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -43,4 +44,4 @@ features = ["runtime-tokio-rustls", "postgres", "uuid", "time", "migrate"]
 
 [dev-dependencies]
 pretty_assertions = "1"
-reqwest           = { version = "0.12", features = ["json"] }
+reqwest           = { version = "0.13.4", features = ["json"] }

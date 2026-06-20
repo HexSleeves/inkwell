@@ -11,6 +11,9 @@ pub struct Config {
 
 impl Config {
     pub fn from_env() -> Result<Self> {
+        // Load `.env` when present; never override variables already set in the process env.
+        let _ = dotenvy::dotenv();
+
         let database_url =
             std::env::var("DATABASE_URL").map_err(|_| anyhow!("DATABASE_URL is required"))?;
         let host = std::env::var("HOST").unwrap_or_else(|_| "0.0.0.0".to_string());
