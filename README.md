@@ -12,6 +12,7 @@ An open, API-first Markdown publishing platform implemented as a Rust service.
 
 ## Environment
 
+- Copy `.env.example` to `.env` before local development. `.env` is gitignored.
 - `DATABASE_URL` required
 - `PORT` default `3000`
 - `HOST` default `0.0.0.0`
@@ -21,6 +22,8 @@ An open, API-first Markdown publishing platform implemented as a Rust service.
 ## Run
 
 ```bash
+cp .env.example .env
+# Full integration tests require DATABASE_URL in your shell or .env.
 cargo fmt --check
 cargo clippy --all-targets --all-features -- -D warnings
 cargo test --all
@@ -33,10 +36,11 @@ cargo run --bin inkwell -- serve
 ## Docker Compose
 
 ```bash
+cp .env.example .env
 docker compose up --build
 ```
 
-The app runs `inkwell db migrate && inkwell serve` once Postgres is healthy.
+Set `INKWELL_API_KEY` in your shell or `.env` before starting Compose; the app refuses to start until it is set. The app runs `inkwell db migrate && inkwell serve` once Postgres is healthy.
 
 ## HTTP surface
 

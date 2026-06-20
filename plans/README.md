@@ -24,7 +24,7 @@ Removed stale TypeScript-era plan files: 002, 003, 005, 008, 009, 011, and 013.
 | 019 | Bound sitemap generation before it becomes an unbounded read path | perf/SEO | P2 | M | none | current @8bcd1ea | TODO |
 | 001 | Add Postgres index for the hot status-ordered list query | perf/migration | P2 | S | none | rewritten @8bcd1ea for Rust | DONE |
 | 004 | Make Docker Compose require an explicit API key | security | P1 | S | none | rewritten @8bcd1ea for Rust | TODO |
-| 006 | Add committed `.env.example` | dx | P2 | S | none | rewritten @8bcd1ea for Rust | TODO |
+| 006 | Add committed `.env.example` | dx | P2 | S | none | rewritten @8bcd1ea for Rust | DONE |
 | 007 | ETag + Cache-Control + conditional GET (304) on HTML/XML | perf | P3 | M | 016; coordinate 019 | rewritten @8bcd1ea for Rust | TODO |
 | 010 | Resolve `get_document_by_id` asymmetry | tech-debt | P3 | S | none | rewritten @8bcd1ea for Rust | TODO |
 | 012 | Add CSP + hardening headers to HTML pages | security | P3 | S-M | 017 | rewritten @8bcd1ea for Rust | TODO |

@@ -23,7 +23,7 @@ services:
       DATABASE_URL: postgres://${POSTGRES_USER:-inkwell}:${POSTGRES_PASSWORD:-inkwell}@db:5432/${POSTGRES_DB:-inkwell}
       PORT: '3000'
       HOST: 0.0.0.0
-      INKWELL_API_KEY: ${INKWELL_API_KEY:-changeme-local-dev-key}
+      INKWELL_API_KEY: '${INKWELL_API_KEY:?Set INKWELL_API_KEY in your shell or .env before running docker compose.}'
       INKWELL_SITE_URL: ${INKWELL_SITE_URL:-http://localhost:3000}
     depends_on:
       db:
