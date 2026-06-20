@@ -12,6 +12,7 @@ pub mod feed;
 pub mod pages;
 pub mod router;
 pub mod search;
+pub mod security_headers;
 pub mod sitemap;
 
 #[derive(Clone)]

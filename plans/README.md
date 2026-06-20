@@ -27,7 +27,7 @@ Removed stale TypeScript-era plan files: 002, 003, 005, 008, 009, 011, and 013.
 | 006 | Add committed `.env.example` | dx | P2 | S | none | rewritten @8bcd1ea for Rust | DONE |
 | 007 | ETag + Cache-Control + conditional GET (304) on HTML/XML | perf | P3 | M | 016; coordinate 019 | rewritten @8bcd1ea for Rust | DONE |
 | 010 | Resolve `get_document_by_id` asymmetry | tech-debt | P3 | S | none | rewritten @8bcd1ea for Rust | DONE |
-| 012 | Add CSP + hardening headers to HTML pages | security | P3 | S-M | 017 | rewritten @8bcd1ea for Rust | TODO |
+| 012 | Add CSP + hardening headers to HTML pages | security | P3 | S-M | 017 | rewritten @8bcd1ea for Rust | DONE |
 | 014 | Design spike: first-class authoring CLI | direction | P2 | M | none | rewritten @8bcd1ea for Rust | DONE |
 | 015 | Design spike: scoped author tokens + audit | direction/security | P3 | L | 004 | rewritten @8bcd1ea for Rust | DONE |
 | 002 | Enforce coverage gate in GitHub Actions CI | dx | - | S | - | obsolete Node/Vitest coverage plan | REJECTED: remove |

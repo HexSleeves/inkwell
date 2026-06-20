@@ -18,6 +18,7 @@ fn render_page_emits_valid_html_attributes() {
             canonical_url: "http://localhost/".to_string(),
             og_type: "website",
             json_ld: None,
+            csp_nonce: None,
         },
         "<p>Body</p>",
     );
@@ -45,6 +46,7 @@ fn render_page_omits_tailwind_browser_build() {
             canonical_url: "http://localhost/".to_string(),
             og_type: "website",
             json_ld: None,
+            csp_nonce: None,
         },
         "<p>Body</p>",
     );
@@ -55,7 +57,7 @@ fn render_page_omits_tailwind_browser_build() {
 }
 
 #[test]
-fn render_page_allows_json_ld_without_tailwind_runtime() {
+fn render_page_allows_json_ld_with_csp_nonce_and_without_tailwind_runtime() {
     let browser_runtime_src = browser_runtime_src();
     let runtime_config_marker = runtime_config_marker();
     let html = render_page(
@@ -69,11 +71,12 @@ fn render_page_allows_json_ld_without_tailwind_runtime() {
                 "@type": "WebSite",
                 "name": "Inkwell"
             })),
+            csp_nonce: Some("nonce123"),
         },
         "<p>Body</p>",
     );
 
-    assert!(html.contains(r#"<script type="application/ld+json">"#));
+    assert!(html.contains(r#"<script type="application/ld+json" nonce="nonce123">"#));
     assert!(!html.contains(&browser_runtime_src));
     assert!(!html.contains(&runtime_config_marker));
 }

@@ -89,6 +89,7 @@ pub fn render_index_page(
             canonical_url: canonical,
             og_type: "website",
             json_ld: None,
+            csp_nonce: None,
         },
         &format!("{}{}", list, pager),
     )

@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use axum::Router;
+use axum::middleware;
 use axum::routing::{any, get};
 use tower_http::compression::CompressionLayer;
 use tower_http::trace::TraceLayer;
@@ -8,7 +9,7 @@ use tower_http::trace::TraceLayer;
 use crate::config::Config;
 use crate::http::AppState;
 
-use super::{api, feed, pages, search, sitemap};
+use super::{api, feed, pages, search, security_headers, sitemap};
 
 pub fn build_router(config: Arc<Config>, pool: sqlx::PgPool) -> Router {
     let state = AppState { config, pool };
@@ -35,5 +36,8 @@ pub fn build_router(config: Arc<Config>, pool: sqlx::PgPool) -> Router {
         .route("/", get(pages::index))
         .layer(CompressionLayer::new())
         .layer(TraceLayer::new_for_http())
+        .layer(middleware::from_fn(
+            security_headers::apply_security_headers,
+        ))
         .with_state(state)
 }

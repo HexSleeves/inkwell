@@ -71,6 +71,7 @@ pub fn render_tag_index_page(tags: &[TagCount], site_url: Option<&str>) -> Strin
             canonical_url: format!("{}/tags", base),
             og_type: "website",
             json_ld: None,
+            csp_nonce: None,
         },
         &format!("<h1>Tags</h1>\n        {}", body),
     )
@@ -130,6 +131,7 @@ pub fn render_tag_page(
             canonical_url: canonical,
             og_type: "website",
             json_ld: None,
+            csp_nonce: None,
         },
         &format!(
             "<h1>Tagged &ldquo;{}&rdquo;</h1>\n        {}{}",

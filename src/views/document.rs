@@ -5,7 +5,11 @@ use super::layout::{
     normalize_site_url, render_page, render_tag_chips,
 };
 
-pub fn render_document_page(document: &Document, site_url: Option<&str>) -> String {
+pub fn render_document_page(
+    document: &Document,
+    site_url: Option<&str>,
+    csp_nonce: &str,
+) -> String {
     let base = normalize_site_url(site_url);
     let url = format!("{}/{}", base, urlencoding::encode(&document.slug));
     let description = derive_excerpt(document.body_markdown(), 160);
@@ -50,6 +54,7 @@ pub fn render_document_page(document: &Document, site_url: Option<&str>) -> Stri
                 &updated,
                 &document.tags,
             )),
+            csp_nonce: Some(csp_nonce),
         },
         &main,
     )
@@ -64,6 +69,7 @@ pub fn render_not_found_page(site_url: Option<&str>) -> String {
             canonical_url: format!("{}/", base),
             og_type: "website",
             json_ld: None,
+            csp_nonce: None,
         },
         r#"<h1>Not found</h1>
         <p>That page does not exist. <a href="/">Back to the index.</a></p>"#,

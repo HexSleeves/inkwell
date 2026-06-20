@@ -1,4 +1,4 @@
-use axum::extract::{Path, State};
+use axum::extract::{Extension, Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{Html, IntoResponse, Response};
 
@@ -6,6 +6,7 @@ use crate::db::documents;
 use crate::domain::document::{DocumentStatus, ListByTagOptions, ListOptions, StatusFilter};
 use crate::http::AppState;
 use crate::http::cache;
+use crate::http::security_headers::CspNonce;
 use crate::views::document::{render_document_page, render_not_found_page};
 use crate::views::index::render_index_page;
 use crate::views::layout::PAGE_SIZE;
@@ -27,6 +28,7 @@ pub async fn index_page(
 pub async fn document_page(
     State(state): State<AppState>,
     headers: HeaderMap,
+    Extension(csp_nonce): Extension<CspNonce>,
     Path(slug): Path<String>,
 ) -> Response {
     match documents::get_document_by_slug(
@@ -42,7 +44,7 @@ pub async fn document_page(
             &headers,
             "document",
             StatusCode::OK,
-            render_document_page(&document, state.config.site_url.as_deref()),
+            render_document_page(&document, state.config.site_url.as_deref(), csp_nonce.as_str()),
         ),
         Ok(None) => (
             StatusCode::NOT_FOUND,

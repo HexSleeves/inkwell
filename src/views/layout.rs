@@ -10,6 +10,7 @@ pub struct HeadMeta<'a> {
     pub canonical_url: String,
     pub og_type: &'a str,
     pub json_ld: Option<serde_json::Value>,
+    pub csp_nonce: Option<&'a str>,
 }
 
 pub fn normalize_site_url(site_url: Option<&str>) -> String {
@@ -235,8 +236,13 @@ pub fn render_page(meta: HeadMeta<'_>, main: &str) -> String {
         ));
     }
     if let Some(json_ld) = meta.json_ld {
+        let nonce_attr = meta
+            .csp_nonce
+            .map(|value| format!(r#" nonce="{}""#, escape_html(value)))
+            .unwrap_or_default();
         tags.push(format!(
-            r#"<script type="application/ld+json">{}</script>"#,
+            r#"<script type="application/ld+json"{}>{}</script>"#,
+            nonce_attr,
             json_for_script(json_ld)
         ));
     }

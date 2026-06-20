@@ -106,6 +106,7 @@ pub fn render_search_page(
             canonical_url: format!("{}/search", base),
             og_type: "website",
             json_ld: None,
+            csp_nonce: None,
         },
         &format!("<h1>Search</h1>\n        {}\n        {}", form, body),
     )
