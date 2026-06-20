@@ -19,7 +19,7 @@ pub fn render_document_page(document: &Document, site_url: Option<&str>) -> Stri
     let main = format!(
         r#"<article>
           <h1>{}</h1>
-          <div class=\"meta\">{}{}</div>{}
+          <div class="meta">{}{}</div>{}
 {}
         </article>"#,
         escape_html(&document.title),
@@ -66,6 +66,6 @@ pub fn render_not_found_page(site_url: Option<&str>) -> String {
             json_ld: None,
         },
         r#"<h1>Not found</h1>
-        <p>That page does not exist. <a href=\"/\">Back to the index.</a></p>"#,
+        <p>That page does not exist. <a href="/">Back to the index.</a></p>"#,
     )
 }

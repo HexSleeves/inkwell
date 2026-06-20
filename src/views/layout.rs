@@ -51,133 +51,166 @@ fn json_for_script(value: serde_json::Value) -> String {
 const STYLES: &str = r#"
   :root { color-scheme: light dark; }
   * { box-sizing: border-box; }
-  body {
-    margin: 0;
-    font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, Helvetica, Arial, sans-serif;
-    line-height: 1.6;
-    color: #1a1a1a;
-    background: #fdfdfd;
+  body { margin: 0; }
+  main { line-height: 1.7; }
+  main h1, main h2, main h3, main h4, main h5, main h6 {
+    color: rgb(24 24 27); font-weight: 750; line-height: 1.15; letter-spacing: 0;
+    margin: 2.25rem 0 0.85rem;
   }
-  .wrap { max-width: 42rem; margin: 0 auto; padding: 3rem 1.25rem 5rem; }
-  header.site { margin-bottom: 2.5rem; }
-  header.site a.brand { font-weight: 700; font-size: 1.1rem; color: inherit; text-decoration: none; }
-  h1, h2, h3, h4, h5, h6 { line-height: 1.25; margin: 2rem 0 0.75rem; }
-  h1 { font-size: 2rem; }
-  p, ul, ol, blockquote, table, pre, figure { margin: 0 0 1.1rem; }
-  a { color: #0b5fff; }
-  img { max-width: 100%; height: auto; }
-  pre { background: #f4f4f6; padding: 1rem; border-radius: 6px; overflow-x: auto; }
-  code { background: #f4f4f6; padding: 0.15em 0.35em; border-radius: 4px; font-size: 0.9em; }
-  pre code { background: none; padding: 0; }
-  .hljs { color: #1a1a1a; }
-  blockquote { border-left: 3px solid #d0d0d8; margin-left: 0; padding-left: 1rem; color: #555; }
-  table { border-collapse: collapse; width: 100%; }
-  th, td { border: 1px solid #e0e0e6; padding: 0.4rem 0.6rem; text-align: left; }
-  .meta { color: #777; font-size: 0.875rem; }
-  ul.tags { list-style: none; padding: 0; margin: 0.5rem 0 0; display: flex; flex-wrap: wrap; gap: 0.4rem; }
+  main h1 { font-size: clamp(2rem, 4vw, 3rem); margin-top: 0; }
+  main h2 { font-size: 1.65rem; }
+  main h3 { font-size: 1.25rem; }
+  main p, main ul, main ol, main blockquote, main table, main pre, main figure { margin: 0 0 1.15rem; }
+  main ul:not(.index):not(.tags), main ol { padding-left: 1.4rem; }
+  main li { margin: 0.25rem 0; }
+  main a { color: rgb(2 132 199); text-decoration-thickness: 0.08em; text-underline-offset: 0.18em; }
+  main img { max-width: 100%; height: auto; border-radius: 0.5rem; }
+  main pre {
+    background: rgb(24 24 27); color: rgb(244 244 245); padding: 1rem; border-radius: 0.5rem;
+    overflow-x: auto; border: 1px solid rgb(39 39 42);
+  }
+  main code { background: rgb(244 244 245); color: rgb(63 63 70); padding: 0.15em 0.35em; border-radius: 0.25rem; font-size: 0.9em; }
+  main pre code { background: transparent; color: inherit; padding: 0; }
+  .hljs { color: inherit; }
+  main blockquote { border-left: 4px solid rgb(14 165 233); margin-left: 0; padding-left: 1rem; color: rgb(82 82 91); }
+  main table { border-collapse: collapse; width: 100%; font-size: 0.95rem; }
+  main th, main td { border: 1px solid rgb(228 228 231); padding: 0.55rem 0.7rem; text-align: left; }
+  main th { background: rgb(244 244 245); }
+  .meta { color: rgb(113 113 122); font-size: 0.875rem; margin: 0.35rem 0 0.85rem; }
+  ul.tags { list-style: none; padding: 0; margin: 0.75rem 0 1.25rem; display: flex; flex-wrap: wrap; gap: 0.5rem; }
   ul.tags li { margin: 0; }
   ul.tags a {
-    display: inline-block; font-size: 0.8rem; line-height: 1.4; text-decoration: none;
-    padding: 0.1rem 0.55rem; border: 1px solid #d0d0d8; border-radius: 999px; color: #555;
+    display: inline-flex; align-items: center; min-height: 1.75rem; font-size: 0.78rem; line-height: 1;
+    text-decoration: none; padding: 0.35rem 0.65rem; border: 1px solid rgb(186 230 253);
+    border-radius: 999px; color: rgb(3 105 161); background: rgb(240 249 255);
   }
-  ul.tags a:hover { border-color: #0b5fff; color: #0b5fff; }
-  ul.tags .count { color: #999; }
-  ul.index { list-style: none; padding: 0; }
-  ul.index li { margin: 0 0 1.75rem; }
-  ul.index a.title { font-size: 1.15rem; font-weight: 600; text-decoration: none; }
-  ul.index a.title:hover { text-decoration: underline; }
-  ul.index .excerpt { margin: 0.35rem 0 0; color: #444; }
-  form.search { display: flex; gap: 0.5rem; margin: 0 0 2rem; }
-  form.search input[type=\"search\"] {
-    flex: 1; padding: 0.5rem 0.75rem; font-size: 1rem; border: 1px solid #d0d0d8; border-radius: 6px;
-    background: #fff; color: inherit;
+  ul.tags a:hover { border-color: rgb(14 165 233); background: rgb(224 242 254); }
+  ul.tags .count { color: rgb(113 113 122); }
+  ul.index { list-style: none; padding: 0; display: grid; gap: 1.15rem; }
+  ul.index li { margin: 0; padding: 1.1rem 0; border-bottom: 1px solid rgb(228 228 231); }
+  ul.index a.title { color: rgb(24 24 27); font-size: 1.2rem; font-weight: 700; text-decoration: none; }
+  ul.index a.title:hover { color: rgb(2 132 199); }
+  ul.index .excerpt { margin: 0.35rem 0 0; color: rgb(82 82 91); }
+  form.search { display: flex; gap: 0.65rem; margin: 0 0 2rem; }
+  form.search input[type="search"] {
+    flex: 1; min-width: 0; padding: 0.65rem 0.85rem; font-size: 1rem; border: 1px solid rgb(212 212 216);
+    border-radius: 0.5rem; background: #fff; color: inherit;
   }
   form.search button {
-    padding: 0.5rem 1rem; font-size: 1rem; border: 1px solid #0b5fff; border-radius: 6px;
-    background: #0b5fff; color: #fff; cursor: pointer;
+    padding: 0.65rem 1rem; font-size: 1rem; border: 1px solid rgb(2 132 199); border-radius: 0.5rem;
+    background: rgb(2 132 199); color: #fff; cursor: pointer;
   }
-  nav.pager { display: flex; justify-content: space-between; margin-top: 2.5rem; }
-  nav.pager a { text-decoration: none; }
+  nav.pager { display: flex; justify-content: space-between; gap: 1rem; margin-top: 2.5rem; }
+  nav.pager a { text-decoration: none; color: rgb(2 132 199); font-weight: 650; }
   nav.pager .spacer { color: transparent; }
-  .empty { color: #777; font-style: italic; }
-  footer.site { margin-top: 4rem; color: #aaa; font-size: 0.8rem; }
+  .empty { color: rgb(113 113 122); font-style: italic; }
+  @media (prefers-color-scheme: dark) {
+    main h1, main h2, main h3, main h4, main h5, main h6, ul.index a.title { color: rgb(250 250 250); }
+    main a, nav.pager a, ul.index a.title:hover { color: rgb(56 189 248); }
+    main code { background: rgb(39 39 42); color: rgb(228 228 231); }
+    main pre { background: rgb(9 9 11); border-color: rgb(63 63 70); }
+    main blockquote, ul.index .excerpt { color: rgb(212 212 216); }
+    main th, main td, ul.index li { border-color: rgb(63 63 70); }
+    main th { background: rgb(39 39 42); }
+    .meta, .empty { color: rgb(161 161 170); }
+    ul.tags a { color: rgb(125 211 252); background: rgb(8 47 73); border-color: rgb(12 74 110); }
+    ul.tags a:hover { background: rgb(7 89 133); border-color: rgb(14 165 233); }
+    form.search input[type="search"] { background: rgb(24 24 27); border-color: rgb(63 63 70); }
+  }
+"#;
+
+const TAILWIND_CONFIG: &str = r#"
+      tailwind.config = {
+        theme: {
+          extend: {
+            fontFamily: {
+              sans: ['Inter', 'ui-sans-serif', 'system-ui', '-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'sans-serif']
+            }
+          }
+        }
+      }
 "#;
 
 pub fn render_page(meta: HeadMeta<'_>, main: &str) -> String {
     let mut tags = vec![
-        r#"<meta charset=\"utf-8\" />"#.to_string(),
-        r#"<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />"#.to_string(),
+        r#"<meta charset="utf-8" />"#.to_string(),
+        r#"<meta name="viewport" content="width=device-width, initial-scale=1" />"#.to_string(),
         format!(r#"<title>{}</title>"#, escape_html(meta.title)),
         format!(
-            r#"<link rel=\"canonical\" href=\"{}\" />"#,
+            r#"<link rel="canonical" href="{}" />"#,
             escape_html(&meta.canonical_url)
         ),
         format!(
-            r#"<link rel=\"alternate\" type=\"application/atom+xml\" title=\"{}\" href=\"/feed.xml\" />"#,
+            r#"<link rel="alternate" type="application/atom+xml" title="{}" href="/feed.xml" />"#,
+            escape_html(SITE_NAME)
+        ),
+        format!(r#"<meta property="og:type" content="{}" />"#, meta.og_type),
+        format!(
+            r#"<meta property="og:site_name" content="{}" />"#,
             escape_html(SITE_NAME)
         ),
         format!(
-            r#"<meta property=\"og:type\" content=\"{}\" />"#,
-            meta.og_type
-        ),
-        format!(
-            r#"<meta property=\"og:site_name\" content=\"{}\" />"#,
-            escape_html(SITE_NAME)
-        ),
-        format!(
-            r#"<meta property=\"og:title\" content=\"{}\" />"#,
+            r#"<meta property="og:title" content="{}" />"#,
             escape_html(meta.title)
         ),
         format!(
-            r#"<meta property=\"og:url\" content=\"{}\" />"#,
+            r#"<meta property="og:url" content="{}" />"#,
             escape_html(&meta.canonical_url)
         ),
-        r#"<meta name=\"twitter:card\" content=\"summary\" />"#.to_string(),
+        r#"<meta name="twitter:card" content="summary" />"#.to_string(),
         format!(
-            r#"<meta name=\"twitter:title\" content=\"{}\" />"#,
+            r#"<meta name="twitter:title" content="{}" />"#,
             escape_html(meta.title)
         ),
     ];
     if let Some(description) = meta.description {
         tags.push(format!(
-            r#"<meta name=\"description\" content=\"{}\" />"#,
+            r#"<meta name="description" content="{}" />"#,
             escape_html(description)
         ));
         tags.push(format!(
-            r#"<meta property=\"og:description\" content=\"{}\" />"#,
+            r#"<meta property="og:description" content="{}" />"#,
             escape_html(description)
         ));
         tags.push(format!(
-            r#"<meta name=\"twitter:description\" content=\"{}\" />"#,
+            r#"<meta name="twitter:description" content="{}" />"#,
             escape_html(description)
         ));
     }
     if let Some(json_ld) = meta.json_ld {
         tags.push(format!(
-            r#"<script type=\"application/ld+json\">{}</script>"#,
+            r#"<script type="application/ld+json">{}</script>"#,
             json_for_script(json_ld)
         ));
     }
 
     format!(
         r#"<!doctype html>
-<html lang=\"en\">
+<html lang="en">
   <head>
     {}
+    <script>{}</script>
+    <script src="https://cdn.tailwindcss.com"></script>
     <style>{}</style>
   </head>
-  <body>
-    <div class=\"wrap\">
-      <header class=\"site\"><a class=\"brand\" href=\"/\">{}</a></header>
-      <main>
+  <body class="min-h-screen bg-zinc-50 font-sans text-zinc-950 antialiased dark:bg-zinc-950 dark:text-zinc-100">
+    <div class="min-h-screen border-t-4 border-sky-500">
+      <header class="border-b border-zinc-200/80 bg-white/85 backdrop-blur dark:border-zinc-800 dark:bg-zinc-950/80">
+        <div class="mx-auto flex max-w-3xl items-center justify-between px-5 py-5 sm:px-6">
+          <a class="text-lg font-black tracking-normal text-zinc-950 no-underline hover:text-sky-600 dark:text-zinc-50 dark:hover:text-sky-400" href="/">{}</a>
+          <a class="text-sm font-medium text-zinc-500 no-underline hover:text-sky-600 dark:text-zinc-400 dark:hover:text-sky-400" href="/tags">Tags</a>
+        </div>
+      </header>
+      <main class="mx-auto max-w-3xl px-5 py-12 sm:px-6 sm:py-16">
 {}
       </main>
-      <footer class=\"site\">Published with Inkwell.</footer>
+      <footer class="mx-auto max-w-3xl px-5 pb-12 text-sm text-zinc-500 dark:text-zinc-400 sm:px-6">Published with Inkwell.</footer>
     </div>
   </body>
 </html>
 "#,
         tags.join("\n    "),
+        TAILWIND_CONFIG,
         STYLES,
         escape_html(SITE_NAME),
         main
@@ -211,7 +244,7 @@ pub fn derive_excerpt(markdown: &str, max_length: usize) -> String {
 pub fn date_line(label: &str, timestamp: time::OffsetDateTime) -> String {
     let text = crate::domain::document::timestamp::serialize_to_string(&timestamp);
     format!(
-        r#"<time datetime=\"{}\">{} {}</time>"#,
+        r#"<time datetime="{}">{} {}</time>"#,
         text,
         label,
         &text[..10]
@@ -226,14 +259,14 @@ pub fn render_tag_chips(tags: &[String]) -> String {
         .iter()
         .map(|tag| {
             format!(
-                r#"<li><a href=\"/tags/{}\">{}</a></li>"#,
+                r#"<li><a href="/tags/{}">{}</a></li>"#,
                 urlencoding::encode(tag),
                 escape_html(tag)
             )
         })
         .collect::<Vec<_>>()
         .join("");
-    format!(r#"\n            <ul class=\"tags\">{}</ul>"#, items)
+    format!(r#"\n            <ul class="tags">{}</ul>"#, items)
 }
 
 pub fn json_ld_document(

@@ -14,14 +14,14 @@ fn render_doc_list(documents: &[Document]) -> String {
                 String::new()
             } else {
                 format!(
-                    r#"\n            <p class=\"excerpt\">{}</p>"#,
+                    r#"\n            <p class="excerpt">{}</p>"#,
                     escape_html(&excerpt)
                 )
             };
             format!(
                 r#"          <li>
-            <a class=\"title\" href=\"/{}\">{}</a>
-            <div class=\"meta\">{}</div>{}{}
+            <a class="title" href="/{}">{}</a>
+            <div class="meta">{}</div>{}{}
           </li>"#,
                 urlencoding::encode(&doc.slug),
                 escape_html(&doc.title),
@@ -33,7 +33,7 @@ fn render_doc_list(documents: &[Document]) -> String {
         .collect::<Vec<_>>()
         .join("\n");
     format!(
-        r#"<ul class=\"index\">
+        r#"<ul class="index">
 {}
         </ul>"#,
         items
@@ -43,11 +43,22 @@ fn render_doc_list(documents: &[Document]) -> String {
 pub fn render_tag_index_page(tags: &[TagCount], site_url: Option<&str>) -> String {
     let base = normalize_site_url(site_url);
     let body = if tags.is_empty() {
-        r#"<p class=\"empty\">No tags yet.</p>"#.to_string()
+        r#"<p class="empty">No tags yet.</p>"#.to_string()
     } else {
-        let items = tags.iter().map(|tag| format!(r#"          <li><a href=\"/tags/{}\">{} <span class=\"count\">{}</span></a></li>"#, urlencoding::encode(&tag.tag), escape_html(&tag.tag), tag.count)).collect::<Vec<_>>().join("\n");
+        let items = tags
+            .iter()
+            .map(|tag| {
+                format!(
+                    r#"          <li><a href="/tags/{}">{} <span class="count">{}</span></a></li>"#,
+                    urlencoding::encode(&tag.tag),
+                    escape_html(&tag.tag),
+                    tag.count
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
         format!(
-            r#"<ul class=\"tags\">
+            r#"<ul class="tags">
 {}
         </ul>"#,
             items
@@ -74,7 +85,7 @@ pub fn render_tag_page(
 ) -> String {
     let base = normalize_site_url(site_url);
     let list = if documents.is_empty() {
-        r#"<p class=\"empty\">No published documents with this tag.</p>"#.to_string()
+        r#"<p class="empty">No published documents with this tag.</p>"#.to_string()
     } else {
         render_doc_list(documents)
     };
@@ -84,21 +95,21 @@ pub fn render_tag_page(
         } else {
             format!("/tags/{}/page/{}", urlencoding::encode(tag), page - 1)
         };
-        format!(r#"<a rel=\"prev\" href=\"{}\">&larr; Newer</a>"#, href)
+        format!(r#"<a rel="prev" href="{}">&larr; Newer</a>"#, href)
     } else {
-        r#"<span class=\"spacer\">&larr; Newer</span>"#.to_string()
+        r#"<span class="spacer">&larr; Newer</span>"#.to_string()
     };
     let next = if page < total_pages {
         format!(
-            r#"<a rel=\"next\" href=\"/tags/{}/page/{}\">Older &rarr;</a>"#,
+            r#"<a rel="next" href="/tags/{}/page/{}">Older &rarr;</a>"#,
             urlencoding::encode(tag),
             page + 1
         )
     } else {
-        r#"<span class=\"spacer\">Older &rarr;</span>"#.to_string()
+        r#"<span class="spacer">Older &rarr;</span>"#.to_string()
     };
     let pager = if total_pages > 1 {
-        format!(r#"\n        <nav class=\"pager\">{}{}</nav>"#, prev, next)
+        format!(r#"\n        <nav class="pager">{}{}</nav>"#, prev, next)
     } else {
         String::new()
     };

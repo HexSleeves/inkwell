@@ -14,14 +14,14 @@ fn render_doc_list(documents: &[Document]) -> String {
                 String::new()
             } else {
                 format!(
-                    r#"\n            <p class=\"excerpt\">{}</p>"#,
+                    r#"\n            <p class="excerpt">{}</p>"#,
                     escape_html(&excerpt)
                 )
             };
             format!(
                 r#"          <li>
-            <a class=\"title\" href=\"/{}\">{}</a>
-            <div class=\"meta\">{}</div>{}{}
+            <a class="title" href="/{}">{}</a>
+            <div class="meta">{}</div>{}{}
           </li>"#,
                 urlencoding::encode(&doc.slug),
                 escape_html(&doc.title),
@@ -33,7 +33,7 @@ fn render_doc_list(documents: &[Document]) -> String {
         .collect::<Vec<_>>()
         .join("\n");
     format!(
-        r#"<ul class=\"index\">
+        r#"<ul class="index">
 {}
         </ul>"#,
         items
@@ -50,9 +50,9 @@ pub fn render_search_page(
     let base = normalize_site_url(site_url);
     let trimmed = query.trim();
     let form = format!(
-        r#"<form class=\"search\" action=\"/search\" method=\"get\" role=\"search\">
-          <input type=\"search\" name=\"q\" value=\"{}\" placeholder=\"Search published documents...\" aria-label=\"Search\" />
-          <button type=\"submit\">Search</button>
+        r#"<form class="search" action="/search" method="get" role="search">
+          <input type="search" name="q" value="{}" placeholder="Search published documents..." aria-label="Search" />
+          <button type="submit">Search</button>
         </form>"#,
         escape_html(query)
     );
@@ -60,7 +60,7 @@ pub fn render_search_page(
         String::new()
     } else if documents.is_empty() {
         format!(
-            r#"<p class=\"empty\">No results for &ldquo;{}&rdquo;.</p>"#,
+            r#"<p class="empty">No results for &ldquo;{}&rdquo;.</p>"#,
             escape_html(trimmed)
         )
     } else {
@@ -75,20 +75,20 @@ pub fn render_search_page(
                         page - 1
                     )
                 };
-                format!(r#"<a rel=\"prev\" href=\"{}\">&larr; Newer</a>"#, href)
+                format!(r#"<a rel="prev" href="{}">&larr; Newer</a>"#, href)
             } else {
-                r#"<span class=\"spacer\">&larr; Newer</span>"#.to_string()
+                r#"<span class="spacer">&larr; Newer</span>"#.to_string()
             };
             let next = if page < total_pages {
                 format!(
-                    r#"<a rel=\"next\" href=\"/search?q={}&page={}\">Older &rarr;</a>"#,
+                    r#"<a rel="next" href="/search?q={}&page={}">Older &rarr;</a>"#,
                     urlencoding::encode(trimmed),
                     page + 1
                 )
             } else {
-                r#"<span class=\"spacer\">Older &rarr;</span>"#.to_string()
+                r#"<span class="spacer">Older &rarr;</span>"#.to_string()
             };
-            format!(r#"\n        <nav class=\"pager\">{}{}</nav>"#, prev, next)
+            format!(r#"\n        <nav class="pager">{}{}</nav>"#, prev, next)
         } else {
             String::new()
         };
