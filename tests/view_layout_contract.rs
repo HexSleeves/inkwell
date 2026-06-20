@@ -1,5 +1,24 @@
-use inkwell::views::layout::{HeadMeta, render_page};
+use inkwell::views::layout::{HeadMeta, derive_excerpt, render_page};
 use serde_json::json;
+
+#[test]
+fn derive_excerpt_truncates_on_char_boundary_without_panicking() {
+    // Place a multibyte char straddling byte index 160 so a raw byte slice
+    // (&text[..160]) would panic mid-codepoint.
+    let body = format!("{}{}", "a".repeat(159), "😀 trailing words here");
+    let excerpt = derive_excerpt(&body, 160);
+    assert!(excerpt.ends_with('…'));
+    assert!(excerpt.len() <= body.len());
+}
+
+#[test]
+fn derive_excerpt_trims_ascii_on_word_boundary() {
+    let body = format!("{} tail", "word ".repeat(40));
+    let excerpt = derive_excerpt(&body, 160);
+    assert!(excerpt.ends_with('…'));
+    // Word-boundary trim: no trailing partial token before the ellipsis.
+    assert!(!excerpt.contains("wor…"));
+}
 
 fn browser_runtime_src() -> String {
     ["https://cdn.", "tailwind", "css.com"].concat()

@@ -293,7 +293,11 @@ pub fn derive_excerpt(markdown: &str, max_length: usize) -> String {
     if text.len() <= max_length {
         return text;
     }
-    let clipped = &text[..max_length];
+    let mut end = max_length;
+    while end > 0 && !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    let clipped = &text[..end];
     let clipped = clipped
         .rsplit_once(' ')
         .map(|(head, _)| head)
