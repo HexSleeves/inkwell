@@ -33,6 +33,12 @@ cargo run --bin inkwell -- db migrate
 cargo run --bin inkwell -- serve
 ```
 
+`cargo test --all` stays runnable without Postgres, but the database-backed
+contract tests are skipped unless `DATABASE_URL` is set. Export
+`DATABASE_URL` before local verification when you want the API/SQL/migration
+path covered, or set `INKWELL_REQUIRE_DB_TESTS=1` to make missing database
+configuration fail fast.
+
 ## Docker Compose
 
 ```bash

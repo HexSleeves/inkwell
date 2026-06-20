@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use inkwell::config::Config;
 use inkwell::db::migrations;
 use inkwell::db::pool::create_pool;
@@ -8,6 +8,12 @@ use std::sync::Arc;
 
 pub async fn maybe_pool() -> Result<Option<PgPool>> {
     let Ok(database_url) = std::env::var("DATABASE_URL") else {
+        if std::env::var("INKWELL_REQUIRE_DB_TESTS").as_deref() == Ok("1") {
+            return Err(anyhow!(
+                "DATABASE_URL is required for database-backed contract tests when INKWELL_REQUIRE_DB_TESTS=1"
+            ));
+        }
+        eprintln!("Skipping database-backed contract tests: set DATABASE_URL to run them locally.");
         return Ok(None);
     };
     let pool = create_pool(&database_url)?;
