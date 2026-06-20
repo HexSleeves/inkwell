@@ -44,7 +44,11 @@ pub async fn document_page(
             &headers,
             "document",
             StatusCode::OK,
-            render_document_page(&document, state.config.site_url.as_deref(), csp_nonce.as_str()),
+            render_document_page(
+                &document,
+                state.config.site_url.as_deref(),
+                csp_nonce.as_str(),
+            ),
         ),
         Ok(None) => (
             StatusCode::NOT_FOUND,

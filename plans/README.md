@@ -18,12 +18,12 @@ Removed stale TypeScript-era plan files: 002, 003, 005, 008, 009, 011, and 013.
 
 | Plan | Title | Category | Priority | Effort | Depends on | Drift vs HEAD | Status |
 |------|-------|----------|----------|--------|------------|---------------|--------|
-| 016 | Propagate database errors on public read surfaces | bug/observability | P1 | M | none | current @8bcd1ea | TODO |
+| 016 | Propagate database errors on public read surfaces | bug/observability | P1 | M | none | current @8bcd1ea | DONE |
 | 017 | Remove the Tailwind browser runtime from rendered pages | security/perf | P1 | S | none | current @8bcd1ea | DONE |
 | 018 | Make database-backed tests explicit instead of silently skipped | tests/DX | P2 | S | none | current @8bcd1ea | DONE |
 | 019 | Bound sitemap generation before it becomes an unbounded read path | perf/SEO | P2 | M | none | current @8bcd1ea | DONE |
 | 001 | Add Postgres index for the hot status-ordered list query | perf/migration | P2 | S | none | rewritten @8bcd1ea for Rust | DONE |
-| 004 | Make Docker Compose require an explicit API key | security | P1 | S | none | rewritten @8bcd1ea for Rust | TODO |
+| 004 | Make Docker Compose require an explicit API key | security | P1 | S | none | rewritten @8bcd1ea for Rust | DONE |
 | 006 | Add committed `.env.example` | dx | P2 | S | none | rewritten @8bcd1ea for Rust | DONE |
 | 007 | ETag + Cache-Control + conditional GET (304) on HTML/XML | perf | P3 | M | 016; coordinate 019 | rewritten @8bcd1ea for Rust | DONE |
 | 010 | Resolve `get_document_by_id` asymmetry | tech-debt | P3 | S | none | rewritten @8bcd1ea for Rust | DONE |
