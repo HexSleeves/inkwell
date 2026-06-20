@@ -212,6 +212,45 @@ pub async fn list_published_tags(pool: &PgPool) -> Result<Vec<TagCount>, sqlx::E
     .await
 }
 
+pub async fn list_published_tags_page(
+    pool: &PgPool,
+    limit: u32,
+    offset: u32,
+) -> Result<Vec<TagCount>, sqlx::Error> {
+    sqlx::query_as::<Postgres, TagCount>(
+        r#"
+        SELECT tag, count(*)::bigint AS count
+        FROM documents
+        CROSS JOIN LATERAL unnest(tags) AS tag
+        WHERE status = 'published'
+        GROUP BY tag
+        ORDER BY count DESC, tag ASC
+        LIMIT $1 OFFSET $2
+        "#,
+    )
+    .bind(limit as i64)
+    .bind(offset as i64)
+    .fetch_all(pool)
+    .await
+}
+
+pub async fn count_published_tags(pool: &PgPool) -> Result<i64, sqlx::Error> {
+    sqlx::query_scalar::<Postgres, i64>(
+        r#"
+        SELECT count(*)::bigint
+        FROM (
+            SELECT tag
+            FROM documents
+            CROSS JOIN LATERAL unnest(tags) AS tag
+            WHERE status = 'published'
+            GROUP BY tag
+        ) AS published_tags
+        "#,
+    )
+    .fetch_one(pool)
+    .await
+}
+
 pub async fn search_published_documents(
     pool: &PgPool,
     query: &str,

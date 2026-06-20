@@ -20,6 +20,12 @@ pub fn build_router(config: Arc<Config>, pool: sqlx::PgPool) -> Router {
         .route("/documents/{slug}/unpublish", any(api::unpublish_document))
         .route("/feed.xml", get(feed::feed))
         .route("/sitemap.xml", get(sitemap::sitemap))
+        .route("/sitemap-static.xml", get(sitemap::sitemap_static))
+        .route(
+            "/sitemaps/documents/{page}",
+            get(sitemap::sitemap_documents_page),
+        )
+        .route("/sitemaps/tags/{page}", get(sitemap::sitemap_tags_page))
         .route("/search", get(search::search))
         .route("/tags", get(pages::tags_index))
         .route("/tags/{tag}", get(pages::tag_page))
