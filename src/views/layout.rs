@@ -52,6 +52,57 @@ const STYLES: &str = r#"
   :root { color-scheme: light dark; }
   * { box-sizing: border-box; }
   body { margin: 0; }
+  .site-body {
+    min-height: 100vh;
+    background: rgb(250 250 250);
+    color: rgb(9 9 11);
+    font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+  .site-shell { min-height: 100vh; border-top: 4px solid rgb(14 165 233); }
+  .site-header {
+    border-bottom: 1px solid rgb(228 228 231 / 0.8);
+    background: rgb(255 255 255 / 0.85);
+    backdrop-filter: blur(12px);
+  }
+  .site-header-inner, .site-main, .site-footer {
+    width: min(100%, 48rem);
+    margin: 0 auto;
+    padding-left: 1.25rem;
+    padding-right: 1.25rem;
+  }
+  .site-header-inner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    padding-top: 1.25rem;
+    padding-bottom: 1.25rem;
+  }
+  .site-brand, .site-nav { text-decoration: none; }
+  .site-brand {
+    color: rgb(9 9 11);
+    font-size: 1.125rem;
+    font-weight: 900;
+    letter-spacing: 0;
+  }
+  .site-brand:hover { color: rgb(2 132 199); }
+  .site-nav {
+    color: rgb(113 113 122);
+    font-size: 0.875rem;
+    font-weight: 500;
+  }
+  .site-nav:hover { color: rgb(2 132 199); }
+  .site-main {
+    padding-top: 3rem;
+    padding-bottom: 4rem;
+  }
+  .site-footer {
+    padding-bottom: 3rem;
+    color: rgb(113 113 122);
+    font-size: 0.875rem;
+  }
   main { line-height: 1.7; }
   main h1, main h2, main h3, main h4, main h5, main h6 {
     color: rgb(24 24 27); font-weight: 750; line-height: 1.15; letter-spacing: 0;
@@ -104,7 +155,25 @@ const STYLES: &str = r#"
   nav.pager a { text-decoration: none; color: rgb(2 132 199); font-weight: 650; }
   nav.pager .spacer { color: transparent; }
   .empty { color: rgb(113 113 122); font-style: italic; }
+  @media (min-width: 640px) {
+    .site-header-inner, .site-main, .site-footer {
+      padding-left: 1.5rem;
+      padding-right: 1.5rem;
+    }
+    .site-main {
+      padding-top: 4rem;
+      padding-bottom: 4rem;
+    }
+  }
   @media (prefers-color-scheme: dark) {
+    .site-body { background: rgb(9 9 11); color: rgb(244 244 245); }
+    .site-header {
+      border-bottom-color: rgb(39 39 42);
+      background: rgb(9 9 11 / 0.8);
+    }
+    .site-brand { color: rgb(250 250 250); }
+    .site-brand:hover, .site-nav:hover { color: rgb(56 189 248); }
+    .site-nav, .site-footer { color: rgb(161 161 170); }
     main h1, main h2, main h3, main h4, main h5, main h6, ul.index a.title { color: rgb(250 250 250); }
     main a, nav.pager a, ul.index a.title:hover { color: rgb(56 189 248); }
     main code { background: rgb(39 39 42); color: rgb(228 228 231); }
@@ -117,18 +186,6 @@ const STYLES: &str = r#"
     ul.tags a:hover { background: rgb(7 89 133); border-color: rgb(14 165 233); }
     form.search input[type="search"] { background: rgb(24 24 27); border-color: rgb(63 63 70); }
   }
-"#;
-
-const TAILWIND_CONFIG: &str = r#"
-      tailwind.config = {
-        theme: {
-          extend: {
-            fontFamily: {
-              sans: ['Inter', 'ui-sans-serif', 'system-ui', '-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'sans-serif']
-            }
-          }
-        }
-      }
 "#;
 
 pub fn render_page(meta: HeadMeta<'_>, main: &str) -> String {
@@ -189,28 +246,25 @@ pub fn render_page(meta: HeadMeta<'_>, main: &str) -> String {
 <html lang="en">
   <head>
     {}
-    <script>{}</script>
-    <script src="https://cdn.tailwindcss.com"></script>
     <style>{}</style>
   </head>
-  <body class="min-h-screen bg-zinc-50 font-sans text-zinc-950 antialiased dark:bg-zinc-950 dark:text-zinc-100">
-    <div class="min-h-screen border-t-4 border-sky-500">
-      <header class="border-b border-zinc-200/80 bg-white/85 backdrop-blur dark:border-zinc-800 dark:bg-zinc-950/80">
-        <div class="mx-auto flex max-w-3xl items-center justify-between px-5 py-5 sm:px-6">
-          <a class="text-lg font-black tracking-normal text-zinc-950 no-underline hover:text-sky-600 dark:text-zinc-50 dark:hover:text-sky-400" href="/">{}</a>
-          <a class="text-sm font-medium text-zinc-500 no-underline hover:text-sky-600 dark:text-zinc-400 dark:hover:text-sky-400" href="/tags">Tags</a>
+  <body class="site-body">
+    <div class="site-shell">
+      <header class="site-header">
+        <div class="site-header-inner">
+          <a class="site-brand" href="/">{}</a>
+          <a class="site-nav" href="/tags">Tags</a>
         </div>
       </header>
-      <main class="mx-auto max-w-3xl px-5 py-12 sm:px-6 sm:py-16">
+      <main class="site-main">
 {}
       </main>
-      <footer class="mx-auto max-w-3xl px-5 pb-12 text-sm text-zinc-500 dark:text-zinc-400 sm:px-6">Published with Inkwell.</footer>
+      <footer class="site-footer">Published with Inkwell.</footer>
     </div>
   </body>
 </html>
 "#,
         tags.join("\n    "),
-        TAILWIND_CONFIG,
         STYLES,
         escape_html(SITE_NAME),
         main
