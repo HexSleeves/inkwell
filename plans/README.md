@@ -31,7 +31,7 @@ Removed stale TypeScript-era plan files: 002, 003, 005, 008, 009, 011, and 013.
 | 014 | Design spike: first-class authoring CLI | direction | P2 | M | none | rewritten @8bcd1ea for Rust | DONE |
 | 015 | Design spike: scoped author tokens + audit | direction/security | P3 | L | 004 | rewritten @8bcd1ea for Rust | DONE |
 | 020 | `derive_excerpt` truncates on a char boundary (UTF-8 panic fix) | bug | P1 | S | none | new @c7b0a46 | DONE |
-| 021 | Consolidate the duplicated document-list rendering | tech-debt | P3 | S | none (coord. 020) | new @c7b0a46 | TODO |
+| 021 | Consolidate the duplicated document-list rendering | tech-debt | P3 | S | none (coord. 020) | new @c7b0a46 | DONE |
 | 022 | Redact the API key in `Config`'s `Debug` impl | security | P3 | S | none | new @c7b0a46 | DONE |
 | 002 | Enforce coverage gate in GitHub Actions CI | dx | - | S | - | obsolete Node/Vitest coverage plan | REJECTED: remove |
 | 003 | Fix README export-surface + env-var drift | docs | - | S | - | obsolete package-export docs plan | REJECTED: remove |

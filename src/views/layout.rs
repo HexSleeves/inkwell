@@ -1,3 +1,4 @@
+use crate::domain::document::Document;
 use serde_json::json;
 
 pub const SITE_NAME: &str = "Inkwell";
@@ -303,6 +304,43 @@ pub fn derive_excerpt(markdown: &str, max_length: usize) -> String {
         .map(|(head, _)| head)
         .unwrap_or(clipped);
     format!("{}…", clipped.trim_end())
+}
+
+/// Render the shared `<ul class="index">` document list used by the index,
+/// tag, and search views. Callers gate the empty state themselves.
+pub(crate) fn render_document_list(documents: &[Document]) -> String {
+    let items = documents
+        .iter()
+        .map(|doc| {
+            let excerpt = derive_excerpt(doc.body_markdown(), 160);
+            let excerpt_html = if excerpt.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    r#"\n            <p class="excerpt">{}</p>"#,
+                    escape_html(&excerpt)
+                )
+            };
+            format!(
+                r#"          <li>
+            <a class="title" href="/{}">{}</a>
+            <div class="meta">{}</div>{}{}
+          </li>"#,
+                urlencoding::encode(&doc.slug),
+                escape_html(&doc.title),
+                date_line("Published", doc.created_at),
+                excerpt_html,
+                render_tag_chips(&doc.tags)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!(
+        r#"<ul class="index">
+{}
+        </ul>"#,
+        items
+    )
 }
 
 pub fn date_line(label: &str, timestamp: time::OffsetDateTime) -> String {
