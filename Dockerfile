@@ -1,5 +1,9 @@
 # syntax=docker/dockerfile:1
-FROM lukemathwalker/cargo-chef:latest-rust-1 AS chef
+# Pin the builder to the bookworm-based chef image so its glibc matches the
+# `debian:bookworm-slim` runtime below. The default `latest-rust-1` tracks the
+# newest Debian and links a newer glibc (e.g. GLIBC_2.38), which the bookworm
+# runtime lacks — the binary then fails at startup with "GLIBC_x not found".
+FROM lukemathwalker/cargo-chef:latest-rust-1-bookworm AS chef
 WORKDIR /app
 
 FROM chef AS planner

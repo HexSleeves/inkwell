@@ -48,6 +48,10 @@ docker compose up --build
 
 Set `INKWELL_API_KEY` in your shell or `.env` before starting Compose; the app refuses to start until it is set. The app runs `inkwell db migrate && inkwell serve` once Postgres is healthy.
 
+## Staging
+
+See [`docs/STAGING.md`](docs/STAGING.md) for the reproducible staging deploy: secret handling, deploy/redeploy/teardown commands, and the release smoke check.
+
 ## HTTP surface
 
 Preserved routes:
