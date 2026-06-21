@@ -1,3 +1,7 @@
+// Shared test helpers: not every integration-test binary uses every helper,
+// so silence dead-code warnings for the ones a given binary skips.
+#![allow(dead_code)]
+
 use anyhow::{Result, anyhow};
 use inkwell::config::Config;
 use inkwell::db::migrations;

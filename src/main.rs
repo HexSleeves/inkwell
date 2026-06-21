@@ -5,6 +5,7 @@ use anyhow::Result;
 use tokio::net::TcpListener;
 use tracing::info;
 
+use inkwell::cli::author;
 use inkwell::cli::migrate::{db_migrate, db_rollback, db_status};
 use inkwell::config::Config;
 use inkwell::db::pool::create_pool;
@@ -41,7 +42,10 @@ async fn main() -> Result<()> {
             }
             _ => anyhow::bail!("usage: inkwell db <migrate|rollback [n]|status>"),
         },
-        _ => anyhow::bail!("usage: inkwell <serve|db migrate|db rollback [n]|db status>"),
+        Some("author") => author::run(args).await,
+        _ => anyhow::bail!(
+            "usage: inkwell <serve|db migrate|db rollback [n]|db status|author <new|push|publish|unpublish>>"
+        ),
     }
 }
 

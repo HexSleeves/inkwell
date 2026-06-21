@@ -18,6 +18,7 @@ An open, API-first Markdown publishing platform implemented as a Rust service.
 - `HOST` default `0.0.0.0`
 - `INKWELL_API_KEY` optional but writes fail closed when unset
 - `INKWELL_SITE_URL` optional, used for absolute feed/sitemap/page metadata URLs
+- `INKWELL_API_URL` optional, base URL the `inkwell author` CLI targets (defaults to `http://HOST:PORT`)
 
 ## Run
 
@@ -74,3 +75,60 @@ Preserved routes:
 - `GET /search`
 - `GET /feed.xml`
 - `GET /sitemap.xml`
+
+## Authoring
+
+The `inkwell author` subcommands are the first-party way to write content. They
+speak the same authenticated HTTP write API above (never the database directly),
+so they work against any deployment — local or remote.
+
+Configuration is shared with the server:
+
+- `INKWELL_API_KEY` — sent as the `X-API-Key` header on every write. Required.
+- `INKWELL_API_URL` — the server base URL (e.g. `https://blog.example.com`).
+  Falls back to `http://HOST:PORT`. Override per-invocation with `--server <url>`.
+
+Documents are plain Markdown files with a small YAML front matter block:
+
+```md
+---
+title: Hello World
+slug: hello-world
+status: draft
+tags:
+  - rust
+  - notes
+---
+
+# Hello World
+
+Body Markdown lives here.
+```
+
+`title` is required. `slug` is optional and defaults to the server's
+slugification of the title. `status` is advisory metadata — publishing always
+happens through an explicit command, never a file write. The body is capped at
+256 KiB and rejected client-side before any request is sent.
+
+Typical workflow:
+
+```bash
+export INKWELL_API_KEY=your-write-key
+export INKWELL_API_URL=https://blog.example.com   # or use --server
+
+# Scaffold a new Markdown file (writes ./hello-world.md):
+inkwell author new "Hello World" --tag rust --tag notes
+
+# Create or update the document from the file (POST on first push, PUT after):
+inkwell author push hello-world.md
+
+# Publish it so it appears in the public list and pages:
+inkwell author publish hello-world
+
+# Take it back to draft:
+inkwell author unpublish hello-world
+```
+
+`push` decides between create and update by probing the slug with a `GET`. All
+commands print a one-line result and fail with a clear, non-panicking message on
+`401` (bad key), `404` (missing slug), oversize bodies, or validation errors.

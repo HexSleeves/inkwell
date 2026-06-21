@@ -1,6 +1,11 @@
 # ADR 0008: First-Class Authoring CLI
 
-Status: proposed
+Status: accepted (Option A)
+
+> Accepted (Option A) and implemented in [CYP-38](/CYP/issues/CYP-38): the
+> `inkwell` binary gained an `author` subcommand group (`new`, `push`,
+> `publish`, `unpublish`) that speaks the existing authenticated HTTP write API.
+> See the README "Authoring" section for the workflow.
 
 ## Context
 
