@@ -7,7 +7,7 @@ pub struct MigrationDef {
     pub down_sql: &'static str,
 }
 
-pub const MIGRATIONS: [MigrationDef; 4] = [
+pub const MIGRATIONS: [MigrationDef; 6] = [
     MigrationDef {
         version: 1,
         description: "create_documents",
@@ -27,6 +27,16 @@ pub const MIGRATIONS: [MigrationDef; 4] = [
         version: 4,
         description: "add_documents_list_index",
         down_sql: "DROP INDEX IF EXISTS documents_status_created_at_id_idx;",
+    },
+    MigrationDef {
+        version: 5,
+        description: "create_links",
+        down_sql: "DROP TABLE IF EXISTS links;",
+    },
+    MigrationDef {
+        version: 6,
+        description: "add_document_version",
+        down_sql: "ALTER TABLE documents DROP COLUMN IF EXISTS version;",
     },
 ];
 
@@ -98,5 +108,58 @@ mod tests {
                 .expect("migration 0004 should exist"),
             "CREATE INDEX IF NOT EXISTS documents_status_created_at_id_idx\n    ON documents (status, created_at DESC, id DESC);\n"
         );
+    }
+
+    #[test]
+    fn includes_create_links_migration_definition() {
+        let migration = MIGRATIONS
+            .iter()
+            .find(|migration| migration.version == 5)
+            .expect("version 5 migration definition should exist");
+
+        assert_eq!(migration.description, "create_links");
+        assert_eq!(migration.down_sql, "DROP TABLE IF EXISTS links;");
+
+        let sql = fs::read_to_string("migrations/0005_create_links.sql")
+            .expect("migration 0005 should exist");
+        assert!(sql.contains("CREATE TABLE IF NOT EXISTS links"));
+        assert!(
+            sql.contains(
+                "source_note_id uuid NOT NULL REFERENCES documents (id) ON DELETE CASCADE"
+            )
+        );
+        assert!(sql.contains("target_kind IN ('internal', 'external')"));
+        assert!(sql.contains("link_type IN ('wikilink', 'embed')"));
+        assert!(sql.contains("links_target_note_id_idx"));
+        assert!(sql.contains("links_unresolved_target_text_idx"));
+    }
+
+    #[test]
+    fn includes_add_document_version_migration_definition() {
+        let migration = MIGRATIONS
+            .iter()
+            .find(|migration| migration.version == 6)
+            .expect("version 6 migration definition should exist");
+
+        assert_eq!(migration.description, "add_document_version");
+        assert_eq!(
+            migration.down_sql,
+            "ALTER TABLE documents DROP COLUMN IF EXISTS version;"
+        );
+
+        let sql = fs::read_to_string("migrations/0006_add_document_version.sql")
+            .expect("migration 0006 should exist");
+        assert!(sql.contains("ADD COLUMN IF NOT EXISTS version bigint NOT NULL DEFAULT 1"));
+    }
+
+    #[test]
+    fn migration_versions_are_contiguous_and_match_count() {
+        for (index, migration) in MIGRATIONS.iter().enumerate() {
+            assert_eq!(
+                migration.version,
+                (index as i64) + 1,
+                "migration versions must be contiguous starting at 1"
+            );
+        }
     }
 }
