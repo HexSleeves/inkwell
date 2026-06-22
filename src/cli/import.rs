@@ -28,20 +28,20 @@ const USAGE: &str = "usage: inkwell import <vault> [--server <url>] [--dry-run]"
 /// Dispatch `inkwell import <vault>`.
 pub async fn run(args: impl Iterator<Item = String>) -> Result<()> {
     let opts = ImportOptions::parse(args)?;
-    let notes =
+    let scan =
         collect_notes(&opts.vault).with_context(|| format!("scanning vault {:?}", opts.vault))?;
 
-    if notes.is_empty() {
+    if scan.notes.is_empty() && scan.load_failures.is_empty() {
         println!("No Markdown notes found under {:?}.", opts.vault);
         return Ok(());
     }
 
     if opts.dry_run {
-        return report_dry_run(&notes);
+        return report_dry_run(&scan);
     }
 
     let client = build_client(opts.server.as_deref())?;
-    push_notes(&client, &notes).await
+    push_notes(&client, &scan).await
 }
 
 /// Parsed `inkwell import` invocation.
@@ -98,22 +98,51 @@ struct Note {
     document: ParsedDocument,
 }
 
+/// The outcome of scanning a vault: the notes that loaded cleanly plus any
+/// per-file failures (unreadable file, malformed front matter, underivable
+/// slug) collected so the run can continue and report them in the summary.
+#[derive(Debug, Default)]
+struct Scan {
+    notes: Vec<Note>,
+    load_failures: Vec<(PathBuf, anyhow::Error)>,
+}
+
 /// Recursively collect every Markdown note under `vault`, skipping dotfiles and
 /// dot-directories (`.obsidian`, `.trash`, ...). Notes are returned sorted by
 /// path so a run is deterministic.
-fn collect_notes(vault: &Path) -> Result<Vec<Note>> {
+///
+/// Per-file read/parse problems do **not** abort the scan: they are collected
+/// into [`Scan::load_failures`] so the import continues over the remaining
+/// notes and reports them in the created/updated/failed summary, matching the
+/// command's continue-on-error contract. Only an error enumerating the vault
+/// directories themselves (the caller cannot see what to import) is fatal.
+fn collect_notes(vault: &Path) -> Result<Scan> {
     let mut paths = Vec::new();
     walk_markdown(vault, &mut paths)?;
     paths.sort();
 
-    let mut notes = Vec::with_capacity(paths.len());
+    let mut scan = Scan {
+        notes: Vec::with_capacity(paths.len()),
+        load_failures: Vec::new(),
+    };
     for path in paths {
-        let source = std::fs::read_to_string(&path)
-            .with_context(|| format!("reading {}", path.display()))?;
-        let document = derive_document(&path, &source)?;
-        notes.push(Note { path, document });
+        match load_note(&path) {
+            Ok(note) => scan.notes.push(note),
+            Err(err) => scan.load_failures.push((path, err)),
+        }
     }
-    Ok(notes)
+    Ok(scan)
+}
+
+/// Read and derive a single note, mapping any failure to a contextful error.
+fn load_note(path: &Path) -> Result<Note> {
+    let source =
+        std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    let document = derive_document(path, &source)?;
+    Ok(Note {
+        path: path.to_path_buf(),
+        document,
+    })
 }
 
 /// Append the `*.md` files under `dir` to `out`, recursing into subdirectories.
@@ -200,10 +229,11 @@ fn file_stem(path: &Path) -> Option<String> {
 }
 
 /// Report what a real run would push, sending nothing. Surfaces parse-time
-/// problems (e.g. a derivable slug) so authors can fix them before going live.
-fn report_dry_run(notes: &[Note]) -> Result<()> {
-    println!("Dry run: {} note(s) would be pushed.", notes.len());
-    for note in notes {
+/// problems (e.g. a derivable slug) so authors can fix them before going live,
+/// including notes that failed to even load during the scan.
+fn report_dry_run(scan: &Scan) -> Result<()> {
+    println!("Dry run: {} note(s) would be pushed.", scan.notes.len());
+    for note in &scan.notes {
         match note.document.to_input() {
             Ok(input) => println!(
                 "  would push {} -> slug {:?} (title {:?})",
@@ -214,18 +244,30 @@ fn report_dry_run(notes: &[Note]) -> Result<()> {
             Err(err) => println!("  would FAIL {} -> {err}", note.path.display()),
         }
     }
+    for (path, err) in &scan.load_failures {
+        println!("  would FAIL {} -> {err}", path.display());
+    }
     Ok(())
 }
 
 /// Push every note, continuing past per-file failures and collecting them, then
 /// print a `N created, M updated, K failed` summary. Returns an error only when
 /// at least one note failed, so the exit status reflects the outcome.
-async fn push_notes(client: &InkwellClient, notes: &[Note]) -> Result<()> {
+///
+/// Notes that never loaded (collected in [`Scan::load_failures`] during the
+/// scan) are folded into the failure count and reported alongside push
+/// failures, so an unreadable or malformed note does not silently vanish.
+async fn push_notes(client: &InkwellClient, scan: &Scan) -> Result<()> {
     let mut created = 0usize;
     let mut updated = 0usize;
     let mut failures: Vec<(PathBuf, anyhow::Error)> = Vec::new();
 
-    for note in notes {
+    for (path, err) in &scan.load_failures {
+        eprintln!("Failed {}: {err}", path.display());
+        failures.push((path.clone(), anyhow!("{err}")));
+    }
+
+    for note in &scan.notes {
         match push_one(client, note).await {
             Ok(PushAction::Created) => {
                 created += 1;
@@ -366,7 +408,13 @@ mod tests {
         // A non-Markdown file that MUST be ignored.
         vault.write("notes/image-note.txt", "not markdown\n");
 
-        let notes = collect_notes(&vault.path).unwrap();
+        let scan = collect_notes(&vault.path).unwrap();
+        let notes = scan.notes;
+        assert!(
+            scan.load_failures.is_empty(),
+            "unexpected load failures: {:?}",
+            scan.load_failures
+        );
 
         // Only the two real notes survive; sorted by path.
         assert_eq!(notes.len(), 2, "got: {notes:?}");
@@ -447,8 +495,37 @@ mod tests {
         let vault = TempDir::new("dry");
         vault.write("a.md", "Body A\n");
         vault.write("b.md", "---\ntitle: B\nslug: b\n---\nBody B\n");
-        let notes = collect_notes(&vault.path).unwrap();
+        let scan = collect_notes(&vault.path).unwrap();
         // Sending nothing, this must succeed and touch no network.
-        assert!(report_dry_run(&notes).is_ok());
+        assert!(report_dry_run(&scan).is_ok());
+    }
+
+    #[test]
+    fn scan_collects_per_file_failures_instead_of_aborting() {
+        let vault = TempDir::new("collect-failures");
+        // A perfectly good note.
+        vault.write("good.md", "Body of a good note.\n");
+        // A note whose filename slugifies to nothing AND has no front matter,
+        // so `derive_document` fails — but the scan must keep the good note and
+        // record this as a load failure rather than aborting the whole import.
+        vault.write("---.md", "Body with an unslugifiable name.\n");
+
+        let scan = collect_notes(&vault.path).unwrap();
+
+        assert_eq!(scan.notes.len(), 1, "good note must survive: {scan:?}");
+        assert_eq!(scan.notes[0].document.title, "good");
+        assert_eq!(
+            scan.load_failures.len(),
+            1,
+            "the bad note must be recorded as a failure: {scan:?}"
+        );
+        assert!(
+            scan.load_failures[0].0.ends_with("---.md"),
+            "failure path should point at the bad note: {scan:?}"
+        );
+
+        // A dry run over a scan with load failures still succeeds (it only
+        // reports), and surfaces the failed note.
+        assert!(report_dry_run(&scan).is_ok());
     }
 }
