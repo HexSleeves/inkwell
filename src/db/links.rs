@@ -228,6 +228,76 @@ pub async fn replace_source_edges(
     Ok(())
 }
 
+/// An inbound edge to a note: another note (`source_slug` / `source_title`) that
+/// links to it, plus the `[[...]]` context the link appeared in. Produced by
+/// [`backlinks`] for the "linked from" surfaces (HTML panel + JSON).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Backlink {
+    pub source_slug: String,
+    pub source_title: String,
+    pub context_snippet: Option<String>,
+}
+
+/// Notes that link *to* `target_note_id` — the "linked from" set — filtered by
+/// `visibility` so a draft source is NEVER exposed to a public caller (the
+/// no-draft-leak invariant). Only resolved internal edges count; a source that
+/// links more than once appears once (`DISTINCT ON` the source slug), ordered by
+/// slug for deterministic output. Mirrors the two-arm `status_filter()` pattern
+/// used by [`resolve_existing_slugs`]/[`resolve_slug_ids`]: `Public` ⇒ the source
+/// document must be `published`; `All` ⇒ no status restriction (owner scope).
+pub async fn backlinks(
+    pool: &PgPool,
+    target_note_id: Uuid,
+    visibility: Visibility,
+) -> Result<Vec<Backlink>, sqlx::Error> {
+    let rows: Vec<(String, String, Option<String>)> = match visibility.status_filter() {
+        Some(status) => {
+            sqlx::query_as::<Postgres, (String, String, Option<String>)>(
+                r#"
+                SELECT DISTINCT ON (documents.slug)
+                       documents.slug, documents.title, links.context_snippet
+                FROM links
+                JOIN documents ON documents.id = links.source_note_id
+                WHERE links.target_note_id = $1
+                  AND links.target_kind = 'internal'
+                  AND links.resolved = true
+                  AND documents.status = $2
+                ORDER BY documents.slug, links.created_at, links.id
+                "#,
+            )
+            .bind(target_note_id)
+            .bind(status.as_str())
+            .fetch_all(pool)
+            .await?
+        }
+        None => {
+            sqlx::query_as::<Postgres, (String, String, Option<String>)>(
+                r#"
+                SELECT DISTINCT ON (documents.slug)
+                       documents.slug, documents.title, links.context_snippet
+                FROM links
+                JOIN documents ON documents.id = links.source_note_id
+                WHERE links.target_note_id = $1
+                  AND links.target_kind = 'internal'
+                  AND links.resolved = true
+                ORDER BY documents.slug, links.created_at, links.id
+                "#,
+            )
+            .bind(target_note_id)
+            .fetch_all(pool)
+            .await?
+        }
+    };
+    Ok(rows
+        .into_iter()
+        .map(|(source_slug, source_title, context_snippet)| Backlink {
+            source_slug,
+            source_title,
+            context_snippet,
+        })
+        .collect())
+}
+
 /// Note ids whose stored `rendered_html` may depend on the note identified by
 /// (`changed_id`, `changed_slug`) and therefore must be re-rendered after that
 /// note is created, renamed, or deleted.

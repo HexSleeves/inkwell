@@ -3,6 +3,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{Html, IntoResponse, Response};
 
 use crate::db::documents;
+use crate::db::links::{self, Visibility};
 use crate::domain::document::{DocumentStatus, ListByTagOptions, ListOptions, StatusFilter};
 use crate::http::AppState;
 use crate::http::cache;
@@ -40,16 +41,32 @@ pub async fn document_page(
     )
     .await
     {
-        Ok(Some(document)) => cache::html_response(
-            &headers,
-            "document",
-            StatusCode::OK,
-            render_document_page(
-                &document,
-                state.config.site_url.as_deref(),
-                csp_nonce.as_str(),
-            ),
-        ),
+        Ok(Some(document)) => {
+            // An unauthenticated public page is always public scope, so backlinks
+            // are fetched with Visibility::Public — a draft source can never leak
+            // into the panel. Degrade gracefully: a missing sidebar must not 500
+            // the note, so a backlinks error renders the page with no panel.
+            let backlinks = match links::backlinks(&state.pool, document.id, Visibility::Public)
+                .await
+            {
+                Ok(backlinks) => backlinks,
+                Err(error) => {
+                    tracing::warn!(document_id = %document.id, %error, "backlinks query failed; rendering note without the linked-from panel");
+                    Vec::new()
+                }
+            };
+            cache::html_response(
+                &headers,
+                "document",
+                StatusCode::OK,
+                render_document_page(
+                    &document,
+                    &backlinks,
+                    state.config.site_url.as_deref(),
+                    csp_nonce.as_str(),
+                ),
+            )
+        }
         Ok(None) => (
             StatusCode::NOT_FOUND,
             Html(render_not_found_page(state.config.site_url.as_deref())),

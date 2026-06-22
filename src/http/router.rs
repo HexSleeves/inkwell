@@ -17,6 +17,7 @@ pub fn build_router(config: Arc<Config>, pool: sqlx::PgPool) -> Router {
         .route("/health", any(api::health))
         .route("/documents", any(api::documents))
         .route("/documents/{slug}", any(api::document))
+        .route("/documents/{slug}/backlinks", any(api::document_backlinks))
         .route("/documents/{slug}/publish", any(api::publish_document))
         .route("/documents/{slug}/unpublish", any(api::unpublish_document))
         .route("/feed.xml", get(feed::feed))

@@ -7,7 +7,7 @@ mod common;
 
 use inkwell::db::documents::{create_document, set_rendered_html, update_document_by_slug};
 use inkwell::db::links::{
-    LinkType, NewLink, TargetKind, Visibility, insert_link, notes_to_rerender,
+    Backlink, LinkType, NewLink, TargetKind, Visibility, backlinks, insert_link, notes_to_rerender,
     resolve_existing_slugs,
 };
 use inkwell::domain::document::{DocumentPatch, DocumentStatus, NewDocument};
@@ -338,6 +338,146 @@ async fn deleting_a_target_restubs_inbound_links() -> anyhow::Result<()> {
     .fetch_one(&pool)
     .await?;
     assert!(!resolved, "edge is unresolved after the target is deleted");
+
+    Ok(())
+}
+
+/// Insert one resolved internal wikilink edge from `source` to `target`.
+async fn link(
+    pool: &sqlx::PgPool,
+    source_id: uuid::Uuid,
+    target_id: uuid::Uuid,
+    target_slug: &str,
+    context: &str,
+) -> anyhow::Result<()> {
+    insert_link(
+        pool,
+        NewLink {
+            source_note_id: source_id,
+            target_kind: TargetKind::Internal,
+            target_note_id: Some(target_id),
+            target_url: None,
+            target_text: Some(target_slug.to_string()),
+            link_type: LinkType::Wikilink,
+            context_snippet: Some(context.to_string()),
+            resolved: true,
+        },
+    )
+    .await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn backlinks_returns_each_linking_source_deduped_and_ordered() -> anyhow::Result<()> {
+    let _guard = db_guard().await;
+    let Some(pool) = common::maybe_pool().await? else {
+        return Ok(());
+    };
+
+    let target = create_document(&pool, new_doc("target")).await?;
+    let alpha = create_document(&pool, new_doc("alpha-source")).await?;
+    let beta = create_document(&pool, new_doc("beta-source")).await?;
+
+    // beta links once; alpha links TWICE (must dedup to a single backlink).
+    link(&pool, beta.id, target.id, "target", "from beta [[target]]").await?;
+    link(
+        &pool,
+        alpha.id,
+        target.id,
+        "target",
+        "first [[target]] mention",
+    )
+    .await?;
+    link(
+        &pool,
+        alpha.id,
+        target.id,
+        "target",
+        "second [[target]] mention",
+    )
+    .await?;
+
+    let got = backlinks(&pool, target.id, Visibility::Public).await?;
+
+    // Deduped to one per source, ordered by slug (alpha before beta).
+    let slugs: Vec<&str> = got.iter().map(|b| b.source_slug.as_str()).collect();
+    assert_eq!(
+        slugs,
+        vec!["alpha-source", "beta-source"],
+        "each source appears once, ordered by slug"
+    );
+    assert_eq!(got[0].source_title, "Title alpha-source");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn backlinks_is_empty_when_no_one_links_to_the_target() -> anyhow::Result<()> {
+    let _guard = db_guard().await;
+    let Some(pool) = common::maybe_pool().await? else {
+        return Ok(());
+    };
+
+    let target = create_document(&pool, new_doc("lonely-target")).await?;
+    // A document that links to something ELSE must not appear as a backlink.
+    let other = create_document(&pool, new_doc("other")).await?;
+    let elsewhere = create_document(&pool, new_doc("elsewhere")).await?;
+    link(&pool, other.id, elsewhere.id, "elsewhere", "[[elsewhere]]").await?;
+
+    let got = backlinks(&pool, target.id, Visibility::Public).await?;
+    assert_eq!(got, Vec::<Backlink>::new(), "no inbound links ⇒ empty vec");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn backlinks_never_leak_a_draft_source_to_public_callers() -> anyhow::Result<()> {
+    let _guard = db_guard().await;
+    let Some(pool) = common::maybe_pool().await? else {
+        return Ok(());
+    };
+
+    // A published target linked-to by one published source and one DRAFT source.
+    let target = create_document(&pool, new_doc("target")).await?;
+    let published_source = create_document(&pool, new_doc("published-source")).await?;
+    let mut draft = new_doc("draft-source");
+    draft.status = Some(DocumentStatus::Draft);
+    let draft_source = create_document(&pool, draft).await?;
+
+    link(
+        &pool,
+        published_source.id,
+        target.id,
+        "target",
+        "pub [[target]]",
+    )
+    .await?;
+    link(
+        &pool,
+        draft_source.id,
+        target.id,
+        "target",
+        "draft [[target]]",
+    )
+    .await?;
+
+    // Public scope: ONLY the published source — the draft must never leak.
+    let public = backlinks(&pool, target.id, Visibility::Public).await?;
+    let public_slugs: Vec<&str> = public.iter().map(|b| b.source_slug.as_str()).collect();
+    assert_eq!(
+        public_slugs,
+        vec!["published-source"],
+        "public backlinks must omit the draft source (no-draft-leak invariant)"
+    );
+
+    // Owner scope: both sources are visible.
+    let all = backlinks(&pool, target.id, Visibility::All).await?;
+    let all_slugs: Vec<&str> = all.iter().map(|b| b.source_slug.as_str()).collect();
+    assert_eq!(
+        all_slugs,
+        vec!["draft-source", "published-source"],
+        "owner backlinks include the draft source too"
+    );
 
     Ok(())
 }
