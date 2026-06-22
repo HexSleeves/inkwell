@@ -6,11 +6,19 @@
 //! body cap, and the server error envelope — so callers like the `inkwell
 //! author` CLI can stay focused on authoring policy.
 
+use std::time::Duration;
+
 use anyhow::{Context, Result, anyhow, bail};
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 
 use crate::domain::document::MAX_BODY_MARKDOWN_LENGTH;
+
+/// Time to wait for a connection to be established before giving up.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+/// Overall time budget for a single request, so stalled connections can't
+/// block CLI operations indefinitely.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// A document to push to the write API: the resolved slug plus its contents.
 ///
@@ -97,6 +105,8 @@ impl InkwellClient {
             bail!("A server base URL is required.");
         }
         let http = reqwest::Client::builder()
+            .connect_timeout(CONNECT_TIMEOUT)
+            .timeout(REQUEST_TIMEOUT)
             .build()
             .context("building HTTP client")?;
         Ok(Self {
