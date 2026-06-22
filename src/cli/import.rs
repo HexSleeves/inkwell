@@ -62,10 +62,13 @@ impl ImportOptions {
         while let Some(arg) = args.next() {
             match arg.as_str() {
                 "--server" => {
-                    server = Some(
-                        args.next()
-                            .ok_or_else(|| anyhow!("flag --server requires a value"))?,
-                    )
+                    let value = args
+                        .next()
+                        .ok_or_else(|| anyhow!("flag --server requires a value\n{USAGE}"))?;
+                    if value.starts_with('-') {
+                        bail!("flag --server requires a value, got flag {value:?}\n{USAGE}");
+                    }
+                    server = Some(value);
                 }
                 "--dry-run" => dry_run = true,
                 other if other.starts_with('-') => bail!("unknown flag {other:?}\n{USAGE}"),
@@ -403,6 +406,18 @@ mod tests {
     fn parse_rejects_dry_run_value_flag() {
         // `--server` needs a value.
         let args = ["/vault".to_string(), "--server".to_string()].into_iter();
+        assert!(ImportOptions::parse(args).is_err());
+    }
+
+    #[test]
+    fn parse_rejects_flag_as_server_value() {
+        // A following flag must not be silently consumed as the server URL.
+        let args = [
+            "/vault".to_string(),
+            "--server".to_string(),
+            "--dry-run".to_string(),
+        ]
+        .into_iter();
         assert!(ImportOptions::parse(args).is_err());
     }
 
