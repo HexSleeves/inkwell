@@ -8,6 +8,7 @@ use tracing::info;
 use inkwell::cli::author;
 use inkwell::cli::import;
 use inkwell::cli::migrate::{db_migrate, db_rollback, db_status};
+use inkwell::cli::seed;
 use inkwell::config::{AuthorConfig, Config};
 use inkwell::db::pool::create_pool;
 use inkwell::http::router::build_router;
@@ -50,10 +51,15 @@ async fn main() -> Result<()> {
             }
             _ => anyhow::bail!("usage: inkwell db <migrate|rollback [n]|status>"),
         },
+        Some("seed") => {
+            let config = Config::from_env()?;
+            let pool = create_pool(&config.database_url)?;
+            seed::run(&pool, args).await
+        }
         Some("author") => author::run(args).await,
         Some("import") => import::run(args).await,
         _ => anyhow::bail!(
-            "usage: inkwell <serve|mcp|db migrate|db rollback [n]|db status|author <new|push|publish|unpublish>|import <vault> [--server <url>] [--dry-run]>"
+            "usage: inkwell <serve|mcp|db migrate|db rollback [n]|db status|seed [<vault>]|author <new|push|publish|unpublish>|import <vault> [--server <url>] [--dry-run]>"
         ),
     }
 }

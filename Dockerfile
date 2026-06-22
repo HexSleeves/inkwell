@@ -20,5 +20,9 @@ FROM debian:bookworm-slim AS runtime
 RUN useradd --system --uid 10001 inkwell
 COPY --from=builder /app/target/release/inkwell /usr/local/bin/inkwell
 USER inkwell
+WORKDIR /app
+# Bundle the sample vault so `inkwell seed` can plant a populated demo garden at
+# runtime (the compose app points the seed step at this path).
+COPY --chown=inkwell:inkwell examples/garden /app/examples/garden
 EXPOSE 3000
 CMD ["inkwell", "serve"]

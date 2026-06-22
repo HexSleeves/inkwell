@@ -40,6 +40,19 @@ contract tests are skipped unless `DATABASE_URL` is set. Export
 path covered, or set `INKWELL_REQUIRE_DB_TESTS=1` to make missing database
 configuration fail fast.
 
+## Quickstart (Docker, seeded)
+
+```bash
+cp .env.example .env   # set INKWELL_API_KEY (and INKWELL_MCP_KEY for the AI walkthrough)
+docker compose up
+```
+
+One command gives you a **populated** garden: the app runs `migrate -> seed ->
+serve`, planting a handful of interlinked sample notes (as published) into an
+empty garden. Open <http://localhost:3000>, click any note, and see its "Linked
+from" backlinks panel. From nothing to an AI agent reading, searching, and
+editing your live garden: see [`docs/QUICKSTART.md`](docs/QUICKSTART.md).
+
 ## Docker Compose
 
 ```bash
@@ -47,7 +60,7 @@ cp .env.example .env
 docker compose up --build
 ```
 
-Set `INKWELL_API_KEY` in your shell or `.env` before starting Compose; the app refuses to start until it is set. The app runs `inkwell db migrate && inkwell serve` once Postgres is healthy.
+Set `INKWELL_API_KEY` in your shell or `.env` before starting Compose; the app refuses to start until it is set. The app runs `inkwell db migrate`, then `inkwell seed` (populates an empty garden with the bundled sample vault, idempotent), then `inkwell serve` once Postgres is healthy.
 
 ## Railway
 
