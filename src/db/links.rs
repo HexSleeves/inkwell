@@ -19,6 +19,8 @@
 //!          (then notes_to_rerender(new) re-renders the stub's source)
 //! ```
 
+use std::collections::HashSet;
+
 use crate::domain::document::DocumentStatus;
 use sqlx::{PgPool, Postgres};
 use uuid::Uuid;
@@ -115,6 +117,40 @@ pub async fn insert_link(pool: &PgPool, link: NewLink) -> Result<Uuid, sqlx::Err
     .bind(link.resolved)
     .fetch_one(pool)
     .await
+}
+
+/// Of `slugs`, return the subset that currently exist as documents visible at
+/// `visibility`. This is the batch wikilink resolver: the renderer collects
+/// every `[[slug]]` target from one parse pass and resolves them all in a single
+/// query (no N+1). A slug absent from the result renders as a stub.
+pub async fn resolve_existing_slugs(
+    pool: &PgPool,
+    slugs: &[String],
+    visibility: Visibility,
+) -> Result<HashSet<String>, sqlx::Error> {
+    if slugs.is_empty() {
+        return Ok(HashSet::new());
+    }
+    let found: Vec<String> = match visibility.status_filter() {
+        Some(status) => {
+            sqlx::query_scalar::<Postgres, String>(
+                "SELECT slug FROM documents WHERE slug = ANY($1) AND status = $2",
+            )
+            .bind(slugs)
+            .bind(status.as_str())
+            .fetch_all(pool)
+            .await?
+        }
+        None => {
+            sqlx::query_scalar::<Postgres, String>(
+                "SELECT slug FROM documents WHERE slug = ANY($1)",
+            )
+            .bind(slugs)
+            .fetch_all(pool)
+            .await?
+        }
+    };
+    Ok(found.into_iter().collect())
 }
 
 /// Note ids whose stored `rendered_html` may depend on the note identified by

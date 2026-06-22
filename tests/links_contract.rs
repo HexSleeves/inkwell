@@ -6,7 +6,10 @@
 mod common;
 
 use inkwell::db::documents::create_document;
-use inkwell::db::links::{LinkType, NewLink, TargetKind, insert_link, notes_to_rerender};
+use inkwell::db::links::{
+    LinkType, NewLink, TargetKind, Visibility, insert_link, notes_to_rerender,
+    resolve_existing_slugs,
+};
 use inkwell::domain::document::{DocumentStatus, NewDocument};
 use sqlx::Postgres;
 
@@ -137,6 +140,41 @@ async fn deleting_a_note_cascades_to_its_outbound_edges() -> anyhow::Result<()> 
         remaining, 0,
         "deleting a source note must cascade-delete its edges"
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn resolve_existing_slugs_respects_visibility() -> anyhow::Result<()> {
+    let Some(pool) = common::maybe_pool().await? else {
+        return Ok(());
+    };
+
+    create_document(&pool, new_doc("pub-note")).await?;
+    let mut draft = new_doc("draft-note");
+    draft.status = Some(DocumentStatus::Draft);
+    create_document(&pool, draft).await?;
+
+    let requested = vec![
+        "pub-note".to_string(),
+        "draft-note".to_string(),
+        "missing".to_string(),
+    ];
+
+    let public = resolve_existing_slugs(&pool, &requested, Visibility::Public).await?;
+    assert!(public.contains("pub-note"), "published note resolves");
+    assert!(
+        !public.contains("draft-note"),
+        "drafts must not resolve for public callers"
+    );
+    assert!(!public.contains("missing"), "absent slug never resolves");
+
+    let all = resolve_existing_slugs(&pool, &requested, Visibility::All).await?;
+    assert!(
+        all.contains("pub-note") && all.contains("draft-note"),
+        "owner visibility resolves drafts too"
+    );
+    assert!(!all.contains("missing"));
 
     Ok(())
 }
