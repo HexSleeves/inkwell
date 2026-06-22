@@ -28,11 +28,18 @@ services:
       PORT: '3000'
       HOST: 0.0.0.0
       INKWELL_API_KEY: '${INKWELL_API_KEY:?Set INKWELL_API_KEY in your shell or .env before running docker compose.}'
+      # Optional MCP credential for the AI walkthrough (docs/QUICKSTART.md). Left
+      # empty by default — the demo browses fine without it; set it (in your
+      # shell or .env) to a non-empty value to enable the `inkwell mcp` server.
+      INKWELL_MCP_KEY: ${INKWELL_MCP_KEY:-}
       INKWELL_SITE_URL: ${INKWELL_SITE_URL:-http://localhost:3000}
     depends_on:
       db:
         condition: service_healthy
-    command: sh -c 'inkwell db migrate && inkwell serve'
+    # migrate -> seed -> serve: seed plants the bundled sample vault as published
+    # notes, but only when the garden is empty, so restarts neither duplicate the
+    # demo nor clobber your own content.
+    command: sh -c 'inkwell db migrate && inkwell seed /app/examples/garden && inkwell serve'
     ports:
       - '${PORT:-3000}:3000'
 

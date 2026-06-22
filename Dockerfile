@@ -19,6 +19,10 @@ RUN cargo build --release --bin inkwell
 FROM debian:bookworm-slim AS runtime
 RUN useradd --system --uid 10001 inkwell
 COPY --from=builder /app/target/release/inkwell /usr/local/bin/inkwell
+# Bundle the sample vault so `inkwell seed` can plant a populated demo garden at
+# runtime (the compose app points the seed step at this path).
+COPY examples/garden /app/examples/garden
 USER inkwell
+WORKDIR /app
 EXPOSE 3000
 CMD ["inkwell", "serve"]
