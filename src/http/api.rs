@@ -1,7 +1,7 @@
 use axum::Json;
 use axum::body::Bytes;
 use axum::extract::{Path, Query, State};
-use axum::http::{HeaderMap, Method, StatusCode};
+use axum::http::{HeaderMap, HeaderValue, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
 use serde::Serialize;
 use serde_json::Value;
@@ -31,6 +31,9 @@ struct DocumentEnvelope {
     rendered_html: String,
     status: DocumentStatus,
     tags: Vec<String>,
+    /// Monotonic revision counter. MCP clients echo this back as the
+    /// `If-Match` header on an update to detect stale writes (409).
+    version: i64,
     #[serde(with = "crate::domain::document::timestamp")]
     created_at: time::OffsetDateTime,
     #[serde(with = "crate::domain::document::timestamp")]
@@ -47,6 +50,7 @@ impl From<Document> for DocumentEnvelope {
             rendered_html: value.rendered_html,
             status: value.status,
             tags: value.tags,
+            version: value.version,
             created_at: value.created_at,
             updated_at: value.updated_at,
         }
@@ -158,7 +162,11 @@ pub async fn document_backlinks(
     if method != Method::GET {
         return Err(AppError::MethodNotAllowed(vec!["GET"]));
     }
-    let visibility = if is_authenticated(&headers, state.config.api_key.as_deref()) {
+    let visibility = if is_authenticated(
+        &headers,
+        state.config.api_key.as_deref(),
+        state.config.mcp_key.as_deref(),
+    ) {
         Visibility::All
     } else {
         Visibility::Public
@@ -186,7 +194,7 @@ pub async fn publish_document(
     if method != Method::POST {
         return Err(AppError::MethodNotAllowed(vec!["POST"]));
     }
-    require_api_key(&headers, state.config.api_key.as_deref())?;
+    require_api_key(&headers, &state.config)?;
     let Some(document) =
         documents::set_document_status(&state.pool, &slug, DocumentStatus::Published).await?
     else {
@@ -208,7 +216,7 @@ pub async fn unpublish_document(
     if method != Method::POST {
         return Err(AppError::MethodNotAllowed(vec!["POST"]));
     }
-    require_api_key(&headers, state.config.api_key.as_deref())?;
+    require_api_key(&headers, &state.config)?;
     let Some(document) =
         documents::set_document_status(&state.pool, &slug, DocumentStatus::Draft).await?
     else {
@@ -226,7 +234,7 @@ async fn create_document(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Response, AppError> {
-    require_api_key(&headers, state.config.api_key.as_deref())?;
+    require_api_key(&headers, &state.config)?;
     enforce_body_limit(&body)?;
     let value = parse_json_body(body)?;
     let map = require_object(value)?;
@@ -268,7 +276,11 @@ async fn list_documents(
     headers: HeaderMap,
     query: ListQuery,
 ) -> Result<Response, AppError> {
-    let authenticated = is_authenticated(&headers, state.config.api_key.as_deref());
+    let authenticated = is_authenticated(
+        &headers,
+        state.config.api_key.as_deref(),
+        state.config.mcp_key.as_deref(),
+    );
     let status = resolve_list_status(authenticated, query.status.as_deref())?;
     let mut limit =
         parse_non_negative_int(query.limit.as_deref(), "limit")?.unwrap_or(DEFAULT_LIMIT);
@@ -306,7 +318,11 @@ async fn get_document(
     headers: HeaderMap,
     slug: String,
 ) -> Result<Response, AppError> {
-    let authenticated = is_authenticated(&headers, state.config.api_key.as_deref());
+    let authenticated = is_authenticated(
+        &headers,
+        state.config.api_key.as_deref(),
+        state.config.mcp_key.as_deref(),
+    );
     let filter = if authenticated {
         StatusFilter { status: None }
     } else {
@@ -319,7 +335,37 @@ async fn get_document(
             "No document with slug \"{slug}\"."
         )));
     };
-    Ok((StatusCode::OK, Json(DocumentEnvelope::from(document))).into_response())
+    // Advertise the current version as an ETag so clients can echo it back as
+    // `If-Match` on a conditional update.
+    let etag = HeaderValue::from_str(&document.version.to_string())
+        .unwrap_or_else(|_| HeaderValue::from_static("0"));
+    Ok((
+        StatusCode::OK,
+        [(axum::http::header::ETAG, etag)],
+        Json(DocumentEnvelope::from(document)),
+    )
+        .into_response())
+}
+
+/// Parse an `If-Match` header into an expected version, if present.
+///
+/// The value is the bare version integer (matching the `ETag` we emit on GET).
+/// A malformed value is a client error rather than a silent unconditional write,
+/// so a stale or corrupt header can never sneak past the concurrency guard.
+fn parse_if_match(headers: &HeaderMap) -> Result<Option<i64>, AppError> {
+    let Some(value) = headers.get(axum::http::header::IF_MATCH) else {
+        return Ok(None);
+    };
+    let raw = value
+        .to_str()
+        .map_err(|_| AppError::BadRequest("Header \"If-Match\" must be a valid integer.".into()))?
+        .trim()
+        // Tolerate a quoted ETag form (`"3"`) as well as the bare integer.
+        .trim_matches('"');
+    let version = raw.parse::<i64>().map_err(|_| {
+        AppError::BadRequest("Header \"If-Match\" must be a valid integer version.".into())
+    })?;
+    Ok(Some(version))
 }
 
 async fn update_document(
@@ -328,7 +374,7 @@ async fn update_document(
     slug: String,
     body: Bytes,
 ) -> Result<Response, AppError> {
-    require_api_key(&headers, state.config.api_key.as_deref())?;
+    require_api_key(&headers, &state.config)?;
     enforce_body_limit(&body)?;
     let value = parse_json_body(body)?;
     let map = require_object(value)?;
@@ -361,11 +407,43 @@ async fn update_document(
                 .to_string(),
         ));
     }
-    let Some(document) = documents::update_document_by_slug(&state.pool, &slug, patch).await?
-    else {
-        return Err(AppError::NotFound(format!(
-            "No document with slug \"{slug}\"."
-        )));
+    // Optimistic concurrency: when the request carries `If-Match`, the update is
+    // version-checked and a stale write surfaces as 409. Without `If-Match` the
+    // unconditional path is preserved so the author CLI keeps working as before.
+    let document = match parse_if_match(&headers)? {
+        Some(expected_version) => {
+            match documents::update_document_by_slug_if_version(
+                &state.pool,
+                &slug,
+                expected_version,
+                patch,
+            )
+            .await?
+            {
+                documents::ConditionalUpdate::Updated(document) => *document,
+                documents::ConditionalUpdate::NotFound => {
+                    return Err(AppError::NotFound(format!(
+                        "No document with slug \"{slug}\"."
+                    )));
+                }
+                documents::ConditionalUpdate::VersionMismatch { current } => {
+                    return Err(AppError::Conflict(format!(
+                        "Document \"{slug}\" has version {current}, not the expected {expected_version}. \
+                         Re-read the note and retry with the current version."
+                    )));
+                }
+            }
+        }
+        None => {
+            let Some(document) =
+                documents::update_document_by_slug(&state.pool, &slug, patch).await?
+            else {
+                return Err(AppError::NotFound(format!(
+                    "No document with slug \"{slug}\"."
+                )));
+            };
+            document
+        }
     };
     // Body changed → its outbound edges changed; replace them. Best-effort for
     // the same reason as create: the update already succeeded and the note
@@ -383,7 +461,7 @@ async fn delete_document(
     headers: HeaderMap,
     slug: String,
 ) -> Result<Response, AppError> {
-    require_api_key(&headers, state.config.api_key.as_deref())?;
+    require_api_key(&headers, &state.config)?;
     // Resolve the note first so we can capture which sources link to it BEFORE
     // the row (and its inbound edges' target_note_id) are gone.
     let Some(document) =
@@ -485,8 +563,14 @@ fn resolve_list_status(
     }
 }
 
-fn require_api_key(headers: &HeaderMap, configured_key: Option<&str>) -> Result<(), AppError> {
-    if is_authenticated(headers, configured_key) {
+/// Require a write credential: the request must carry either the configured
+/// authoring key or the MCP key. Used by every mutating endpoint.
+fn require_api_key(headers: &HeaderMap, config: &crate::config::Config) -> Result<(), AppError> {
+    if is_authenticated(
+        headers,
+        config.api_key.as_deref(),
+        config.mcp_key.as_deref(),
+    ) {
         Ok(())
     } else {
         Err(AppError::Unauthorized)

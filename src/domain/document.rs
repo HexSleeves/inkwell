@@ -47,6 +47,9 @@ pub struct Document {
     pub rendered_html: String,
     pub status: DocumentStatus,
     pub tags: Vec<String>,
+    /// Monotonic per-note revision counter, bumped on every content edit.
+    /// Powers the MCP `If-Match` optimistic-concurrency check (T6).
+    pub version: i64,
     #[serde(with = "timestamp")]
     pub created_at: OffsetDateTime,
     #[serde(with = "timestamp")]

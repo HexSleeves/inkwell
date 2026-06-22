@@ -33,6 +33,7 @@ fn router_with_unreachable_database() -> Result<axum::Router> {
             host: "127.0.0.1".to_string(),
             port: 3000,
             api_key: Some("test-secret-key".to_string()),
+            mcp_key: Some("test-mcp-key".to_string()),
             site_url: Some("https://blog.example.com".to_string()),
         }),
         pool,

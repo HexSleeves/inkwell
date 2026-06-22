@@ -6,6 +6,7 @@ pub mod domain;
 pub mod error;
 pub mod garden;
 pub mod http;
+pub mod mcp;
 pub mod rendering;
 pub mod views;
 
