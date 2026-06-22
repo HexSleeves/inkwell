@@ -1,6 +1,7 @@
 mod common;
 
-use inkwell::cli::author::{self, AuthorClient, NewOptions, PushAction};
+use inkwell::cli::author::{self, NewOptions};
+use inkwell::client::{InkwellClient, PushAction};
 use inkwell::http::router::build_router;
 
 /// Returns true if the API list envelope contains a document with `slug`.
@@ -41,11 +42,12 @@ async fn author_new_push_publish_appears_in_public_list() -> anyhow::Result<()> 
     let doc = author::parse_markdown(&rendered)?;
     let slug = doc.effective_slug()?;
     assert_eq!(slug, "author-flow-demo");
+    let input = doc.to_input()?;
 
-    let client = AuthorClient::new(base.clone(), "test-secret-key")?;
+    let client = InkwellClient::new(base.clone(), "test-secret-key")?;
 
     // `author push`: first push creates the document as a draft.
-    let (action, summary) = client.push(&doc).await?;
+    let (action, summary) = client.push(&input).await?;
     assert_eq!(action, PushAction::Created);
     assert_eq!(summary.slug, slug);
     assert_eq!(summary.status, "draft");
@@ -79,7 +81,7 @@ async fn author_new_push_publish_appears_in_public_list() -> anyhow::Result<()> 
     );
 
     // Pushing the same file again updates the existing document.
-    let (action, _) = client.push(&doc).await?;
+    let (action, _) = client.push(&input).await?;
     assert_eq!(action, PushAction::Updated);
 
     // `author unpublish`: returns it to draft and drops it from the public list.
@@ -112,7 +114,7 @@ async fn publish_unknown_slug_errors_cleanly() -> anyhow::Result<()> {
         axum::serve(listener, router).await.unwrap();
     });
 
-    let client = AuthorClient::new(format!("http://{addr}"), "test-secret-key")?;
+    let client = InkwellClient::new(format!("http://{addr}"), "test-secret-key")?;
     let err = client.publish("does-not-exist").await.unwrap_err();
     assert!(err.to_string().contains("404"), "unexpected error: {err}");
 
@@ -135,7 +137,7 @@ async fn wrong_api_key_reports_unauthorized() -> anyhow::Result<()> {
         axum::serve(listener, router).await.unwrap();
     });
 
-    let client = AuthorClient::new(format!("http://{addr}"), "wrong-key")?;
+    let client = InkwellClient::new(format!("http://{addr}"), "wrong-key")?;
     let doc = author::ParsedDocument {
         title: "Nope".to_string(),
         slug: Some("nope".to_string()),
@@ -143,7 +145,7 @@ async fn wrong_api_key_reports_unauthorized() -> anyhow::Result<()> {
         tags: vec![],
         body: "x".to_string(),
     };
-    let err = client.push(&doc).await.unwrap_err();
+    let err = client.push(&doc.to_input()?).await.unwrap_err();
     assert!(err.to_string().contains("401"), "unexpected error: {err}");
 
     server.abort();
