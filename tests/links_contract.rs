@@ -5,13 +5,16 @@
 
 mod common;
 
-use inkwell::db::documents::{create_document, update_document_by_slug};
+use inkwell::db::documents::{create_document, set_rendered_html, update_document_by_slug};
 use inkwell::db::links::{
     LinkType, NewLink, TargetKind, Visibility, insert_link, notes_to_rerender,
     resolve_existing_slugs,
 };
 use inkwell::domain::document::{DocumentPatch, DocumentStatus, NewDocument};
-use inkwell::garden::{persist_source_edges, render_and_resolve};
+use inkwell::garden::{
+    affected_sources, backfill_after_change, persist_source_edges, render_and_resolve,
+    rerender_sources,
+};
 use sqlx::Postgres;
 use std::sync::LazyLock;
 use tokio::sync::{Mutex, MutexGuard};
@@ -32,6 +35,19 @@ fn new_doc(slug: &str) -> NewDocument {
         title: format!("Title {slug}"),
         body_markdown: format!("# {slug}"),
         rendered_html: format!("<h1>{slug}</h1>"),
+        status: Some(DocumentStatus::Published),
+        tags: Vec::new(),
+    }
+}
+
+/// A published document whose body is `body` (so re-render reflects its real
+/// content). Stored HTML starts as a placeholder; tests set it explicitly.
+fn doc_with_body(slug: &str, body: &str) -> NewDocument {
+    NewDocument {
+        slug: slug.to_string(),
+        title: format!("Title {slug}"),
+        body_markdown: body.to_string(),
+        rendered_html: "<p>placeholder</p>".to_string(),
         status: Some(DocumentStatus::Published),
         tags: Vec::new(),
     }
@@ -239,6 +255,89 @@ async fn render_and_resolve_renders_links_and_persists_edges() -> anyhow::Result
     // re-render the source.
     let affected = notes_to_rerender(&pool, target.id, "target").await?;
     assert!(affected.contains(&source.id));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn backfill_lights_up_stub_when_target_appears() -> anyhow::Result<()> {
+    let _guard = db_guard().await;
+    let Some(pool) = common::maybe_pool().await? else {
+        return Ok(());
+    };
+
+    // Source links to a target that does not exist yet → stub.
+    let source = create_document(&pool, doc_with_body("src", "see [[target]]")).await?;
+    let (html0, refs0) = render_and_resolve(&pool, "see [[target]]").await?;
+    set_rendered_html(&pool, source.id, &html0).await?;
+    persist_source_edges(&pool, source.id, &refs0).await?;
+    assert!(html0.contains("class=\"stub\""), "starts as a stub");
+
+    // Target appears; the create-path backfill lights up the stub.
+    let target = create_document(&pool, new_doc("target")).await?;
+    backfill_after_change(&pool, target.id, &target.slug).await;
+
+    let html1: String =
+        sqlx::query_scalar::<Postgres, String>("SELECT rendered_html FROM documents WHERE id = $1")
+            .bind(source.id)
+            .fetch_one(&pool)
+            .await?;
+    assert!(
+        html1.contains("href=\"/target\"") && !html1.contains("class=\"stub\""),
+        "stub upgraded to a real link"
+    );
+
+    let resolved: bool = sqlx::query_scalar::<Postgres, bool>(
+        "SELECT resolved FROM links WHERE source_note_id = $1 AND target_text = 'target'",
+    )
+    .bind(source.id)
+    .fetch_one(&pool)
+    .await?;
+    assert!(resolved, "edge is now resolved");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn deleting_a_target_restubs_inbound_links() -> anyhow::Result<()> {
+    let _guard = db_guard().await;
+    let Some(pool) = common::maybe_pool().await? else {
+        return Ok(());
+    };
+
+    let target = create_document(&pool, new_doc("target")).await?;
+    let source = create_document(&pool, doc_with_body("src", "see [[target]]")).await?;
+    let (html0, refs0) = render_and_resolve(&pool, "see [[target]]").await?;
+    set_rendered_html(&pool, source.id, &html0).await?;
+    persist_source_edges(&pool, source.id, &refs0).await?;
+    assert!(html0.contains("href=\"/target\"") && !html0.contains("class=\"stub\""));
+
+    // Delete the target the way the handler does: capture inbound sources first,
+    // delete, then re-render those sources.
+    let affected = affected_sources(&pool, target.id, &target.slug).await;
+    sqlx::query("DELETE FROM documents WHERE id = $1")
+        .bind(target.id)
+        .execute(&pool)
+        .await?;
+    rerender_sources(&pool, &affected).await;
+
+    let html1: String =
+        sqlx::query_scalar::<Postgres, String>("SELECT rendered_html FROM documents WHERE id = $1")
+            .bind(source.id)
+            .fetch_one(&pool)
+            .await?;
+    assert!(
+        html1.contains("class=\"stub\""),
+        "link falls back to a stub after the target is deleted"
+    );
+
+    let resolved: bool = sqlx::query_scalar::<Postgres, bool>(
+        "SELECT resolved FROM links WHERE source_note_id = $1 AND target_text = 'target'",
+    )
+    .bind(source.id)
+    .fetch_one(&pool)
+    .await?;
+    assert!(!resolved, "edge is unresolved after the target is deleted");
 
     Ok(())
 }

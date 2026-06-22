@@ -140,6 +140,8 @@ pub async fn publish_document(
             "No document with slug \"{slug}\"."
         )));
     };
+    // Now publicly resolvable: upgrade stubs pointing at this slug.
+    garden::backfill_after_change(&state.pool, document.id, &document.slug).await;
     Ok((StatusCode::OK, Json(DocumentEnvelope::from(document))).into_response())
 }
 
@@ -160,6 +162,8 @@ pub async fn unpublish_document(
             "No document with slug \"{slug}\"."
         )));
     };
+    // No longer publicly resolvable: downgrade links pointing at this slug to stubs.
+    garden::backfill_after_change(&state.pool, document.id, &document.slug).await;
     Ok((StatusCode::OK, Json(DocumentEnvelope::from(document))).into_response())
 }
 
@@ -196,6 +200,8 @@ async fn create_document(
     // Persist outbound edges after insert (the source id exists only now). A
     // failure here can't unmake the document; edges rebuild on the next save.
     garden::persist_source_edges(&state.pool, document.id, &refs).await?;
+    // Light up any existing stubs that pointed at this new slug.
+    garden::backfill_after_change(&state.pool, document.id, &document.slug).await;
     Ok((StatusCode::CREATED, Json(DocumentEnvelope::from(document))).into_response())
 }
 
@@ -316,11 +322,23 @@ async fn delete_document(
     slug: String,
 ) -> Result<Response, AppError> {
     require_api_key(&headers, state.config.api_key.as_deref())?;
+    // Resolve the note first so we can capture which sources link to it BEFORE
+    // the row (and its inbound edges' target_note_id) are gone.
+    let Some(document) =
+        documents::get_document_by_slug(&state.pool, &slug, StatusFilter::default()).await?
+    else {
+        return Err(AppError::NotFound(format!(
+            "No document with slug \"{slug}\"."
+        )));
+    };
+    let affected = garden::affected_sources(&state.pool, document.id, &document.slug).await;
     if !documents::delete_document_by_slug(&state.pool, &slug).await? {
         return Err(AppError::NotFound(format!(
             "No document with slug \"{slug}\"."
         )));
     }
+    // Inbound edges now dangle; re-render those sources so they fall back to stubs.
+    garden::rerender_sources(&state.pool, &affected).await;
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
