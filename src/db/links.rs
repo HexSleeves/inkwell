@@ -262,7 +262,7 @@ pub async fn backlinks(
                   AND links.target_kind = 'internal'
                   AND links.resolved = true
                   AND documents.status = $2
-                ORDER BY documents.slug, links.created_at
+                ORDER BY documents.slug, links.created_at, links.id
                 "#,
             )
             .bind(target_note_id)
@@ -280,7 +280,7 @@ pub async fn backlinks(
                 WHERE links.target_note_id = $1
                   AND links.target_kind = 'internal'
                   AND links.resolved = true
-                ORDER BY documents.slug, links.created_at
+                ORDER BY documents.slug, links.created_at, links.id
                 "#,
             )
             .bind(target_note_id)
