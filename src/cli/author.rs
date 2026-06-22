@@ -8,11 +8,9 @@
 use std::path::Path;
 
 use anyhow::{Context, Result, anyhow, bail};
-use reqwest::StatusCode;
-use serde::{Deserialize, Serialize};
 
+use crate::client::{DocumentInput, InkwellClient};
 use crate::config::AuthorConfig;
-use crate::domain::document::MAX_BODY_MARKDOWN_LENGTH;
 use crate::domain::slug::{is_valid_slug, slugify};
 
 const USAGE: &str = "usage: inkwell author <new|push|publish|unpublish> ...
@@ -58,6 +56,18 @@ impl ParsedDocument {
             }
         }
     }
+
+    /// Resolve the authoring policy (slug derivation) and build the client's
+    /// transport-facing [`DocumentInput`]. Keeps slug policy in the CLI while
+    /// the client stays unaware of `ParsedDocument`.
+    pub fn to_input(&self) -> Result<DocumentInput> {
+        Ok(DocumentInput {
+            title: self.title.clone(),
+            slug: self.effective_slug()?,
+            body: self.body.clone(),
+            tags: self.tags.clone(),
+        })
+    }
 }
 
 /// Options for scaffolding a new document with `inkwell author new`.
@@ -67,223 +77,6 @@ pub struct NewOptions {
     pub slug: Option<String>,
     pub status: String,
     pub tags: Vec<String>,
-}
-
-/// Outcome of a `push`: whether the document was newly created or updated.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PushAction {
-    Created,
-    Updated,
-}
-
-impl PushAction {
-    fn label(self) -> &'static str {
-        match self {
-            PushAction::Created => "Created",
-            PushAction::Updated => "Updated",
-        }
-    }
-}
-
-/// The subset of the server document envelope the CLI reports back to authors.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DocumentSummary {
-    pub slug: String,
-    pub title: String,
-    pub status: String,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct CreatePayload<'a> {
-    title: &'a str,
-    slug: &'a str,
-    body_markdown: &'a str,
-    tags: &'a [String],
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct UpdatePayload<'a> {
-    title: &'a str,
-    body_markdown: &'a str,
-    tags: &'a [String],
-}
-
-#[derive(Deserialize)]
-struct ServerError {
-    error: ServerErrorBody,
-}
-
-#[derive(Deserialize)]
-struct ServerErrorBody {
-    message: String,
-}
-
-/// HTTP client for the authenticated write API. Holds the resolved base URL
-/// (no trailing slash) and the API key sent as `X-API-Key`.
-pub struct AuthorClient {
-    http: reqwest::Client,
-    base_url: String,
-    api_key: String,
-}
-
-impl AuthorClient {
-    pub fn new(base_url: impl Into<String>, api_key: impl Into<String>) -> Result<Self> {
-        let base_url = base_url.into().trim_end_matches('/').to_string();
-        let api_key = api_key.into();
-        if api_key.trim().is_empty() {
-            bail!("An API key is required. Set INKWELL_API_KEY in the environment or a .env file.");
-        }
-        if base_url.is_empty() {
-            bail!("A server base URL is required.");
-        }
-        let http = reqwest::Client::builder()
-            .build()
-            .context("building HTTP client")?;
-        Ok(Self {
-            http,
-            base_url,
-            api_key,
-        })
-    }
-
-    fn url(&self, path: &str) -> String {
-        format!("{}{}", self.base_url, path)
-    }
-
-    /// Fetch a document by slug, returning `None` on a 404 so callers can
-    /// distinguish "missing" from a transport or server error.
-    pub async fn get(&self, slug: &str) -> Result<Option<DocumentSummary>> {
-        let resp = self
-            .http
-            .get(self.url(&format!("/documents/{slug}")))
-            .header("x-api-key", &self.api_key)
-            .send()
-            .await
-            .with_context(|| format!("requesting document {slug:?} from {}", self.base_url))?;
-        match resp.status() {
-            StatusCode::OK => Ok(Some(resp.json().await.context("decoding document")?)),
-            StatusCode::NOT_FOUND => Ok(None),
-            status => Err(error_for(status, resp).await),
-        }
-    }
-
-    async fn create(&self, payload: &CreatePayload<'_>) -> Result<DocumentSummary> {
-        let resp = self
-            .http
-            .post(self.url("/documents"))
-            .header("x-api-key", &self.api_key)
-            .json(payload)
-            .send()
-            .await
-            .with_context(|| format!("creating document at {}", self.base_url))?;
-        match resp.status() {
-            StatusCode::CREATED => Ok(resp.json().await.context("decoding document")?),
-            status => Err(error_for(status, resp).await),
-        }
-    }
-
-    async fn update(&self, slug: &str, payload: &UpdatePayload<'_>) -> Result<DocumentSummary> {
-        let resp = self
-            .http
-            .put(self.url(&format!("/documents/{slug}")))
-            .header("x-api-key", &self.api_key)
-            .json(payload)
-            .send()
-            .await
-            .with_context(|| format!("updating document {slug:?} at {}", self.base_url))?;
-        match resp.status() {
-            StatusCode::OK => Ok(resp.json().await.context("decoding document")?),
-            status => Err(error_for(status, resp).await),
-        }
-    }
-
-    pub async fn publish(&self, slug: &str) -> Result<DocumentSummary> {
-        self.set_status(slug, "publish").await
-    }
-
-    pub async fn unpublish(&self, slug: &str) -> Result<DocumentSummary> {
-        self.set_status(slug, "unpublish").await
-    }
-
-    async fn set_status(&self, slug: &str, action: &str) -> Result<DocumentSummary> {
-        let resp = self
-            .http
-            .post(self.url(&format!("/documents/{slug}/{action}")))
-            .header("x-api-key", &self.api_key)
-            .send()
-            .await
-            .with_context(|| format!("{action}ing document {slug:?} at {}", self.base_url))?;
-        match resp.status() {
-            StatusCode::OK => Ok(resp.json().await.context("decoding document")?),
-            status => Err(error_for(status, resp).await),
-        }
-    }
-
-    /// Create or update a document from a parsed Markdown file. Existence is
-    /// probed with a `GET`; a hit becomes a `PUT`, a miss a `POST`. The body
-    /// size cap is enforced client-side before anything is sent.
-    pub async fn push(&self, doc: &ParsedDocument) -> Result<(PushAction, DocumentSummary)> {
-        let slug = doc.effective_slug()?;
-        enforce_body_limit(&doc.body)?;
-        if self.get(&slug).await?.is_some() {
-            let payload = UpdatePayload {
-                title: &doc.title,
-                body_markdown: &doc.body,
-                tags: &doc.tags,
-            };
-            Ok((PushAction::Updated, self.update(&slug, &payload).await?))
-        } else {
-            let payload = CreatePayload {
-                title: &doc.title,
-                slug: &slug,
-                body_markdown: &doc.body,
-                tags: &doc.tags,
-            };
-            Ok((PushAction::Created, self.create(&payload).await?))
-        }
-    }
-}
-
-/// Reject document bodies above the server's 256 KiB Markdown cap before
-/// sending, so authors get an immediate, actionable error instead of a 413.
-fn enforce_body_limit(body: &str) -> Result<()> {
-    if body.len() > MAX_BODY_MARKDOWN_LENGTH {
-        bail!(
-            "Document body is {} bytes, over the {} byte (256 KiB) limit. Trim the content before pushing.",
-            body.len(),
-            MAX_BODY_MARKDOWN_LENGTH
-        );
-    }
-    Ok(())
-}
-
-/// Turn a non-success HTTP response into a clear, non-panicking error message.
-async fn error_for(status: StatusCode, resp: reqwest::Response) -> anyhow::Error {
-    let raw = resp.text().await.unwrap_or_default();
-    let server_message = serde_json::from_str::<ServerError>(&raw)
-        .map(|parsed| parsed.error.message)
-        .unwrap_or_else(|_| raw.trim().to_string());
-    let detail = if server_message.is_empty() {
-        String::new()
-    } else {
-        format!(" {server_message}")
-    };
-    match status {
-        StatusCode::UNAUTHORIZED => {
-            anyhow!("Unauthorized (401): the API key was rejected. Check INKWELL_API_KEY.{detail}")
-        }
-        StatusCode::NOT_FOUND => anyhow!("Not found (404):{detail}"),
-        StatusCode::PAYLOAD_TOO_LARGE => {
-            anyhow!("Payload too large (413): the document exceeds the server body limit.{detail}")
-        }
-        StatusCode::UNPROCESSABLE_ENTITY | StatusCode::BAD_REQUEST | StatusCode::CONFLICT => {
-            anyhow!("Request rejected ({}):{detail}", status.as_u16())
-        }
-        other => anyhow!("Unexpected response ({}):{detail}", other.as_u16()),
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -547,8 +340,9 @@ async fn cmd_push(args: impl Iterator<Item = String>) -> Result<()> {
     let (path, server) = parse_target_args(args, "push <file>")?;
     let source = std::fs::read_to_string(&path).with_context(|| format!("reading {path:?}"))?;
     let doc = parse_markdown(&source)?;
+    let input = doc.to_input()?;
     let client = build_client(server.as_deref())?;
-    let (action, summary) = client.push(&doc).await?;
+    let (action, summary) = client.push(&input).await?;
     println!(
         "{} {} (status: {})",
         action.label(),
@@ -607,15 +401,15 @@ fn take_value<I: Iterator<Item = String>>(
         .ok_or_else(|| anyhow!("flag {flag} requires a value"))
 }
 
-/// Build an [`AuthorClient`] from the environment-derived config plus an
+/// Build an [`InkwellClient`] from the environment-derived config plus an
 /// optional `--server` override.
-fn build_client(server: Option<&str>) -> Result<AuthorClient> {
+fn build_client(server: Option<&str>) -> Result<InkwellClient> {
     let config = AuthorConfig::from_env()?;
     let base_url = config.resolve_base_url(server);
     let api_key = config.api_key.clone().ok_or_else(|| {
         anyhow!("INKWELL_API_KEY is not set; the authoring API requires an API key.")
     })?;
-    AuthorClient::new(base_url, api_key)
+    InkwellClient::new(base_url, api_key)
 }
 
 #[cfg(test)]
@@ -684,14 +478,6 @@ tags:\n\
     }
 
     #[test]
-    fn enforce_body_limit_rejects_oversize() {
-        let body = "a".repeat(MAX_BODY_MARKDOWN_LENGTH + 1);
-        assert!(enforce_body_limit(&body).is_err());
-        let body = "a".repeat(MAX_BODY_MARKDOWN_LENGTH);
-        assert!(enforce_body_limit(&body).is_ok());
-    }
-
-    #[test]
     fn scaffold_round_trips_through_parser() {
         let opts = NewOptions {
             title: "Draft: A New Idea".to_string(),
@@ -705,11 +491,5 @@ tags:\n\
         assert_eq!(doc.slug.as_deref(), Some("draft-a-new-idea"));
         assert_eq!(doc.status.as_deref(), Some("draft"));
         assert_eq!(doc.tags, vec!["ideas"]);
-    }
-
-    #[test]
-    fn new_client_requires_api_key() {
-        assert!(AuthorClient::new("http://localhost:3000", "").is_err());
-        assert!(AuthorClient::new("http://localhost:3000", "k").is_ok());
     }
 }
