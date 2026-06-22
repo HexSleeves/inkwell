@@ -294,16 +294,27 @@ pub fn derive_excerpt(markdown: &str, max_length: usize) -> String {
     if text.len() <= max_length {
         return text;
     }
-    let mut end = max_length;
-    while end > 0 && !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    let clipped = &text[..end];
+    let clipped = truncate_on_char_boundary(&text, max_length);
     let clipped = clipped
         .rsplit_once(' ')
         .map(|(head, _)| head)
         .unwrap_or(clipped);
     format!("{}…", clipped.trim_end())
+}
+
+/// Truncate `text` to at most `max_length` bytes without ever splitting a
+/// multibyte UTF-8 char: walk the boundary down until it lands on a char start
+/// (the 25908c8 fix). NEVER byte-slice a `&str` at an arbitrary index. Returns
+/// the whole string when it already fits.
+pub fn truncate_on_char_boundary(text: &str, max_length: usize) -> &str {
+    if text.len() <= max_length {
+        return text;
+    }
+    let mut end = max_length;
+    while end > 0 && !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    &text[..end]
 }
 
 /// Render the shared `<ul class="index">` document list used by the index,

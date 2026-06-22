@@ -8,6 +8,7 @@ use serde_json::Value;
 use tokio::time::{Duration, timeout};
 
 use crate::db::documents;
+use crate::db::links::{self, Backlink, Visibility};
 use crate::domain::document::{
     DEFAULT_LIMIT, Document, DocumentPatch, DocumentStatus, MAX_BODY_MARKDOWN_LENGTH, MAX_LIMIT,
     MAX_REQUEST_BODY_BYTES, MAX_TITLE_LENGTH, NewDocument, StatusFilter,
@@ -58,6 +59,24 @@ struct ListResponse {
     total: i64,
     limit: u32,
     offset: u32,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BacklinkEnvelope {
+    slug: String,
+    title: String,
+    snippet: Option<String>,
+}
+
+impl From<Backlink> for BacklinkEnvelope {
+    fn from(value: Backlink) -> Self {
+        Self {
+            slug: value.source_slug,
+            title: value.source_title,
+            snippet: value.context_snippet,
+        }
+    }
 }
 
 #[derive(Default, serde::Deserialize)]
@@ -121,6 +140,41 @@ pub async fn document(
             "GET", "PATCH", "PUT", "DELETE",
         ])),
     }
+}
+
+/// `GET /documents/{slug}/backlinks` — the "linked from" set as JSON.
+///
+/// The target is resolved under the caller's visibility (authenticated ⇒ all
+/// statuses, else published-only), mirroring [`get_document`]: a target the
+/// caller cannot see 404s rather than leaking its existence. Backlinks are then
+/// fetched at the SAME visibility, so a public caller never sees a draft source
+/// (the no-draft-leak invariant). GET only; any other method is 405.
+pub async fn document_backlinks(
+    State(state): State<AppState>,
+    Path(slug): Path<String>,
+    method: Method,
+    headers: HeaderMap,
+) -> Result<Response, AppError> {
+    if method != Method::GET {
+        return Err(AppError::MethodNotAllowed(vec!["GET"]));
+    }
+    let visibility = if is_authenticated(&headers, state.config.api_key.as_deref()) {
+        Visibility::All
+    } else {
+        Visibility::Public
+    };
+    let filter = StatusFilter {
+        status: visibility.status_filter(),
+    };
+    let Some(document) = documents::get_document_by_slug(&state.pool, &slug, filter).await? else {
+        return Err(AppError::NotFound(format!(
+            "No document with slug \"{slug}\"."
+        )));
+    };
+    let backlinks = links::backlinks(&state.pool, document.id, visibility).await?;
+    let envelopes: Vec<BacklinkEnvelope> =
+        backlinks.into_iter().map(BacklinkEnvelope::from).collect();
+    Ok((StatusCode::OK, Json(envelopes)).into_response())
 }
 
 pub async fn publish_document(
