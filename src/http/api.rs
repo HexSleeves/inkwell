@@ -197,9 +197,13 @@ async fn create_document(
         },
     )
     .await?;
-    // Persist outbound edges after insert (the source id exists only now). A
-    // failure here can't unmake the document; edges rebuild on the next save.
-    garden::persist_source_edges(&state.pool, document.id, &refs).await?;
+    // Persist outbound edges after insert (the source id exists only now).
+    // Best-effort: the document is created and already renders its own links
+    // correctly; a failure here only delays backlink/fan-out metadata, which
+    // rebuilds on the next save. Don't 500 a create that succeeded.
+    if let Err(error) = garden::persist_source_edges(&state.pool, document.id, &refs).await {
+        tracing::warn!(document_id = %document.id, %error, "persist_source_edges failed; edges rebuild on next save");
+    }
     // Light up any existing stubs that pointed at this new slug.
     garden::backfill_after_change(&state.pool, document.id, &document.slug).await;
     Ok((StatusCode::CREATED, Json(DocumentEnvelope::from(document))).into_response())
@@ -309,9 +313,13 @@ async fn update_document(
             "No document with slug \"{slug}\"."
         )));
     };
-    // Body changed → its outbound edges changed; replace them.
-    if let Some(refs) = body_refs {
-        garden::persist_source_edges(&state.pool, document.id, &refs).await?;
+    // Body changed → its outbound edges changed; replace them. Best-effort for
+    // the same reason as create: the update already succeeded and the note
+    // renders correctly; stale edges self-heal on the next save.
+    if let Some(refs) = body_refs
+        && let Err(error) = garden::persist_source_edges(&state.pool, document.id, &refs).await
+    {
+        tracing::warn!(document_id = %document.id, %error, "persist_source_edges failed; edges may be stale until next save");
     }
     Ok((StatusCode::OK, Json(DocumentEnvelope::from(document))).into_response())
 }
