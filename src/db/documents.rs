@@ -118,6 +118,7 @@ pub async fn update_document_by_slug(
             body_markdown = COALESCE($3, body_markdown),
             rendered_html = COALESCE($4, rendered_html),
             tags = COALESCE($5, tags),
+            version = version + 1,
             updated_at = now()
         WHERE slug = $1
         RETURNING id, slug, title, body_markdown, rendered_html, status, tags, created_at, updated_at
@@ -151,6 +152,23 @@ pub async fn set_document_status(
     .bind(status.as_str())
     .fetch_optional(pool)
     .await
+}
+
+/// Overwrite a document's stored `rendered_html` without touching `version` or
+/// `updated_at`. Used by the link-graph re-render fan-out: re-rendering a note
+/// because a *linked* note changed is not a content edit, so it must not bump
+/// the version or disturb cache/feed timestamps.
+pub async fn set_rendered_html(
+    pool: &PgPool,
+    id: uuid::Uuid,
+    rendered_html: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE documents SET rendered_html = $2 WHERE id = $1")
+        .bind(id)
+        .bind(rendered_html)
+        .execute(pool)
+        .await?;
+    Ok(())
 }
 
 pub async fn delete_document_by_slug(pool: &PgPool, slug: &str) -> Result<bool, sqlx::Error> {

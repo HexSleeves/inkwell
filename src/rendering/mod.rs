@@ -1,6 +1,7 @@
 pub mod highlight;
 pub mod markdown;
 pub mod sanitize;
+pub mod wikilink;
 
 pub use markdown::render_markdown;
 

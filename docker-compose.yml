@@ -1,6 +1,10 @@
 services:
   db:
-    image: postgres:18-alpine
+    # pgvector image from P0 so the one-command quickstart never breaks when the
+    # P3 semantic layer adds embeddings. pgvector tracks pg17 (no pg18 tag yet);
+    # this steps the dev DB major 18 -> 17, so reset the `inkwell-pgdata` volume
+    # if upgrading an existing local stack (`docker compose down -v`).
+    image: pgvector/pgvector:pg17
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-inkwell}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-inkwell}

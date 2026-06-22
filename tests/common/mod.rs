@@ -22,7 +22,9 @@ pub async fn maybe_pool() -> Result<Option<PgPool>> {
     };
     let pool = create_pool(&database_url)?;
     migrations::migrate(&pool).await?;
-    sqlx::query("TRUNCATE TABLE documents RESTART IDENTITY")
+    // `links` carries an FK to `documents`, so it must be truncated alongside it
+    // (CASCADE) or the truncate errors on the referencing constraint.
+    sqlx::query("TRUNCATE TABLE documents, links RESTART IDENTITY CASCADE")
         .execute(&pool)
         .await?;
     Ok(Some(pool))

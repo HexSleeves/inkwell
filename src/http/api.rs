@@ -15,10 +15,10 @@ use crate::domain::document::{
 use crate::domain::slug::{is_valid_slug, slugify};
 use crate::domain::tags::normalize_tags;
 use crate::error::AppError;
+use crate::garden;
 use crate::http::AppState;
 use crate::http::auth::is_authenticated;
 use crate::http::extractors::{parse_json_body, parse_non_negative_int, require_object};
-use crate::rendering::render_document_html;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -140,6 +140,8 @@ pub async fn publish_document(
             "No document with slug \"{slug}\"."
         )));
     };
+    // Now publicly resolvable: upgrade stubs pointing at this slug.
+    garden::backfill_after_change(&state.pool, document.id, &document.slug).await;
     Ok((StatusCode::OK, Json(DocumentEnvelope::from(document))).into_response())
 }
 
@@ -160,6 +162,8 @@ pub async fn unpublish_document(
             "No document with slug \"{slug}\"."
         )));
     };
+    // No longer publicly resolvable: downgrade links pointing at this slug to stubs.
+    garden::backfill_after_change(&state.pool, document.id, &document.slug).await;
     Ok((StatusCode::OK, Json(DocumentEnvelope::from(document))).into_response())
 }
 
@@ -180,18 +184,28 @@ async fn create_document(
     )?;
     let slug = resolve_slug(map.get("slug"), &title)?;
     let tags = resolve_tags(map.get("tags"))?;
+    let (rendered_html, refs) = garden::render_and_resolve(&state.pool, &body_markdown).await?;
     let document = documents::create_document(
         &state.pool,
         NewDocument {
             slug,
             title,
-            body_markdown: body_markdown.clone(),
-            rendered_html: render_document_html(&body_markdown),
+            body_markdown,
+            rendered_html,
             status: None,
             tags,
         },
     )
     .await?;
+    // Persist outbound edges after insert (the source id exists only now).
+    // Best-effort: the document is created and already renders its own links
+    // correctly; a failure here only delays backlink/fan-out metadata, which
+    // rebuilds on the next save. Don't 500 a create that succeeded.
+    if let Err(error) = garden::persist_source_edges(&state.pool, document.id, &refs).await {
+        tracing::warn!(document_id = %document.id, %error, "persist_source_edges failed; edges rebuild on next save");
+    }
+    // Light up any existing stubs that pointed at this new slug.
+    garden::backfill_after_change(&state.pool, document.id, &document.slug).await;
     Ok((StatusCode::CREATED, Json(DocumentEnvelope::from(document))).into_response())
 }
 
@@ -265,6 +279,7 @@ async fn update_document(
     let value = parse_json_body(body)?;
     let map = require_object(value)?;
     let mut patch = DocumentPatch::default();
+    let mut body_refs = None;
     if map.contains_key("title") {
         patch.title = Some(required_string(
             map.get("title"),
@@ -278,8 +293,10 @@ async fn update_document(
             "bodyMarkdown",
             MAX_BODY_MARKDOWN_LENGTH,
         )?;
-        patch.rendered_html = Some(render_document_html(&body_markdown));
+        let (rendered_html, refs) = garden::render_and_resolve(&state.pool, &body_markdown).await?;
+        patch.rendered_html = Some(rendered_html);
         patch.body_markdown = Some(body_markdown);
+        body_refs = Some(refs);
     }
     if map.contains_key("tags") {
         patch.tags = Some(resolve_tags(map.get("tags"))?);
@@ -296,6 +313,14 @@ async fn update_document(
             "No document with slug \"{slug}\"."
         )));
     };
+    // Body changed → its outbound edges changed; replace them. Best-effort for
+    // the same reason as create: the update already succeeded and the note
+    // renders correctly; stale edges self-heal on the next save.
+    if let Some(refs) = body_refs
+        && let Err(error) = garden::persist_source_edges(&state.pool, document.id, &refs).await
+    {
+        tracing::warn!(document_id = %document.id, %error, "persist_source_edges failed; edges may be stale until next save");
+    }
     Ok((StatusCode::OK, Json(DocumentEnvelope::from(document))).into_response())
 }
 
@@ -305,11 +330,23 @@ async fn delete_document(
     slug: String,
 ) -> Result<Response, AppError> {
     require_api_key(&headers, state.config.api_key.as_deref())?;
+    // Resolve the note first so we can capture which sources link to it BEFORE
+    // the row (and its inbound edges' target_note_id) are gone.
+    let Some(document) =
+        documents::get_document_by_slug(&state.pool, &slug, StatusFilter::default()).await?
+    else {
+        return Err(AppError::NotFound(format!(
+            "No document with slug \"{slug}\"."
+        )));
+    };
+    let affected = garden::affected_sources(&state.pool, document.id, &document.slug).await;
     if !documents::delete_document_by_slug(&state.pool, &slug).await? {
         return Err(AppError::NotFound(format!(
             "No document with slug \"{slug}\"."
         )));
     }
+    // Inbound edges now dangle; re-render those sources so they fall back to stubs.
+    garden::rerender_sources(&state.pool, &affected).await;
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
