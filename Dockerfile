@@ -23,6 +23,6 @@ USER inkwell
 WORKDIR /app
 # Bundle the sample vault so `inkwell seed` can plant a populated demo garden at
 # runtime (the compose app points the seed step at this path).
-COPY examples/garden /app/examples/garden
+COPY --chown=inkwell:inkwell examples/garden /app/examples/garden
 EXPOSE 3000
 CMD ["inkwell", "serve"]
