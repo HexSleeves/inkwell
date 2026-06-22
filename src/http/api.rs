@@ -336,9 +336,10 @@ async fn get_document(
         )));
     };
     // Advertise the current version as an ETag so clients can echo it back as
-    // `If-Match` on a conditional update.
-    let etag = HeaderValue::from_str(&document.version.to_string())
-        .unwrap_or_else(|_| HeaderValue::from_static("0"));
+    // `If-Match` on a conditional update. RFC 7232 requires the value to be a
+    // quoted string; `parse_if_match` tolerates both the quoted and bare forms.
+    let etag = HeaderValue::from_str(&format!("\"{}\"", document.version))
+        .unwrap_or_else(|_| HeaderValue::from_static("\"0\""));
     Ok((
         StatusCode::OK,
         [(axum::http::header::ETAG, etag)],

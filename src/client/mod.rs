@@ -78,10 +78,12 @@ pub struct DocumentDetail {
 }
 
 /// The shape of `GET /documents` (the list envelope), narrowed to the fields
-/// the MCP `list_notes`/`search_notes` tools surface.
+/// the MCP `list_notes`/`search_notes` tools surface. `total` lets the client
+/// page through the full set rather than stopping at the server's default page.
 #[derive(Debug, Clone, Deserialize)]
 struct ListEnvelope {
     documents: Vec<DocumentDetail>,
+    total: i64,
 }
 
 #[derive(Serialize)]
@@ -286,22 +288,38 @@ impl InkwellClient {
     }
 
     /// List documents (most-recent first), as the authenticated caller sees
-    /// them (drafts included). Honours the server's pagination defaults.
+    /// them (drafts included). Pages through every result so `list_notes` and
+    /// `search_notes` see the full garden rather than just the server's first
+    /// default page.
     pub async fn list_notes(&self) -> Result<Vec<DocumentDetail>> {
-        let resp = self
-            .http
-            .get(self.url("/documents"))
-            .header("x-api-key", &self.api_key)
-            .send()
-            .await
-            .with_context(|| format!("listing documents at {}", self.base_url))?;
-        match resp.status() {
-            StatusCode::OK => {
-                let envelope: ListEnvelope = resp.json().await.context("decoding document list")?;
-                Ok(envelope.documents)
+        // Request the largest page the server allows to minimise round-trips,
+        // then keep paging on `offset` until we've gathered `total` documents.
+        const PAGE_SIZE: u32 = 100;
+        let mut all = Vec::new();
+        let mut offset: u32 = 0;
+        loop {
+            let resp = self
+                .http
+                // `limit`/`offset` are plain integers, so no escaping is needed.
+                .get(self.url(&format!("/documents?limit={PAGE_SIZE}&offset={offset}")))
+                .header("x-api-key", &self.api_key)
+                .send()
+                .await
+                .with_context(|| format!("listing documents at {}", self.base_url))?;
+            let envelope: ListEnvelope = match resp.status() {
+                StatusCode::OK => resp.json().await.context("decoding document list")?,
+                status => return Err(error_for(status, resp).await),
+            };
+            let page_len = envelope.documents.len();
+            all.extend(envelope.documents);
+            // Stop once we've collected everything the server reports, or when a
+            // page comes back empty (defensive guard against a non-advancing loop).
+            if page_len == 0 || (all.len() as i64) >= envelope.total {
+                break;
             }
-            status => Err(error_for(status, resp).await),
+            offset = offset.saturating_add(PAGE_SIZE);
         }
+        Ok(all)
     }
 
     /// Search documents by a free-text query, matching title or body. The
@@ -342,6 +360,11 @@ impl InkwellClient {
         body: Option<&str>,
         tags: Option<&[String]>,
     ) -> Result<DocumentSummary> {
+        // An all-`None` patch would still issue a conditional write, bumping the
+        // version for no semantic change and needlessly invalidating readers.
+        if title.is_none() && body.is_none() && tags.is_none() {
+            bail!("At least one of title, body, or tags must be provided to update a note.");
+        }
         // Reading first lets us send a complete `UpdatePayload` (the API treats
         // each field as a full replacement), filling unspecified fields from the
         // current note rather than blanking them.

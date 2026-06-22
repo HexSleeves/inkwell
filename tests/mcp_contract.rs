@@ -153,8 +153,8 @@ async fn mcp_round_trip_create_read_search_and_stale_update() -> anyhow::Result<
     let err = stale.expect_err("a stale update must be rejected");
     let message = err.to_string().to_lowercase();
     assert!(
-        message.contains("stale") || message.contains("version") || message.contains("changed"),
-        "stale update error should explain the conflict, got: {message}"
+        message.contains("stale write"),
+        "expected a stale-write conflict error, got: {message}"
     );
 
     Ok(())
