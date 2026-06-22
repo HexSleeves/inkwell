@@ -189,6 +189,10 @@ pub async fn resolve_slug_ids(
 /// Replace every outbound edge of `source_id` with `edges`, atomically. Called
 /// after a note's markdown is (re)rendered so its link graph matches its current
 /// content. Existing rows are deleted and the new set inserted in one transaction.
+///
+/// Every edge is inserted under `source_id` regardless of its own
+/// `source_note_id` field — this function owns exactly one note's outbound set,
+/// so the delete and the inserts cannot diverge.
 pub async fn replace_source_edges(
     pool: &PgPool,
     source_id: Uuid,
@@ -209,7 +213,7 @@ pub async fn replace_source_edges(
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
             "#,
         )
-        .bind(edge.source_note_id)
+        .bind(source_id)
         .bind(edge.target_kind.as_str())
         .bind(edge.target_note_id)
         .bind(&edge.target_url)
