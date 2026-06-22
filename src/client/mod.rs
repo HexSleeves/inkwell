@@ -57,6 +57,33 @@ pub struct DocumentSummary {
     pub slug: String,
     pub title: String,
     pub status: String,
+    pub version: i64,
+}
+
+/// A fuller view of a document for read/list/search surfaces (the MCP tools).
+///
+/// Includes the Markdown body and tags on top of the summary fields. The
+/// `version` is what an MCP client echoes back as the optimistic-concurrency
+/// token on the next update.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DocumentDetail {
+    pub slug: String,
+    pub title: String,
+    #[serde(rename = "bodyMarkdown")]
+    pub body_markdown: String,
+    pub status: String,
+    pub tags: Vec<String>,
+    pub version: i64,
+}
+
+/// The shape of `GET /documents` (the list envelope), narrowed to the fields
+/// the MCP `list_notes`/`search_notes` tools surface. `total` lets the client
+/// page through the full set rather than stopping at the server's default page.
+#[derive(Debug, Clone, Deserialize)]
+struct ListEnvelope {
+    documents: Vec<DocumentDetail>,
+    total: i64,
 }
 
 #[derive(Serialize)]
@@ -152,17 +179,40 @@ impl InkwellClient {
         }
     }
 
-    async fn update(&self, slug: &str, payload: &UpdatePayload<'_>) -> Result<DocumentSummary> {
-        let resp = self
+    /// Update a document. When `expected_version` is `Some`, the request carries
+    /// an `If-Match` header so the server applies the write only if the stored
+    /// version still matches; a `409 Conflict` is mapped to a clear stale-write
+    /// error. The author CLI passes `None` to keep its unconditional behaviour.
+    async fn update(
+        &self,
+        slug: &str,
+        payload: &UpdatePayload<'_>,
+        expected_version: Option<i64>,
+    ) -> Result<DocumentSummary> {
+        let mut request = self
             .http
             .put(self.url(&format!("/documents/{slug}")))
             .header("x-api-key", &self.api_key)
-            .json(payload)
+            .json(payload);
+        if let Some(version) = expected_version {
+            request = request.header("if-match", version.to_string());
+        }
+        let resp = request
             .send()
             .await
             .with_context(|| format!("updating document {slug:?} at {}", self.base_url))?;
         match resp.status() {
             StatusCode::OK => Ok(resp.json().await.context("decoding document")?),
+            StatusCode::CONFLICT => {
+                let detail = conflict_detail(resp).await;
+                Err(anyhow!(
+                    "Stale write: document {slug:?} changed since you read it (expected version {}).{detail} \
+                     Re-read the note and retry with the current version.",
+                    expected_version
+                        .map(|v| v.to_string())
+                        .unwrap_or_else(|| "?".to_string()),
+                ))
+            }
             status => Err(error_for(status, resp).await),
         }
     }
@@ -200,7 +250,10 @@ impl InkwellClient {
                 body_markdown: &doc.body,
                 tags: &doc.tags,
             };
-            Ok((PushAction::Updated, self.update(&doc.slug, &payload).await?))
+            Ok((
+                PushAction::Updated,
+                self.update(&doc.slug, &payload, None).await?,
+            ))
         } else {
             let payload = CreatePayload {
                 title: &doc.title,
@@ -210,6 +263,137 @@ impl InkwellClient {
             };
             Ok((PushAction::Created, self.create(&payload).await?))
         }
+    }
+
+    // -- MCP-facing read/write surface -------------------------------------
+    //
+    // These return the fuller [`DocumentDetail`] so an AI agent gets the body,
+    // tags, and the `version` it needs for optimistic-concurrency updates.
+
+    /// Fetch a document by slug with its body, tags, and version. Returns
+    /// `None` on a 404 so callers can report "no such note" cleanly.
+    pub async fn read_note(&self, slug: &str) -> Result<Option<DocumentDetail>> {
+        let resp = self
+            .http
+            .get(self.url(&format!("/documents/{slug}")))
+            .header("x-api-key", &self.api_key)
+            .send()
+            .await
+            .with_context(|| format!("reading document {slug:?} from {}", self.base_url))?;
+        match resp.status() {
+            StatusCode::OK => Ok(Some(resp.json().await.context("decoding document")?)),
+            StatusCode::NOT_FOUND => Ok(None),
+            status => Err(error_for(status, resp).await),
+        }
+    }
+
+    /// List documents (most-recent first), as the authenticated caller sees
+    /// them (drafts included). Pages through every result so `list_notes` and
+    /// `search_notes` see the full garden rather than just the server's first
+    /// default page.
+    pub async fn list_notes(&self) -> Result<Vec<DocumentDetail>> {
+        // Request the largest page the server allows to minimise round-trips,
+        // then keep paging on `offset` until we've gathered `total` documents.
+        const PAGE_SIZE: u32 = 100;
+        let mut all = Vec::new();
+        let mut offset: u32 = 0;
+        loop {
+            let resp = self
+                .http
+                // `limit`/`offset` are plain integers, so no escaping is needed.
+                .get(self.url(&format!("/documents?limit={PAGE_SIZE}&offset={offset}")))
+                .header("x-api-key", &self.api_key)
+                .send()
+                .await
+                .with_context(|| format!("listing documents at {}", self.base_url))?;
+            let envelope: ListEnvelope = match resp.status() {
+                StatusCode::OK => resp.json().await.context("decoding document list")?,
+                status => return Err(error_for(status, resp).await),
+            };
+            let page_len = envelope.documents.len();
+            all.extend(envelope.documents);
+            // Stop once we've collected everything the server reports, or when a
+            // page comes back empty (defensive guard against a non-advancing loop).
+            if page_len == 0 || (all.len() as i64) >= envelope.total {
+                break;
+            }
+            offset = offset.saturating_add(PAGE_SIZE);
+        }
+        Ok(all)
+    }
+
+    /// Search documents by a free-text query, matching title or body. The
+    /// server's `/search` page is HTML, so the MCP search rides the list
+    /// endpoint and filters client-side over the same authenticated view.
+    pub async fn search_notes(&self, query: &str) -> Result<Vec<DocumentDetail>> {
+        let needle = query.trim().to_lowercase();
+        let mut notes = self.list_notes().await?;
+        if !needle.is_empty() {
+            notes.retain(|note| {
+                note.title.to_lowercase().contains(&needle)
+                    || note.body_markdown.to_lowercase().contains(&needle)
+            });
+        }
+        Ok(notes)
+    }
+
+    /// Create a note, returning its summary (slug, status, version).
+    pub async fn create_note(&self, doc: &DocumentInput) -> Result<DocumentSummary> {
+        enforce_body_limit(&doc.body)?;
+        let payload = CreatePayload {
+            title: &doc.title,
+            slug: &doc.slug,
+            body_markdown: &doc.body,
+            tags: &doc.tags,
+        };
+        self.create(&payload).await
+    }
+
+    /// Update a note conditionally on `expected_version`. A stale token yields a
+    /// clear stale-write error (the server returns 409). Only the fields present
+    /// in `patch` are changed; `None` fields keep their current server value.
+    pub async fn update_note(
+        &self,
+        slug: &str,
+        expected_version: i64,
+        title: Option<&str>,
+        body: Option<&str>,
+        tags: Option<&[String]>,
+    ) -> Result<DocumentSummary> {
+        // An all-`None` patch would still issue a conditional write, bumping the
+        // version for no semantic change and needlessly invalidating readers.
+        if title.is_none() && body.is_none() && tags.is_none() {
+            bail!("At least one of title, body, or tags must be provided to update a note.");
+        }
+        // Reading first lets us send a complete `UpdatePayload` (the API treats
+        // each field as a full replacement), filling unspecified fields from the
+        // current note rather than blanking them.
+        let current = self
+            .read_note(slug)
+            .await?
+            .ok_or_else(|| anyhow!("No note with slug {slug:?}."))?;
+        if let Some(body) = body {
+            enforce_body_limit(body)?;
+        }
+        let title = title.unwrap_or(&current.title);
+        let body = body.unwrap_or(&current.body_markdown);
+        let tags = tags.map(<[String]>::to_vec).unwrap_or(current.tags);
+        let payload = UpdatePayload {
+            title,
+            body_markdown: body,
+            tags: &tags,
+        };
+        self.update(slug, &payload, Some(expected_version)).await
+    }
+}
+
+/// Extract a human-readable detail from a 409 response body, if the server sent
+/// an error envelope; used to enrich the stale-write message.
+async fn conflict_detail(resp: reqwest::Response) -> String {
+    let raw = resp.text().await.unwrap_or_default();
+    match serde_json::from_str::<ServerError>(&raw) {
+        Ok(parsed) if !parsed.error.message.is_empty() => format!(" {}", parsed.error.message),
+        _ => String::new(),
     }
 }
 

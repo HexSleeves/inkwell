@@ -19,7 +19,7 @@ pub async fn create_document(pool: &PgPool, input: NewDocument) -> Result<Docume
         r#"
         INSERT INTO documents (slug, title, body_markdown, rendered_html, status, tags)
         VALUES ($1, $2, $3, $4, COALESCE($5, 'draft'), $6)
-        RETURNING id, slug, title, body_markdown, rendered_html, status, tags, created_at, updated_at
+        RETURNING id, slug, title, body_markdown, rendered_html, status, tags, version, created_at, updated_at
         "#,
     )
     .bind(&input.slug)
@@ -43,7 +43,7 @@ pub async fn get_document_by_slug(
         Some(status) => {
             sqlx::query_as::<Postgres, Document>(
                 r#"
-                SELECT id, slug, title, body_markdown, rendered_html, status, tags, created_at, updated_at
+                SELECT id, slug, title, body_markdown, rendered_html, status, tags, version, created_at, updated_at
                 FROM documents
                 WHERE slug = $1 AND status = $2
                 "#,
@@ -56,7 +56,7 @@ pub async fn get_document_by_slug(
         None => {
             sqlx::query_as::<Postgres, Document>(
                 r#"
-                SELECT id, slug, title, body_markdown, rendered_html, status, tags, created_at, updated_at
+                SELECT id, slug, title, body_markdown, rendered_html, status, tags, version, created_at, updated_at
                 FROM documents
                 WHERE slug = $1
                 "#,
@@ -73,7 +73,7 @@ pub async fn list_documents(
     options: ListOptions,
 ) -> Result<Vec<Document>, sqlx::Error> {
     let mut builder = QueryBuilder::<Postgres>::new(
-        "SELECT id, slug, title, body_markdown, rendered_html, status, tags, created_at, updated_at FROM documents",
+        "SELECT id, slug, title, body_markdown, rendered_html, status, tags, version, created_at, updated_at FROM documents",
     );
     if let Some(status) = options.status {
         builder.push(" WHERE status = ").push_bind(status.as_str());
@@ -121,7 +121,7 @@ pub async fn update_document_by_slug(
             version = version + 1,
             updated_at = now()
         WHERE slug = $1
-        RETURNING id, slug, title, body_markdown, rendered_html, status, tags, created_at, updated_at
+        RETURNING id, slug, title, body_markdown, rendered_html, status, tags, version, created_at, updated_at
         "#,
     )
     .bind(slug)
@@ -135,6 +135,76 @@ pub async fn update_document_by_slug(
     map_optional_duplicate_slug(result, slug)
 }
 
+/// Outcome of a version-checked (`If-Match`) update.
+///
+/// The handler maps these to HTTP status codes: [`Updated`](Self::Updated) is a
+/// `200`, [`NotFound`](Self::NotFound) a `404`, and
+/// [`VersionMismatch`](Self::VersionMismatch) a `409 Conflict` so a stale write
+/// surfaces cleanly to MCP clients instead of silently clobbering newer content.
+pub enum ConditionalUpdate {
+    Updated(Box<Document>),
+    /// No row with this slug exists at all.
+    NotFound,
+    /// The row exists but its current `version` differs from the expected one.
+    VersionMismatch {
+        current: i64,
+    },
+}
+
+/// Conditionally update a document, applying the patch only when the stored
+/// `version` equals `expected_version`. The bump and the guard happen in the
+/// same `UPDATE`, so two concurrent writers can never both win.
+///
+/// On a non-match the row is re-read to tell "no such slug" (→ 404) apart from
+/// "someone edited it first" (→ 409); the probe is a plain read, so a row that
+/// vanished between the update and the probe also reports `NotFound`.
+pub async fn update_document_by_slug_if_version(
+    pool: &PgPool,
+    slug: &str,
+    expected_version: i64,
+    patch: DocumentPatch,
+) -> Result<ConditionalUpdate, DbError> {
+    let result = sqlx::query_as::<Postgres, Document>(
+        r#"
+        UPDATE documents
+        SET title = COALESCE($3, title),
+            body_markdown = COALESCE($4, body_markdown),
+            rendered_html = COALESCE($5, rendered_html),
+            tags = COALESCE($6, tags),
+            version = version + 1,
+            updated_at = now()
+        WHERE slug = $1 AND version = $2
+        RETURNING id, slug, title, body_markdown, rendered_html, status, tags, version, created_at, updated_at
+        "#,
+    )
+    .bind(slug)
+    .bind(expected_version)
+    .bind(&patch.title)
+    .bind(&patch.body_markdown)
+    .bind(&patch.rendered_html)
+    .bind(&patch.tags)
+    .fetch_optional(pool)
+    .await;
+
+    match map_optional_duplicate_slug(result, slug)? {
+        Some(document) => Ok(ConditionalUpdate::Updated(Box::new(document))),
+        None => {
+            // The guarded UPDATE matched no row: either the slug is gone, or the
+            // version moved. Probe the current version to disambiguate.
+            match sqlx::query_scalar::<Postgres, i64>(
+                "SELECT version FROM documents WHERE slug = $1",
+            )
+            .bind(slug)
+            .fetch_optional(pool)
+            .await?
+            {
+                Some(current) => Ok(ConditionalUpdate::VersionMismatch { current }),
+                None => Ok(ConditionalUpdate::NotFound),
+            }
+        }
+    }
+}
+
 pub async fn set_document_status(
     pool: &PgPool,
     slug: &str,
@@ -145,7 +215,7 @@ pub async fn set_document_status(
         UPDATE documents
         SET status = $2
         WHERE slug = $1
-        RETURNING id, slug, title, body_markdown, rendered_html, status, tags, created_at, updated_at
+        RETURNING id, slug, title, body_markdown, rendered_html, status, tags, version, created_at, updated_at
         "#,
     )
     .bind(slug)
@@ -185,7 +255,7 @@ pub async fn list_documents_by_tag(
     options: ListByTagOptions,
 ) -> Result<Vec<Document>, sqlx::Error> {
     let mut builder = QueryBuilder::<Postgres>::new(
-        "SELECT id, slug, title, body_markdown, rendered_html, status, tags, created_at, updated_at FROM documents WHERE ",
+        "SELECT id, slug, title, body_markdown, rendered_html, status, tags, version, created_at, updated_at FROM documents WHERE ",
     );
     builder.push_bind(tag).push(" = ANY(tags)");
     if let Some(status) = options.status {
@@ -276,7 +346,7 @@ pub async fn search_published_documents(
 ) -> Result<Vec<Document>, sqlx::Error> {
     let pattern = format!("%{}%", escape_like_pattern(query));
     let mut builder = QueryBuilder::<Postgres>::new(
-        "SELECT id, slug, title, body_markdown, rendered_html, status, tags, created_at, updated_at
+        "SELECT id, slug, title, body_markdown, rendered_html, status, tags, version, created_at, updated_at
          FROM documents
          WHERE status = 'published'
          AND (title ILIKE ",

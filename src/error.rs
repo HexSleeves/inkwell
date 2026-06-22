@@ -15,6 +15,8 @@ pub enum AppError {
     PayloadTooLarge,
     #[error("{0}")]
     NotFound(String),
+    #[error("{0}")]
+    Conflict(String),
     #[error("Method not allowed.")]
     MethodNotAllowed(Vec<&'static str>),
     #[error(transparent)]
@@ -56,6 +58,7 @@ impl IntoResponse for AppError {
                 None,
             ),
             Self::NotFound(message) => json_error(StatusCode::NOT_FOUND, &message, None, None),
+            Self::Conflict(message) => json_error(StatusCode::CONFLICT, &message, None, None),
             Self::MethodNotAllowed(allow) => json_error(
                 StatusCode::METHOD_NOT_ALLOWED,
                 "Method not allowed.",
