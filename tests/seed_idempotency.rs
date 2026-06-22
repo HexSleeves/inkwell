@@ -41,7 +41,7 @@ async fn seed_creates_published_notes_with_backlinks() -> anyhow::Result<()> {
 
     // The sample vault is non-trivial and every note is published.
     let total = count_documents(&pool, StatusFilter::default()).await?;
-    assert!(total >= 4, "expected the bundled sample notes, got {total}");
+    assert!(total >= 5, "expected the bundled sample notes, got {total}");
     let published = count_documents(
         &pool,
         StatusFilter {
