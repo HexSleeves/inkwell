@@ -118,6 +118,7 @@ pub async fn update_document_by_slug(
             body_markdown = COALESCE($3, body_markdown),
             rendered_html = COALESCE($4, rendered_html),
             tags = COALESCE($5, tags),
+            version = version + 1,
             updated_at = now()
         WHERE slug = $1
         RETURNING id, slug, title, body_markdown, rendered_html, status, tags, created_at, updated_at

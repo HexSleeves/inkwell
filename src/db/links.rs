@@ -19,7 +19,7 @@
 //!          (then notes_to_rerender(new) re-renders the stub's source)
 //! ```
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::domain::document::DocumentStatus;
 use sqlx::{PgPool, Postgres};
@@ -151,6 +151,77 @@ pub async fn resolve_existing_slugs(
         }
     };
     Ok(found.into_iter().collect())
+}
+
+/// Like [`resolve_existing_slugs`] but returns a `slug -> note id` map, so the
+/// write path can both decide which links render resolved AND record the
+/// `target_note_id` on each persisted edge in one query.
+pub async fn resolve_slug_ids(
+    pool: &PgPool,
+    slugs: &[String],
+    visibility: Visibility,
+) -> Result<HashMap<String, Uuid>, sqlx::Error> {
+    if slugs.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let rows: Vec<(String, Uuid)> = match visibility.status_filter() {
+        Some(status) => {
+            sqlx::query_as::<Postgres, (String, Uuid)>(
+                "SELECT slug, id FROM documents WHERE slug = ANY($1) AND status = $2",
+            )
+            .bind(slugs)
+            .bind(status.as_str())
+            .fetch_all(pool)
+            .await?
+        }
+        None => {
+            sqlx::query_as::<Postgres, (String, Uuid)>(
+                "SELECT slug, id FROM documents WHERE slug = ANY($1)",
+            )
+            .bind(slugs)
+            .fetch_all(pool)
+            .await?
+        }
+    };
+    Ok(rows.into_iter().collect())
+}
+
+/// Replace every outbound edge of `source_id` with `edges`, atomically. Called
+/// after a note's markdown is (re)rendered so its link graph matches its current
+/// content. Existing rows are deleted and the new set inserted in one transaction.
+pub async fn replace_source_edges(
+    pool: &PgPool,
+    source_id: Uuid,
+    edges: &[NewLink],
+) -> Result<(), sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    sqlx::query("DELETE FROM links WHERE source_note_id = $1")
+        .bind(source_id)
+        .execute(&mut *tx)
+        .await?;
+    for edge in edges {
+        sqlx::query(
+            r#"
+            INSERT INTO links (
+                source_note_id, target_kind, target_note_id, target_url,
+                target_text, link_type, context_snippet, resolved
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            "#,
+        )
+        .bind(edge.source_note_id)
+        .bind(edge.target_kind.as_str())
+        .bind(edge.target_note_id)
+        .bind(&edge.target_url)
+        .bind(&edge.target_text)
+        .bind(edge.link_type.as_str())
+        .bind(&edge.context_snippet)
+        .bind(edge.resolved)
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await?;
+    Ok(())
 }
 
 /// Note ids whose stored `rendered_html` may depend on the note identified by

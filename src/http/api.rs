@@ -15,10 +15,10 @@ use crate::domain::document::{
 use crate::domain::slug::{is_valid_slug, slugify};
 use crate::domain::tags::normalize_tags;
 use crate::error::AppError;
+use crate::garden;
 use crate::http::AppState;
 use crate::http::auth::is_authenticated;
 use crate::http::extractors::{parse_json_body, parse_non_negative_int, require_object};
-use crate::rendering::render_document_html;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -180,18 +180,22 @@ async fn create_document(
     )?;
     let slug = resolve_slug(map.get("slug"), &title)?;
     let tags = resolve_tags(map.get("tags"))?;
+    let (rendered_html, refs) = garden::render_and_resolve(&state.pool, &body_markdown).await?;
     let document = documents::create_document(
         &state.pool,
         NewDocument {
             slug,
             title,
-            body_markdown: body_markdown.clone(),
-            rendered_html: render_document_html(&body_markdown),
+            body_markdown,
+            rendered_html,
             status: None,
             tags,
         },
     )
     .await?;
+    // Persist outbound edges after insert (the source id exists only now). A
+    // failure here can't unmake the document; edges rebuild on the next save.
+    garden::persist_source_edges(&state.pool, document.id, &refs).await?;
     Ok((StatusCode::CREATED, Json(DocumentEnvelope::from(document))).into_response())
 }
 
@@ -265,6 +269,7 @@ async fn update_document(
     let value = parse_json_body(body)?;
     let map = require_object(value)?;
     let mut patch = DocumentPatch::default();
+    let mut body_refs = None;
     if map.contains_key("title") {
         patch.title = Some(required_string(
             map.get("title"),
@@ -278,8 +283,10 @@ async fn update_document(
             "bodyMarkdown",
             MAX_BODY_MARKDOWN_LENGTH,
         )?;
-        patch.rendered_html = Some(render_document_html(&body_markdown));
+        let (rendered_html, refs) = garden::render_and_resolve(&state.pool, &body_markdown).await?;
+        patch.rendered_html = Some(rendered_html);
         patch.body_markdown = Some(body_markdown);
+        body_refs = Some(refs);
     }
     if map.contains_key("tags") {
         patch.tags = Some(resolve_tags(map.get("tags"))?);
@@ -296,6 +303,10 @@ async fn update_document(
             "No document with slug \"{slug}\"."
         )));
     };
+    // Body changed → its outbound edges changed; replace them.
+    if let Some(refs) = body_refs {
+        garden::persist_source_edges(&state.pool, document.id, &refs).await?;
+    }
     Ok((StatusCode::OK, Json(DocumentEnvelope::from(document))).into_response())
 }
 
