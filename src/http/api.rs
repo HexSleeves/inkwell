@@ -581,25 +581,34 @@ async fn update_document(
             document
         }
     };
-    // Body changed → its outbound edges AND embeddings changed; replace both.
-    // Best-effort for the same reason as create: the update already succeeded and
-    // the note renders correctly; stale edges/embeddings self-heal on the next
-    // save. A failure in either step only warns and never 500s the write.
-    if let Some(refs) = body_refs {
-        if let Err(error) = garden::persist_source_edges(&state.pool, document.id, &refs).await {
-            tracing::warn!(document_id = %document.id, %error, "persist_source_edges failed; edges may be stale until next save");
-        }
-        if let Err(error) = crate::ai::index_note(
-            &state.pool,
-            state.embedder.as_ref(),
-            document.id,
-            document.version,
-            &document.body_markdown,
-        )
-        .await
-        {
-            tracing::warn!(document_id = %document.id, %error, "index_note failed; embeddings may be stale until next save");
-        }
+    // Body changed → its outbound edges changed; replace them. Best-effort for the
+    // same reason as create: the update already succeeded and the note renders
+    // correctly; stale edges self-heal on the next save. A failure only warns and
+    // never 500s the write.
+    if let Some(refs) = body_refs
+        && let Err(error) = garden::persist_source_edges(&state.pool, document.id, &refs).await
+    {
+        tracing::warn!(document_id = %document.id, %error, "persist_source_edges failed; edges may be stale until next save");
+    }
+    // Reindex on EVERY successful update, not only body patches: a metadata-only
+    // update still bumps `version`, which can cause a concurrent body update's
+    // version-guarded index_note to be skipped and leave note_chunks permanently
+    // stale relative to the current body. Reindexing here (against this update's
+    // version) guarantees a later correction. index_note re-derives chunks from
+    // `document.body_markdown`, so a tags/growth-only change re-embeds the
+    // unchanged body — cheap insurance against a desynced semantic index. The
+    // version guard inside index_note still drops this write if a newer revision
+    // has since landed. Best-effort: a failure only warns and never 500s.
+    if let Err(error) = crate::ai::index_note(
+        &state.pool,
+        state.embedder.as_ref(),
+        document.id,
+        document.version,
+        &document.body_markdown,
+    )
+    .await
+    {
+        tracing::warn!(document_id = %document.id, %error, "index_note failed; embeddings may be stale until next save");
     }
     Ok((StatusCode::OK, Json(DocumentEnvelope::from(document))).into_response())
 }
