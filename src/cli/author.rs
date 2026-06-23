@@ -25,6 +25,8 @@ pub struct ParsedDocument {
     pub title: String,
     pub slug: Option<String>,
     pub status: Option<String>,
+    /// Digital-garden maturity stage from the `growth` front-matter key, if set.
+    pub growth: Option<String>,
     pub tags: Vec<String>,
     pub body: String,
 }
@@ -66,6 +68,7 @@ impl ParsedDocument {
             slug: self.effective_slug()?,
             body: self.body.clone(),
             tags: self.tags.clone(),
+            growth: self.growth.clone(),
         })
     }
 }
@@ -91,6 +94,7 @@ pub fn parse_markdown(input: &str) -> Result<ParsedDocument> {
     let mut title: Option<String> = None;
     let mut slug: Option<String> = None;
     let mut status: Option<String> = None;
+    let mut growth: Option<String> = None;
     let mut tags: Vec<String> = Vec::new();
     let mut list_key: Option<String> = None;
 
@@ -135,6 +139,7 @@ pub fn parse_markdown(input: &str) -> Result<ParsedDocument> {
             "title" => title = Some(value),
             "slug" => slug = Some(value),
             "status" => status = Some(value),
+            "growth" => growth = Some(value),
             // Inline list form: `tags: rust, notes`.
             "tags" => tags.extend(
                 value
@@ -157,10 +162,19 @@ pub fn parse_markdown(input: &str) -> Result<ParsedDocument> {
         bail!("Front matter \"status\" must be \"draft\" or \"published\", saw {status:?}.");
     }
 
+    if let Some(growth) = growth.as_deref()
+        && crate::domain::document::GrowthStage::parse(growth).is_none()
+    {
+        bail!(
+            "Front matter \"growth\" must be \"seedling\", \"budding\", or \"evergreen\", saw {growth:?}."
+        );
+    }
+
     Ok(ParsedDocument {
         title,
         slug,
         status,
+        growth,
         tags,
         body: body.trim().to_string(),
     })
@@ -449,6 +463,7 @@ tags:\n\
             title: "My First Post!".to_string(),
             slug: None,
             status: None,
+            growth: None,
             tags: vec![],
             body: "x".to_string(),
         };
@@ -474,6 +489,26 @@ tags:\n\
     #[test]
     fn rejects_invalid_status() {
         let input = "---\ntitle: x\nstatus: live\n---\nBody\n";
+        assert!(parse_markdown(input).is_err());
+    }
+
+    #[test]
+    fn parses_growth_front_matter_key() {
+        let input = "---\ntitle: x\ngrowth: evergreen\n---\nBody\n";
+        let doc = parse_markdown(input).unwrap();
+        assert_eq!(doc.growth.as_deref(), Some("evergreen"));
+    }
+
+    #[test]
+    fn growth_defaults_to_none_when_absent() {
+        let input = "---\ntitle: x\n---\nBody\n";
+        let doc = parse_markdown(input).unwrap();
+        assert!(doc.growth.is_none(), "absent growth leaves the field unset");
+    }
+
+    #[test]
+    fn rejects_invalid_growth() {
+        let input = "---\ntitle: x\ngrowth: ancient\n---\nBody\n";
         assert!(parse_markdown(input).is_err());
     }
 

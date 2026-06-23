@@ -298,6 +298,282 @@ pub async fn backlinks(
         .collect())
 }
 
+/// Hard upper bound on the number of nodes a single graph query returns. The
+/// graph is a bounded surface (never an unbounded crawl): both the global graph
+/// and a per-note neighborhood cap their node set at this many notes so a large
+/// garden can never produce an unbounded payload.
+pub const MAX_GRAPH_NODES: i64 = 500;
+
+/// Hard upper bound on the number of edges a single graph query returns. Edges
+/// are capped independently of nodes (a dense garden has many more edges than
+/// notes) so the payload stays bounded regardless of link density.
+pub const MAX_GRAPH_EDGES: i64 = 2_000;
+
+/// Hard cap on the neighborhood depth a per-note graph will expand. The
+/// neighborhood is a small local view, never a transitive crawl of the whole
+/// garden, so the depth is fixed at one hop.
+pub const MAX_GRAPH_DEPTH: u32 = 1;
+
+/// One node in the link graph: a note exposed at the rendering visibility.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GraphNode {
+    pub slug: String,
+    pub title: String,
+}
+
+/// One edge in the link graph: a resolved internal link from `source_slug` to
+/// `target_slug`. Both endpoints are guaranteed visible at the query's
+/// visibility (a public graph never includes an edge touching a draft).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GraphEdge {
+    pub source_slug: String,
+    pub target_slug: String,
+}
+
+/// A bounded slice of the link graph: the visible nodes and the resolved
+/// internal edges whose BOTH endpoints are in `nodes`.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct Graph {
+    pub nodes: Vec<GraphNode>,
+    pub edges: Vec<GraphEdge>,
+}
+
+/// The whole garden's link graph, visibility-filtered and hard-bounded.
+///
+/// Nodes are the notes visible at `visibility` (public ⇒ published only),
+/// capped at [`MAX_GRAPH_NODES`] and ordered by slug for determinism. Edges are
+/// resolved internal links whose source AND target are both in the node set —
+/// so a public graph never leaks a draft node, nor an edge that would reveal a
+/// draft's existence (the no-draft-leak invariant), and never an edge dangling
+/// to a note dropped by the node cap. Edges are capped at [`MAX_GRAPH_EDGES`].
+pub async fn garden_graph(pool: &PgPool, visibility: Visibility) -> Result<Graph, sqlx::Error> {
+    // Nodes: the visible notes, deterministically ordered and bounded.
+    let node_rows: Vec<(String, String)> = match visibility.status_filter() {
+        Some(status) => {
+            sqlx::query_as::<Postgres, (String, String)>(
+                "SELECT slug, title FROM documents WHERE status = $1 ORDER BY slug LIMIT $2",
+            )
+            .bind(status.as_str())
+            .bind(MAX_GRAPH_NODES)
+            .fetch_all(pool)
+            .await?
+        }
+        None => {
+            sqlx::query_as::<Postgres, (String, String)>(
+                "SELECT slug, title FROM documents ORDER BY slug LIMIT $1",
+            )
+            .bind(MAX_GRAPH_NODES)
+            .fetch_all(pool)
+            .await?
+        }
+    };
+    let nodes: Vec<GraphNode> = node_rows
+        .into_iter()
+        .map(|(slug, title)| GraphNode { slug, title })
+        .collect();
+    let visible: HashSet<&str> = nodes.iter().map(|n| n.slug.as_str()).collect();
+
+    // Edges: resolved internal links where BOTH endpoints are visible. The join
+    // is filtered to the same visibility on both ends in SQL; we additionally
+    // intersect with the (capped) node set so an edge can never dangle to a
+    // node the LIMIT dropped.
+    let edge_rows: Vec<(String, String)> = match visibility.status_filter() {
+        Some(status) => {
+            sqlx::query_as::<Postgres, (String, String)>(
+                r#"
+                SELECT src.slug, tgt.slug
+                FROM links
+                JOIN documents AS src ON src.id = links.source_note_id
+                JOIN documents AS tgt ON tgt.id = links.target_note_id
+                WHERE links.target_kind = 'internal'
+                  AND links.resolved = true
+                  AND src.status = $1
+                  AND tgt.status = $1
+                ORDER BY src.slug, tgt.slug
+                LIMIT $2
+                "#,
+            )
+            .bind(status.as_str())
+            .bind(MAX_GRAPH_EDGES)
+            .fetch_all(pool)
+            .await?
+        }
+        None => {
+            sqlx::query_as::<Postgres, (String, String)>(
+                r#"
+                SELECT src.slug, tgt.slug
+                FROM links
+                JOIN documents AS src ON src.id = links.source_note_id
+                JOIN documents AS tgt ON tgt.id = links.target_note_id
+                WHERE links.target_kind = 'internal'
+                  AND links.resolved = true
+                ORDER BY src.slug, tgt.slug
+                LIMIT $1
+                "#,
+            )
+            .bind(MAX_GRAPH_EDGES)
+            .fetch_all(pool)
+            .await?
+        }
+    };
+    let edges: Vec<GraphEdge> = edge_rows
+        .into_iter()
+        .filter(|(src, tgt)| visible.contains(src.as_str()) && visible.contains(tgt.as_str()))
+        .map(|(source_slug, target_slug)| GraphEdge {
+            source_slug,
+            target_slug,
+        })
+        .collect();
+
+    Ok(Graph { nodes, edges })
+}
+
+/// A one-hop neighborhood graph around the note `slug`: the note itself plus
+/// every visible note one resolved internal link away (in either direction),
+/// and the edges among that set. Visibility-filtered exactly like
+/// [`garden_graph`] — a public neighborhood never includes a draft neighbor or
+/// an edge touching one. Returns an empty graph when the center note is not
+/// visible. Hard depth cap of [`MAX_GRAPH_DEPTH`] (one hop). Built center-first
+/// (the center's own one-hop edges), so it is bounded by [`MAX_GRAPH_EDGES`] /
+/// [`MAX_GRAPH_NODES`] without depending on the global graph's node-cap window —
+/// the center and its neighbors are never dropped in a large garden.
+pub async fn note_neighborhood(
+    pool: &PgPool,
+    slug: &str,
+    visibility: Visibility,
+) -> Result<Graph, sqlx::Error> {
+    // The center note must itself be visible, or there is no neighborhood.
+    let center_exists: Option<String> = match visibility.status_filter() {
+        Some(status) => {
+            sqlx::query_scalar::<Postgres, String>(
+                "SELECT slug FROM documents WHERE slug = $1 AND status = $2",
+            )
+            .bind(slug)
+            .bind(status.as_str())
+            .fetch_optional(pool)
+            .await?
+        }
+        None => {
+            sqlx::query_scalar::<Postgres, String>("SELECT slug FROM documents WHERE slug = $1")
+                .bind(slug)
+                .fetch_optional(pool)
+                .await?
+        }
+    };
+    let Some(center_slug) = center_exists else {
+        return Ok(Graph::default());
+    };
+
+    // Center-first: pull only the center's one-hop resolved internal edges
+    // (in either direction), visibility-filtered on BOTH endpoints, bounded by
+    // the edge cap. This is independent of the global node cap, so the center
+    // and its neighbors are never silently dropped in a large garden.
+    let edge_rows: Vec<(String, String)> = match visibility.status_filter() {
+        Some(status) => {
+            sqlx::query_as::<Postgres, (String, String)>(
+                r#"
+                SELECT src.slug, tgt.slug
+                FROM links
+                JOIN documents AS src ON src.id = links.source_note_id
+                JOIN documents AS tgt ON tgt.id = links.target_note_id
+                WHERE links.target_kind = 'internal'
+                  AND links.resolved = true
+                  AND src.status = $1
+                  AND tgt.status = $1
+                  AND (src.slug = $2 OR tgt.slug = $2)
+                ORDER BY src.slug, tgt.slug
+                LIMIT $3
+                "#,
+            )
+            .bind(status.as_str())
+            .bind(&center_slug)
+            .bind(MAX_GRAPH_EDGES)
+            .fetch_all(pool)
+            .await?
+        }
+        None => {
+            sqlx::query_as::<Postgres, (String, String)>(
+                r#"
+                SELECT src.slug, tgt.slug
+                FROM links
+                JOIN documents AS src ON src.id = links.source_note_id
+                JOIN documents AS tgt ON tgt.id = links.target_note_id
+                WHERE links.target_kind = 'internal'
+                  AND links.resolved = true
+                  AND (src.slug = $1 OR tgt.slug = $1)
+                ORDER BY src.slug, tgt.slug
+                LIMIT $2
+                "#,
+            )
+            .bind(&center_slug)
+            .bind(MAX_GRAPH_EDGES)
+            .fetch_all(pool)
+            .await?
+        }
+    };
+
+    // The kept set is the center plus each one-hop neighbor. Bound it to
+    // MAX_GRAPH_NODES in Rust — center first — so the node fetch's LIMIT can
+    // never drop the center even when the neighbor count exceeds the node cap.
+    let mut keep_slugs: Vec<String> = Vec::new();
+    let mut seen: HashSet<&str> = HashSet::new();
+    seen.insert(center_slug.as_str());
+    keep_slugs.push(center_slug.clone());
+    let node_cap = MAX_GRAPH_NODES as usize;
+    'collect: for (src, tgt) in &edge_rows {
+        for slug in [src, tgt] {
+            if keep_slugs.len() >= node_cap {
+                break 'collect;
+            }
+            if seen.insert(slug.as_str()) {
+                keep_slugs.push(slug.clone());
+            }
+        }
+    }
+
+    // Fetch titles for exactly the kept slugs (the center always exists). The
+    // set is already bounded to the node cap above; ANY($1) leaves it bounded.
+    let node_rows: Vec<(String, String)> = match visibility.status_filter() {
+        Some(status) => {
+            sqlx::query_as::<Postgres, (String, String)>(
+                "SELECT slug, title FROM documents \
+                 WHERE slug = ANY($1) AND status = $2 ORDER BY slug",
+            )
+            .bind(&keep_slugs)
+            .bind(status.as_str())
+            .fetch_all(pool)
+            .await?
+        }
+        None => {
+            sqlx::query_as::<Postgres, (String, String)>(
+                "SELECT slug, title FROM documents \
+                 WHERE slug = ANY($1) ORDER BY slug",
+            )
+            .bind(&keep_slugs)
+            .fetch_all(pool)
+            .await?
+        }
+    };
+    let nodes: Vec<GraphNode> = node_rows
+        .into_iter()
+        .map(|(slug, title)| GraphNode { slug, title })
+        .collect();
+
+    // Intersect edges with the final node set so an edge can never dangle to a
+    // neighbor that fell outside the node cap (mirrors `garden_graph`).
+    let kept: HashSet<&str> = nodes.iter().map(|n| n.slug.as_str()).collect();
+    let edges: Vec<GraphEdge> = edge_rows
+        .into_iter()
+        .filter(|(src, tgt)| kept.contains(src.as_str()) && kept.contains(tgt.as_str()))
+        .map(|(source_slug, target_slug)| GraphEdge {
+            source_slug,
+            target_slug,
+        })
+        .collect();
+
+    Ok(Graph { nodes, edges })
+}
+
 /// Note ids whose stored `rendered_html` may depend on the note identified by
 /// (`changed_id`, `changed_slug`) and therefore must be re-rendered after that
 /// note is created, renamed, or deleted.

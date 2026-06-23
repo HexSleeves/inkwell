@@ -208,6 +208,7 @@ fn derive_document(path: &Path, source: &str) -> Result<ParsedDocument> {
         title: stem,
         slug: Some(slug),
         status: None,
+        growth: None,
         tags: Vec::new(),
         body: source.trim().to_string(),
     })

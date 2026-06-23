@@ -60,6 +60,10 @@ pub struct CreateNoteArgs {
     /// Optional tags to attach to the note.
     #[serde(default)]
     pub tags: Option<Vec<String>>,
+    /// Optional digital-garden maturity stage: `seedling`, `budding`, or
+    /// `evergreen`. When omitted, the server keeps its default (`seedling`).
+    #[serde(default)]
+    pub growth: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -139,7 +143,7 @@ impl InkwellMcpServer {
 
     /// Create a new note. Returns the created note's slug, status, and version.
     #[tool(
-        description = "Create a new note from a title and Markdown body. Optionally provide an explicit slug and tags. Returns the new note's slug, status, and version."
+        description = "Create a new note from a title and Markdown body. Optionally provide an explicit slug, tags, and a growth stage (seedling, budding, or evergreen). Returns the new note's slug, status, and version."
     )]
     pub async fn create_note(
         &self,
@@ -161,6 +165,7 @@ impl InkwellMcpServer {
             slug,
             body: args.body,
             tags: args.tags.unwrap_or_default(),
+            growth: args.growth,
         };
         let summary = self
             .client
