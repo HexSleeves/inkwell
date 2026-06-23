@@ -12,8 +12,10 @@ jobs:
       postgres:
         # pgvector image (matches docker-compose) so migration 0009's
         # `CREATE EXTENSION vector` resolves; plain postgres lacks the extension.
-        # pgvector tracks pg17 (no pg18 tag yet).
-        image: pgvector/pgvector:pg17
+        # pgvector tracks pg17 (no pg18 tag yet). Pinned by immutable digest
+        # (linux/amd64, the ubuntu-latest runner arch) for supply-chain
+        # reproducibility; refresh alongside the pg17 tag when it moves.
+        image: pgvector/pgvector:pg17@sha256:3226977dafcdf8f8a8079c8e31763dab1d7e52a8c7e008fc04bc33234fce45bb
         env:
           POSTGRES_USER: inkwell
           POSTGRES_PASSWORD: inkwell
