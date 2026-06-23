@@ -514,7 +514,10 @@ mod tests {
         let html = render_snippet_with_links("Start at [[welcome]] & go", &resolved);
         // Brackets are preserved and live *inside* the anchor, so the whole
         // `[[welcome]]` token is clickable.
-        assert_eq!(html, r#"Start at <a href="/welcome">[[welcome]]</a> &amp; go"#);
+        assert_eq!(
+            html,
+            r#"Start at <a href="/welcome">[[welcome]]</a> &amp; go"#
+        );
     }
 
     #[test]
