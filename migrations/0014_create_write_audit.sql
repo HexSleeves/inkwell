@@ -8,7 +8,11 @@
 -- want to retain). The `slug` snapshot is likewise retained for review.
 CREATE TABLE IF NOT EXISTS write_audit (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  actor_author_id uuid REFERENCES authors (id),
+  -- ON DELETE SET NULL keeps the append-only trail intact if an author is ever
+  -- removed: the audit row survives (actor_author_id goes NULL) rather than the
+  -- default RESTRICT blocking the author's deletion. `actor_label` retains who
+  -- it was. (`actor_author_id` is already Option<Uuid> in the app.)
+  actor_author_id uuid REFERENCES authors (id) ON DELETE SET NULL,
   actor_label text NOT NULL,
   action text NOT NULL,
   document_id uuid,

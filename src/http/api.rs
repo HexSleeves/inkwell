@@ -841,17 +841,31 @@ async fn record_audit(
     document_id: Option<uuid::Uuid>,
     slug: &str,
 ) {
-    if let Err(error) = audit::record_write(
+    // Bound the best-effort insert so a slow/blocked audit write can never stall
+    // the already-successful mutation it describes. On timeout or error we only
+    // warn and drop the row — never touch the handler's response.
+    const AUDIT_INSERT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+    let insert = audit::record_write(
         &state.pool,
         Some(BOOTSTRAP_ADMIN_ID),
         "shared-key",
         action,
         document_id,
         Some(slug),
-    )
-    .await
-    {
-        tracing::warn!(action = action.as_str(), slug, %error, "write_audit insert failed; audit row dropped");
+    );
+    match tokio::time::timeout(AUDIT_INSERT_TIMEOUT, insert).await {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => {
+            tracing::warn!(action = action.as_str(), slug, %error, "write_audit insert failed; audit row dropped");
+        }
+        Err(_elapsed) => {
+            tracing::warn!(
+                action = action.as_str(),
+                slug,
+                timeout_secs = AUDIT_INSERT_TIMEOUT.as_secs(),
+                "write_audit insert timed out; audit row dropped"
+            );
+        }
     }
 }
 

@@ -153,6 +153,9 @@ async fn seed_and_backfill_are_idempotent() -> anyhow::Result<()> {
 // ---------------------------------------------------------------------------
 
 async fn create_doc(router: &axum::Router, title: &str) -> anyhow::Result<()> {
+    // Build the body structurally so titles with quotes/backslashes can't produce
+    // malformed JSON (serde handles the escaping).
+    let payload = serde_json::json!({ "title": title, "bodyMarkdown": "# Hi" });
     let response = router
         .clone()
         .oneshot(
@@ -161,9 +164,7 @@ async fn create_doc(router: &axum::Router, title: &str) -> anyhow::Result<()> {
                 .uri("/documents")
                 .header("content-type", "application/json")
                 .header("x-api-key", "test-secret-key")
-                .body(Body::from(format!(
-                    r##"{{"title":"{title}","bodyMarkdown":"# Hi"}}"##
-                )))?,
+                .body(Body::from(serde_json::to_vec(&payload)?))?,
         )
         .await?;
     assert_eq!(response.status(), StatusCode::CREATED);
@@ -195,6 +196,24 @@ async fn mutations_emit_one_audit_row_each() -> anyhow::Result<()> {
     create_doc(&router, "Audit Me").await?;
     assert_eq!(audit_count("create", "audit-me").await?, 1);
 
+    // update (PUT replaces the document; full payload required)
+    let response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::PUT)
+                .uri("/documents/audit-me")
+                .header("content-type", "application/json")
+                .header("x-api-key", "test-secret-key")
+                .body(Body::from(serde_json::to_vec(&serde_json::json!({
+                    "title": "Audit Me",
+                    "bodyMarkdown": "# Hi again"
+                }))?))?,
+        )
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(audit_count("update", "audit-me").await?, 1);
+
     // publish
     let response = router
         .clone()
@@ -208,6 +227,20 @@ async fn mutations_emit_one_audit_row_each() -> anyhow::Result<()> {
         .await?;
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(audit_count("publish", "audit-me").await?, 1);
+
+    // unpublish
+    let response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/documents/audit-me/unpublish")
+                .header("x-api-key", "test-secret-key")
+                .body(Body::empty())?,
+        )
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(audit_count("unpublish", "audit-me").await?, 1);
 
     // delete
     let response = router

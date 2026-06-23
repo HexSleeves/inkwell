@@ -39,7 +39,7 @@ A token carries a subset of scopes. Ownership is enforced for non-admin principa
 
 Replace `is_authenticated(headers, api_key, mcp_key) -> bool` with:
 
-```
+```rust
 authenticate(headers, &Config, &PgPool) -> Option<Principal>
 struct Principal { author_id: Option<Uuid>, label: String, scopes: HashSet<Scope> }
 ```
