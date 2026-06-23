@@ -6,19 +6,47 @@ use axum::routing::{any, get};
 use tower_http::compression::CompressionLayer;
 use tower_http::trace::TraceLayer;
 
+use crate::ai as semantic;
+use crate::ai::{Embedder, Llm};
 use crate::config::Config;
 use crate::http::AppState;
 
-use super::{api, feed, pages, search, security_headers, sitemap};
+use super::{ai, api, feed, pages, search, security_headers, sitemap};
 
 pub fn build_router(config: Arc<Config>, pool: sqlx::PgPool) -> Router {
-    let state = AppState { config, pool };
+    // Provider selection from config: real providers when keys are set, else the
+    // deterministic mock embedder and a `None` LLM (the no-key fallbacks).
+    let embedder = semantic::build_embedder(&config);
+    let llm = semantic::build_llm(&config);
+    build_router_with_providers(config, pool, embedder, llm)
+}
+
+/// Build the router with explicit AI providers, bypassing config-based selection.
+///
+/// Production goes through [`build_router`]; this exists so the eval suite can
+/// wire in the deterministic [`MockEmbedder`](crate::ai::MockEmbedder) /
+/// [`MockLlm`](crate::ai::MockLlm) and exercise the RAG surfaces end-to-end
+/// without any API keys.
+pub fn build_router_with_providers(
+    config: Arc<Config>,
+    pool: sqlx::PgPool,
+    embedder: Arc<dyn Embedder>,
+    llm: Option<Arc<dyn Llm>>,
+) -> Router {
+    let state = AppState {
+        config,
+        pool,
+        embedder,
+        llm,
+    };
     Router::new()
         .route("/health", any(api::health))
+        .route("/ask", any(ai::ask))
         .route("/documents", any(api::documents))
         .route("/documents/{slug}", any(api::document))
         .route("/documents/{slug}/backlinks", any(api::document_backlinks))
         .route("/documents/{slug}/graph", any(api::document_graph))
+        .route("/documents/{slug}/related", any(ai::document_related))
         .route("/graph", any(api::graph))
         .route("/documents/{slug}/publish", any(api::publish_document))
         .route("/documents/{slug}/unpublish", any(api::unpublish_document))

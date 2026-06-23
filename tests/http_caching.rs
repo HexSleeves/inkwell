@@ -35,6 +35,9 @@ fn router_with_unreachable_database() -> Result<axum::Router> {
             api_key: Some("test-secret-key".to_string()),
             mcp_key: Some("test-mcp-key".to_string()),
             site_url: Some("https://blog.example.com".to_string()),
+            voyage_api_key: None,
+            anthropic_api_key: None,
+            llm_model: inkwell::config::DEFAULT_LLM_MODEL.to_string(),
         }),
         pool,
     ))

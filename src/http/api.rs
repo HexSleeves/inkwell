@@ -378,6 +378,20 @@ async fn create_document(
     if let Err(error) = garden::persist_source_edges(&state.pool, document.id, &refs).await {
         tracing::warn!(document_id = %document.id, %error, "persist_source_edges failed; edges rebuild on next save");
     }
+    // Best-effort embedding index (mirrors the edge-persist pattern): chunk the
+    // body, embed via the configured provider, upsert into note_chunks. A no-op
+    // when no Voyage key is set (mock embedder), and a failure only warns — it
+    // never 500s a create that succeeded; the index rebuilds on the next save.
+    if let Err(error) = crate::ai::index_note(
+        &state.pool,
+        state.embedder.as_ref(),
+        document.id,
+        &document.body_markdown,
+    )
+    .await
+    {
+        tracing::warn!(document_id = %document.id, %error, "index_note failed; embeddings rebuild on next save");
+    }
     // Light up any existing stubs that pointed at this new slug.
     garden::backfill_after_change(&state.pool, document.id, &document.slug).await;
     Ok((StatusCode::CREATED, Json(DocumentEnvelope::from(document))).into_response())
@@ -565,13 +579,24 @@ async fn update_document(
             document
         }
     };
-    // Body changed → its outbound edges changed; replace them. Best-effort for
-    // the same reason as create: the update already succeeded and the note
-    // renders correctly; stale edges self-heal on the next save.
-    if let Some(refs) = body_refs
-        && let Err(error) = garden::persist_source_edges(&state.pool, document.id, &refs).await
-    {
-        tracing::warn!(document_id = %document.id, %error, "persist_source_edges failed; edges may be stale until next save");
+    // Body changed → its outbound edges AND embeddings changed; replace both.
+    // Best-effort for the same reason as create: the update already succeeded and
+    // the note renders correctly; stale edges/embeddings self-heal on the next
+    // save. A failure in either step only warns and never 500s the write.
+    if let Some(refs) = body_refs {
+        if let Err(error) = garden::persist_source_edges(&state.pool, document.id, &refs).await {
+            tracing::warn!(document_id = %document.id, %error, "persist_source_edges failed; edges may be stale until next save");
+        }
+        if let Err(error) = crate::ai::index_note(
+            &state.pool,
+            state.embedder.as_ref(),
+            document.id,
+            &document.body_markdown,
+        )
+        .await
+        {
+            tracing::warn!(document_id = %document.id, %error, "index_note failed; embeddings may be stale until next save");
+        }
     }
     Ok((StatusCode::OK, Json(DocumentEnvelope::from(document))).into_response())
 }

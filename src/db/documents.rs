@@ -344,26 +344,31 @@ pub async fn count_published_tags(pool: &PgPool) -> Result<i64, sqlx::Error> {
     .await
 }
 
+/// Full-text search over published documents (card T10, P3).
+///
+/// Uses Postgres FTS against the generated `search_vector` column (migration
+/// 0008, title weighted 'A' above body 'B'), ranked by `ts_rank`. `websearch_to_tsquery`
+/// parses the user's query the way a search box expects (bare words, quoted
+/// phrases, `-exclusion`) and never errors on punctuation, so no manual escaping
+/// is needed. The JSON + HTML surfaces and pagination are unchanged — only the
+/// matching/ranking moved from ILIKE to FTS. Ties break on recency then id, so
+/// ordering is deterministic.
 pub async fn search_published_documents(
     pool: &PgPool,
     query: &str,
     options: SearchOptions,
 ) -> Result<Vec<Document>, sqlx::Error> {
-    let pattern = format!("%{}%", escape_like_pattern(query));
     let mut builder = QueryBuilder::<Postgres>::new(
         "SELECT id, slug, title, body_markdown, rendered_html, status, growth, tags, version, created_at, updated_at
          FROM documents
          WHERE status = 'published'
-         AND (title ILIKE ",
+         AND search_vector @@ websearch_to_tsquery('english', ",
     );
     builder
-        .push_bind(&pattern)
-        .push(" ESCAPE '\\' OR body_markdown ILIKE ")
-        .push_bind(&pattern)
-        .push(" ESCAPE '\\')")
-        .push(" ORDER BY (CASE WHEN title ILIKE ")
-        .push_bind(&pattern)
-        .push(" ESCAPE '\\' THEN 0 ELSE 1 END), created_at DESC, id DESC");
+        .push_bind(query)
+        .push(") ORDER BY ts_rank(search_vector, websearch_to_tsquery('english', ")
+        .push_bind(query)
+        .push(")) DESC, created_at DESC, id DESC");
     if let Some(limit) = options.limit {
         builder.push(" LIMIT ").push_bind(limit as i64);
     }
@@ -377,24 +382,14 @@ pub async fn count_search_published_documents(
     pool: &PgPool,
     query: &str,
 ) -> Result<i64, sqlx::Error> {
-    let pattern = format!("%{}%", escape_like_pattern(query));
     sqlx::query_scalar::<Postgres, i64>(
-        "SELECT count(*)::bigint FROM documents WHERE status = 'published' AND (title ILIKE $1 ESCAPE '\\' OR body_markdown ILIKE $1 ESCAPE '\\')",
+        "SELECT count(*)::bigint FROM documents \
+         WHERE status = 'published' \
+         AND search_vector @@ websearch_to_tsquery('english', $1)",
     )
-    .bind(pattern)
+    .bind(query)
     .fetch_one(pool)
     .await
-}
-
-fn escape_like_pattern(term: &str) -> String {
-    term.chars()
-        .flat_map(|ch| match ch {
-            '\\' => vec!['\\', '\\'],
-            '%' => vec!['\\', '%'],
-            '_' => vec!['\\', '_'],
-            other => vec![other],
-        })
-        .collect()
 }
 
 fn map_duplicate_slug(
