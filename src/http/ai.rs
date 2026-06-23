@@ -80,26 +80,32 @@ pub async fn document_related(
         )));
     };
 
-    // Embed the note's body and find its nearest neighbors. The mock embedder
-    // never errors; a real-provider error is mapped to a 500 like any other
-    // backend failure (this is a read, not a best-effort write).
-    let embeddings = state
+    // Embed the note's body and find its nearest neighbors. The "related" panel
+    // is a non-essential enhancement, so a provider error (e.g. a Voyage rate
+    // limit) degrades to "no related notes" rather than 500ing the request —
+    // the note itself already rendered. The mock embedder never errors.
+    let related = match state
         .embedder
         .embed(std::slice::from_ref(&document.body_markdown))
         .await
-        .map_err(AppError::Internal)?;
-    let related = match embeddings.first() {
-        Some(embedding) => {
-            chunks::related_notes(
-                &state.pool,
-                document.id,
-                embedding,
-                visibility,
-                RELATED_LIMIT,
-            )
-            .await?
+    {
+        Ok(embeddings) => match embeddings.first() {
+            Some(embedding) => {
+                chunks::related_notes(
+                    &state.pool,
+                    document.id,
+                    embedding,
+                    visibility,
+                    RELATED_LIMIT,
+                )
+                .await?
+            }
+            None => Vec::new(),
+        },
+        Err(error) => {
+            tracing::warn!(slug = %document.slug, %error, "related: embedding failed (provider error/rate limit); returning no related notes");
+            Vec::new()
         }
-        None => Vec::new(),
     };
 
     let response = RelatedResponse {
@@ -222,11 +228,16 @@ async fn retrieve_context(
     query: &str,
     visibility: Visibility,
 ) -> Result<Vec<chunks::RetrievedChunk>, AppError> {
-    let embeddings = state
-        .embedder
-        .embed(&[query.to_string()])
-        .await
-        .map_err(AppError::Internal)?;
+    // A provider error on the query embedding (e.g. a Voyage rate limit) is not
+    // fatal: fall through to full-text retrieval so /ask still answers, grounded,
+    // instead of 500ing. An empty vector simply skips the vector path below.
+    let embeddings = match state.embedder.embed(&[query.to_string()]).await {
+        Ok(embeddings) => embeddings,
+        Err(error) => {
+            tracing::warn!(%error, "ask: query embedding failed (provider error/rate limit); falling back to full-text retrieval");
+            Vec::new()
+        }
+    };
     if let Some(embedding) = embeddings.first() {
         let hits = chunks::search_chunks(&state.pool, embedding, visibility, ASK_TOP_K).await?;
         if !hits.is_empty() {
