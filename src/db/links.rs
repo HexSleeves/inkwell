@@ -512,43 +512,44 @@ pub async fn note_neighborhood(
         }
     };
 
-    // The kept set is the center plus each one-hop neighbor.
-    let mut keep: HashSet<String> = HashSet::new();
-    keep.insert(center_slug.clone());
-    for (src, tgt) in &edge_rows {
-        keep.insert(src.clone());
-        keep.insert(tgt.clone());
+    // The kept set is the center plus each one-hop neighbor. Bound it to
+    // MAX_GRAPH_NODES in Rust — center first — so the node fetch's LIMIT can
+    // never drop the center even when the neighbor count exceeds the node cap.
+    let mut keep_slugs: Vec<String> = Vec::new();
+    let mut seen: HashSet<&str> = HashSet::new();
+    seen.insert(center_slug.as_str());
+    keep_slugs.push(center_slug.clone());
+    let node_cap = MAX_GRAPH_NODES as usize;
+    'collect: for (src, tgt) in &edge_rows {
+        for slug in [src, tgt] {
+            if keep_slugs.len() >= node_cap {
+                break 'collect;
+            }
+            if seen.insert(slug.as_str()) {
+                keep_slugs.push(slug.clone());
+            }
+        }
     }
-    let edges: Vec<GraphEdge> = edge_rows
-        .into_iter()
-        .map(|(source_slug, target_slug)| GraphEdge {
-            source_slug,
-            target_slug,
-        })
-        .collect();
 
     // Fetch titles for exactly the kept slugs (the center always exists). The
-    // set is at most edge-cap-sized, so this stays bounded; cap defensively.
-    let keep_slugs: Vec<String> = keep.iter().cloned().collect();
+    // set is already bounded to the node cap above; ANY($1) leaves it bounded.
     let node_rows: Vec<(String, String)> = match visibility.status_filter() {
         Some(status) => {
             sqlx::query_as::<Postgres, (String, String)>(
                 "SELECT slug, title FROM documents \
-                 WHERE slug = ANY($1) AND status = $2 ORDER BY slug LIMIT $3",
+                 WHERE slug = ANY($1) AND status = $2 ORDER BY slug",
             )
             .bind(&keep_slugs)
             .bind(status.as_str())
-            .bind(MAX_GRAPH_NODES)
             .fetch_all(pool)
             .await?
         }
         None => {
             sqlx::query_as::<Postgres, (String, String)>(
                 "SELECT slug, title FROM documents \
-                 WHERE slug = ANY($1) ORDER BY slug LIMIT $2",
+                 WHERE slug = ANY($1) ORDER BY slug",
             )
             .bind(&keep_slugs)
-            .bind(MAX_GRAPH_NODES)
             .fetch_all(pool)
             .await?
         }
@@ -556,6 +557,18 @@ pub async fn note_neighborhood(
     let nodes: Vec<GraphNode> = node_rows
         .into_iter()
         .map(|(slug, title)| GraphNode { slug, title })
+        .collect();
+
+    // Intersect edges with the final node set so an edge can never dangle to a
+    // neighbor that fell outside the node cap (mirrors `garden_graph`).
+    let kept: HashSet<&str> = nodes.iter().map(|n| n.slug.as_str()).collect();
+    let edges: Vec<GraphEdge> = edge_rows
+        .into_iter()
+        .filter(|(src, tgt)| kept.contains(src.as_str()) && kept.contains(tgt.as_str()))
+        .map(|(source_slug, target_slug)| GraphEdge {
+            source_slug,
+            target_slug,
+        })
         .collect();
 
     Ok(Graph { nodes, edges })
