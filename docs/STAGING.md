@@ -45,7 +45,7 @@ cat > /etc/inkwell/staging.env <<EOF
 POSTGRES_USER=inkwell
 POSTGRES_PASSWORD=$(openssl rand -hex 16)
 POSTGRES_DB=inkwell
-POSTGRES_PORT=5432
+POSTGRES_PORT=5433
 PORT=3000
 HOST=0.0.0.0
 INKWELL_API_KEY=$(openssl rand -hex 32)

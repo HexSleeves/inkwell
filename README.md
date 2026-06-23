@@ -29,7 +29,7 @@ cargo fmt --check
 cargo clippy --all-targets --all-features -- -D warnings
 cargo test --all
 cargo build --release --bin inkwell
-export DATABASE_URL=postgres://user:pass@localhost:5432/inkwell
+export DATABASE_URL=postgres://user:pass@localhost:5433/inkwell
 cargo run --bin inkwell -- db migrate
 cargo run --bin inkwell -- serve
 ```

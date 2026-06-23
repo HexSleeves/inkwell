@@ -17,7 +17,7 @@ services:
       timeout: 5s
       retries: 10
     ports:
-      - '${POSTGRES_PORT:-5432}:5432'
+      - '${POSTGRES_PORT:-5433}:5432'
 
   app:
     build:
