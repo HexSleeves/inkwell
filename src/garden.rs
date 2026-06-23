@@ -28,6 +28,14 @@ use uuid::Uuid;
 /// stack or the rendered-HTML size — bounded exactly like every other surface.
 const MAX_EMBED_DEPTH: u32 = 3;
 
+/// Maximum total number of embed targets expanded for a single render. Depth
+/// alone bounds nesting, but a wide fan-out (an "index" note embedding many
+/// notes, each embedding many more) is `O(b^depth)` in the branching factor and
+/// would balloon both the query count and the persisted HTML. A global budget
+/// collapses every further embed to a placeholder once the cap is hit, bounding
+/// total work exactly like the graph surface caps total nodes/edges.
+const MAX_EMBED_EXPANSIONS: u32 = 256;
+
 /// A wikilink/embed reference after resolution against the live garden.
 #[derive(Clone, Debug)]
 pub struct ResolvedRef {
@@ -63,7 +71,16 @@ pub async fn render_and_resolve(
         .map(|r| r.target_slug.clone())
         .collect();
     let mut visited: HashSet<String> = HashSet::new();
-    let embeds = resolve_embeds(pool, &embed_slugs, Visibility::Public, 0, &mut visited).await?;
+    let mut budget: u32 = MAX_EMBED_EXPANSIONS;
+    let embeds = resolve_embeds(
+        pool,
+        &embed_slugs,
+        Visibility::Public,
+        0,
+        &mut visited,
+        &mut budget,
+    )
+    .await?;
 
     let html = render_markdown_with_embeds(markdown, &existing, &embeds);
 
@@ -86,6 +103,9 @@ pub async fn render_and_resolve(
 /// Guards (every path terminates):
 ///   - DEPTH: at `depth >= MAX_EMBED_DEPTH` every embed collapses to a
 ///     placeholder, so the recursion can never exceed the cap.
+///   - BUDGET: a shared `budget` counter caps the total number of targets
+///     expanded across the whole render; once it hits zero every remaining
+///     embed collapses to a placeholder, so a wide fan-out can't explode work.
 ///   - CYCLE: a target already on the current expansion path (`visited`) renders
 ///     a placeholder instead of recursing, so `A → B → A` (and a direct
 ///     self-embed) terminate.
@@ -97,6 +117,7 @@ async fn resolve_embeds(
     visibility: Visibility,
     depth: u32,
     visited: &mut HashSet<String>,
+    budget: &mut u32,
 ) -> Result<HashMap<String, EmbedResolution>, sqlx::Error> {
     let mut out: HashMap<String, EmbedResolution> = HashMap::new();
     if slugs.is_empty() {
@@ -116,6 +137,14 @@ async fn resolve_embeds(
             out.insert(slug.clone(), EmbedResolution::Placeholder);
             continue;
         }
+        // Budget cap: once the global expansion budget is exhausted, every
+        // remaining target collapses to a placeholder so total work stays bounded
+        // regardless of fan-out.
+        if *budget == 0 {
+            out.insert(slug.clone(), EmbedResolution::Placeholder);
+            continue;
+        }
+        *budget -= 1;
         // Fetch the target's status + body. A draft (under Public) or a missing
         // note yields a placeholder — never any of the target's content.
         let Some((status, body)) = fetch_embed_target(pool, slug, visibility).await? else {
@@ -145,6 +174,7 @@ async fn resolve_embeds(
             visibility,
             depth + 1,
             visited,
+            budget,
         ))
         .await?;
         let content = render_markdown_with_embeds(&body, &child_existing, &child_embeds);
