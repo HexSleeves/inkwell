@@ -1460,6 +1460,7 @@ version = "0.1.0"
 dependencies = [
  "ammonia",
  "anyhow",
+ "async-trait",
  "axum",
  "comrak",
  "dotenvy",

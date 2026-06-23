@@ -1,5 +1,11 @@
 use anyhow::{Result, anyhow};
 
+/// Default Claude model for ask-your-garden answer synthesis. Configurable via
+/// `INKWELL_LLM_MODEL`. Per the project's claude-api guidance, `claude-opus-4-8`
+/// uses adaptive thinking and rejects `temperature`/`top_p`/`top_k`/`budget_tokens`
+/// — the LLM client never sends those.
+pub const DEFAULT_LLM_MODEL: &str = "claude-opus-4-8";
+
 #[derive(Clone)]
 pub struct Config {
     pub database_url: String,
@@ -11,6 +17,16 @@ pub struct Config {
     /// revoked independently of the human authoring key.
     pub mcp_key: Option<String>,
     pub site_url: Option<String>,
+    /// Voyage AI key (`VOYAGE_API_KEY`) for generating note embeddings. When
+    /// `None`, embedding generation is a logged no-op and the site still works.
+    pub voyage_api_key: Option<String>,
+    /// Anthropic key (`ANTHROPIC_API_KEY`) for ask-your-garden answer synthesis.
+    /// When `None`, `/ask` returns a clear "AI features not configured" response
+    /// instead of 500ing.
+    pub anthropic_api_key: Option<String>,
+    /// Claude model (`INKWELL_LLM_MODEL`) used for synthesis. Defaults to
+    /// [`DEFAULT_LLM_MODEL`].
+    pub llm_model: String,
 }
 
 impl std::fmt::Debug for Config {
@@ -24,6 +40,15 @@ impl std::fmt::Debug for Config {
             .field("api_key", &self.api_key.as_ref().map(|_| "<redacted>"))
             .field("mcp_key", &self.mcp_key.as_ref().map(|_| "<redacted>"))
             .field("site_url", &self.site_url)
+            .field(
+                "voyage_api_key",
+                &self.voyage_api_key.as_ref().map(|_| "<redacted>"),
+            )
+            .field(
+                "anthropic_api_key",
+                &self.anthropic_api_key.as_ref().map(|_| "<redacted>"),
+            )
+            .field("llm_model", &self.llm_model)
             .finish()
     }
 }
@@ -54,6 +79,10 @@ impl Config {
             .ok()
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty());
+        let voyage_api_key = trimmed_env("VOYAGE_API_KEY");
+        let anthropic_api_key = trimmed_env("ANTHROPIC_API_KEY");
+        let llm_model =
+            trimmed_env("INKWELL_LLM_MODEL").unwrap_or_else(|| DEFAULT_LLM_MODEL.to_string());
 
         Ok(Self {
             database_url,
@@ -62,6 +91,9 @@ impl Config {
             api_key,
             mcp_key,
             site_url,
+            voyage_api_key,
+            anthropic_api_key,
+            llm_model,
         })
     }
 }
@@ -160,10 +192,15 @@ mod tests {
             api_key: Some("sentinel-key-value".to_string()),
             mcp_key: Some("sentinel-mcp-value".to_string()),
             site_url: None,
+            voyage_api_key: Some("sentinel-voyage-value".to_string()),
+            anthropic_api_key: Some("sentinel-anthropic-value".to_string()),
+            llm_model: DEFAULT_LLM_MODEL.to_string(),
         };
         let rendered = format!("{config:?}");
         assert!(!rendered.contains("sentinel-key-value"));
         assert!(!rendered.contains("sentinel-mcp-value"));
+        assert!(!rendered.contains("sentinel-voyage-value"));
+        assert!(!rendered.contains("sentinel-anthropic-value"));
         assert!(!rendered.contains("supersecret"));
         assert!(rendered.contains("<redacted>"));
     }
