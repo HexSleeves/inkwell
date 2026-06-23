@@ -160,7 +160,7 @@ const STYLES: &str = r#"
   ul.tags a:hover { border-color: rgb(168 192 170); background: rgb(224 235 225); }
   ul.tags .count { color: rgb(120 132 123); }
   ul.index { list-style: none; padding: 0; display: grid; gap: 1.15rem; }
-  ul.index li { margin: 0; padding: 1.1rem 0; border-bottom: 1px solid rgb(224 232 224); }
+  ul.index li { margin: 0; padding: 0.35rem 0; }
   ul.index a.title { color: rgb(47 93 69); font-size: 1.2rem; font-weight: 800; text-decoration: none; }
   ul.index a.title:hover { color: rgb(197 107 71); }
   ul.index .excerpt { margin: 0.35rem 0 0; color: rgb(96 110 100); }
