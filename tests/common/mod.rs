@@ -23,11 +23,17 @@ pub async fn maybe_pool() -> Result<Option<PgPool>> {
     };
     let pool = create_pool(&database_url)?;
     migrations::migrate(&pool).await?;
-    // `links` carries an FK to `documents`, so it must be truncated alongside it
-    // (CASCADE) or the truncate errors on the referencing constraint.
-    sqlx::query("TRUNCATE TABLE documents, links RESTART IDENTITY CASCADE")
-        .execute(&pool)
-        .await?;
+    // `links` (and now `write_audit.document_id`/`documents.owner_id`) reference
+    // `documents`, so truncate them together with CASCADE or the referencing
+    // constraints error. `authors` is deliberately NOT truncated: it holds the
+    // seeded bootstrap admin that owns backfilled docs and is the audit actor.
+    // `author_tokens` cascades from `authors` but is cleared explicitly so a test
+    // that mints a token starts clean without disturbing the seeded author.
+    sqlx::query(
+        "TRUNCATE TABLE documents, links, write_audit, author_tokens RESTART IDENTITY CASCADE",
+    )
+    .execute(&pool)
+    .await?;
     Ok(Some(pool))
 }
 

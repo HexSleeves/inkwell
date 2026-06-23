@@ -7,8 +7,10 @@ use serde::Serialize;
 use serde_json::Value;
 use tokio::time::{Duration, timeout};
 
+use crate::db::audit::{self, AuditAction};
 use crate::db::documents;
 use crate::db::links::{self, Backlink, Graph, GraphEdge, GraphNode, Visibility};
+use crate::domain::author::BOOTSTRAP_ADMIN_ID;
 use crate::domain::document::{
     DEFAULT_LIMIT, Document, DocumentPatch, DocumentStatus, GrowthStage, MAX_BODY_MARKDOWN_LENGTH,
     MAX_LIMIT, MAX_REQUEST_BODY_BYTES, MAX_TITLE_LENGTH, NewDocument, StatusFilter,
@@ -349,6 +351,7 @@ pub async fn publish_document(
     // links to. Fully inert unless INKWELL_WEBMENTION_SEND=true; always
     // best-effort and detached, so it never blocks or fails the publish.
     crate::http::webmention_send::maybe_send(&state, &document.slug, &document.body_markdown);
+    record_audit(&state, AuditAction::Publish, Some(document.id), &document.slug);
     Ok((StatusCode::OK, Json(DocumentEnvelope::from(document))).into_response())
 }
 
@@ -371,6 +374,7 @@ pub async fn unpublish_document(
     };
     // No longer publicly resolvable: downgrade links pointing at this slug to stubs.
     garden::backfill_after_change(&state.pool, document.id, &document.slug).await;
+    record_audit(&state, AuditAction::Unpublish, Some(document.id), &document.slug);
     Ok((StatusCode::OK, Json(DocumentEnvelope::from(document))).into_response())
 }
 
@@ -431,6 +435,7 @@ async fn create_document(
     }
     // Light up any existing stubs that pointed at this new slug.
     garden::backfill_after_change(&state.pool, document.id, &document.slug).await;
+    record_audit(&state, AuditAction::Create, Some(document.id), &document.slug);
     Ok((StatusCode::CREATED, Json(DocumentEnvelope::from(document))).into_response())
 }
 
@@ -653,6 +658,7 @@ async fn update_document(
     {
         tracing::warn!(document_id = %document.id, %error, "index_note failed; embeddings may be stale until next save");
     }
+    record_audit(&state, AuditAction::Update, Some(document.id), &document.slug);
     Ok((StatusCode::OK, Json(DocumentEnvelope::from(document))).into_response())
 }
 
@@ -679,6 +685,7 @@ async fn delete_document(
     }
     // Inbound edges now dangle; re-render those sources so they fall back to stubs.
     garden::rerender_sources(&state.pool, &affected).await;
+    record_audit(&state, AuditAction::Delete, Some(document.id), &slug);
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
@@ -794,6 +801,50 @@ fn request_visibility(headers: &HeaderMap, config: &crate::config::Config) -> Vi
     } else {
         Visibility::Public
     }
+}
+
+/// Record a successful mutating action in the write-audit trail (ADR 0009, plan
+/// 023, slice 1). Fully detached via `tokio::spawn` — mirrors the webmention
+/// `maybe_send` pattern: the handler's response is returned immediately and the
+/// audit insert races ahead on a separate task. A failed or timed-out insert
+/// only logs a `warn!` and drops the row; it never affects the response.
+///
+/// Slice 1 has no per-request principal, so every write is attributed to the
+/// bootstrap admin author with `actor_label = "shared-key"`. Per-author
+/// attribution lands once token resolution exists (slice 2).
+fn record_audit(
+    state: &AppState,
+    action: AuditAction,
+    document_id: Option<uuid::Uuid>,
+    slug: &str,
+) {
+    const AUDIT_INSERT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+    let pool = state.pool.clone();
+    let slug = slug.to_string();
+    tokio::spawn(async move {
+        let insert = audit::record_write(
+            &pool,
+            Some(BOOTSTRAP_ADMIN_ID),
+            "shared-key",
+            action,
+            document_id,
+            Some(&slug),
+        );
+        match tokio::time::timeout(AUDIT_INSERT_TIMEOUT, insert).await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => {
+                tracing::warn!(action = action.as_str(), slug = slug.as_str(), %error, "write_audit insert failed; audit row dropped");
+            }
+            Err(_elapsed) => {
+                tracing::warn!(
+                    action = action.as_str(),
+                    slug = slug.as_str(),
+                    timeout_secs = AUDIT_INSERT_TIMEOUT.as_secs(),
+                    "write_audit insert timed out; audit row dropped"
+                );
+            }
+        }
+    });
 }
 
 /// Require a write credential: the request must carry either the configured
