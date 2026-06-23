@@ -131,7 +131,14 @@ async fn resolve_embeds(
         return Ok(out);
     }
 
-    for slug in slugs {
+    // Iterate in a stable (sorted) order so the budget-truncation boundary is
+    // reproducible: `slugs` is a `HashSet`, whose iteration order is otherwise
+    // non-deterministic. Without this, two renders of the same over-budget
+    // markdown could expand a different subset of embeds and persist different
+    // `rendered_html`.
+    let mut ordered: Vec<&String> = slugs.iter().collect();
+    ordered.sort_unstable();
+    for &slug in &ordered {
         // Cycle: this slug is already being expanded on the path to here.
         if visited.contains(slug) {
             out.insert(slug.clone(), EmbedResolution::Placeholder);
