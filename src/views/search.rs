@@ -52,7 +52,7 @@ pub fn render_search_page(
             } else {
                 r#"<span class="spacer">Older &rarr;</span>"#.to_string()
             };
-            format!(r#"\n        <nav class="pager">{}{}</nav>"#, prev, next)
+            format!(r#"<nav class="pager">{}{}</nav>"#, prev, next)
         } else {
             String::new()
         };

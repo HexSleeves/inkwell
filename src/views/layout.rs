@@ -327,10 +327,7 @@ pub(crate) fn render_document_list(documents: &[Document]) -> String {
             let excerpt_html = if excerpt.is_empty() {
                 String::new()
             } else {
-                format!(
-                    r#"\n            <p class="excerpt">{}</p>"#,
-                    escape_html(&excerpt)
-                )
+                format!(r#"<p class="excerpt">{}</p>"#, escape_html(&excerpt))
             };
             format!(
                 r#"          <li>
@@ -379,7 +376,7 @@ pub fn render_tag_chips(tags: &[String]) -> String {
         })
         .collect::<Vec<_>>()
         .join("");
-    format!(r#"\n            <ul class="tags">{}</ul>"#, items)
+    format!(r#"<ul class="tags">{}</ul>"#, items)
 }
 
 pub fn json_ld_document(
