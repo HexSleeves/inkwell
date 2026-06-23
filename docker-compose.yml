@@ -42,6 +42,7 @@ services:
       # Set them (shell or .env) to use real Voyage embeddings + Claude answers.
       VOYAGE_API_KEY: ${VOYAGE_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      INKWELL_WEBMENTION_SEND: ${INKWELL_WEBMENTION_SEND:-true}
     depends_on:
       db:
         condition: service_healthy
