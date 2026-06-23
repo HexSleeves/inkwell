@@ -8,8 +8,6 @@ tags:
   - import
 ---
 
-# Bring Your Own Vault
-
 These seeded notes are just a starting point. You can pour your existing
 Obsidian vault into the garden with one command:
 

@@ -7,8 +7,6 @@ tags:
   - notes
 ---
 
-# Wikilinks and Backlinks
-
 A **wikilink** is written as `[[target-note]]`. When inkwell renders a note it
 resolves each wikilink against the published garden:
 

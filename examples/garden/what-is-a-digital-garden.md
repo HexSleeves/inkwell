@@ -7,8 +7,6 @@ tags:
   - notes
 ---
 
-# What Is a Digital Garden?
-
 A digital garden is a space for **growing ideas in public**. Notes are not
 polished, dated blog posts — they are living documents that you revisit, link
 together, and refine.

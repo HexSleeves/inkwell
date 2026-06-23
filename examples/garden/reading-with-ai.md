@@ -8,8 +8,6 @@ tags:
   - ai
 ---
 
-# Reading Your Garden with AI
-
 Inkwell ships an **MCP server** (`inkwell mcp`) so an AI agent can read, search,
 create, and edit notes in your *live* garden over the Model Context Protocol.
 

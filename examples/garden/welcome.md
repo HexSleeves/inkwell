@@ -7,8 +7,6 @@ tags:
   - garden
 ---
 
-# Welcome to Your Garden
-
 This is a **digital garden** seeded by `docker compose up`. Unlike a blog, a
 garden is a web of interlinked notes that grow and connect over time.
 
