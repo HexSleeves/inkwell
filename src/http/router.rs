@@ -11,7 +11,7 @@ use crate::ai::{Embedder, Llm};
 use crate::config::Config;
 use crate::http::AppState;
 
-use super::{ai, api, feed, pages, search, security_headers, sitemap};
+use super::{ai, api, feed, pages, search, security_headers, sitemap, webmention};
 
 pub fn build_router(config: Arc<Config>, pool: sqlx::PgPool) -> Router {
     // Provider selection from config: real providers when keys are set, else the
@@ -42,6 +42,7 @@ pub fn build_router_with_providers(
     Router::new()
         .route("/health", any(api::health))
         .route("/ask", any(ai::ask))
+        .route("/webmention", any(webmention::webmention))
         .route("/documents", any(api::documents))
         .route("/documents/{slug}", any(api::document))
         .route("/documents/{slug}/backlinks", any(api::document_backlinks))

@@ -86,6 +86,31 @@ impl From<Backlink> for BacklinkEnvelope {
     }
 }
 
+/// A verified inbound Webmention surfaced alongside backlinks.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MentionEnvelope {
+    source_url: String,
+}
+
+impl From<crate::db::webmentions::Mention> for MentionEnvelope {
+    fn from(value: crate::db::webmentions::Mention) -> Self {
+        Self {
+            source_url: value.source_url,
+        }
+    }
+}
+
+/// The "linked from" surface as JSON: internal backlinks plus verified external
+/// Webmentions, both visibility-filtered identically (never a draft-targeting
+/// mention to the public).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BacklinksResponse {
+    backlinks: Vec<BacklinkEnvelope>,
+    mentions: Vec<MentionEnvelope>,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct GraphNodeEnvelope {
@@ -205,13 +230,15 @@ pub async fn document(
     }
 }
 
-/// `GET /documents/{slug}/backlinks` — the "linked from" set as JSON.
+/// `GET /documents/{slug}/backlinks` — the "linked from" set as JSON: internal
+/// backlinks plus verified inbound Webmentions.
 ///
 /// The target is resolved under the caller's visibility (authenticated ⇒ all
 /// statuses, else published-only), mirroring [`get_document`]: a target the
-/// caller cannot see 404s rather than leaking its existence. Backlinks are then
-/// fetched at the SAME visibility, so a public caller never sees a draft source
-/// (the no-draft-leak invariant). GET only; any other method is 405.
+/// caller cannot see 404s rather than leaking its existence. Both backlinks and
+/// mentions are fetched at the SAME visibility, so a public caller never sees a
+/// draft source nor a mention targeting a draft (the no-draft-leak invariant,
+/// enforced by the centralized [`Visibility`] predicate). GET only; 405 else.
 pub async fn document_backlinks(
     State(state): State<AppState>,
     Path(slug): Path<String>,
@@ -239,9 +266,13 @@ pub async fn document_backlinks(
         )));
     };
     let backlinks = links::backlinks(&state.pool, document.id, visibility).await?;
-    let envelopes: Vec<BacklinkEnvelope> =
-        backlinks.into_iter().map(BacklinkEnvelope::from).collect();
-    Ok((StatusCode::OK, Json(envelopes)).into_response())
+    let mentions =
+        crate::db::webmentions::verified_mentions(&state.pool, document.id, visibility).await?;
+    let response = BacklinksResponse {
+        backlinks: backlinks.into_iter().map(BacklinkEnvelope::from).collect(),
+        mentions: mentions.into_iter().map(MentionEnvelope::from).collect(),
+    };
+    Ok((StatusCode::OK, Json(response)).into_response())
 }
 
 /// `GET /graph` — the whole garden's bounded link graph as JSON.
@@ -314,6 +345,10 @@ pub async fn publish_document(
     };
     // Now publicly resolvable: upgrade stubs pointing at this slug.
     garden::backfill_after_change(&state.pool, document.id, &document.slug).await;
+    // Opt-in Webmention send (default OFF): notify external targets this note
+    // links to. Fully inert unless INKWELL_WEBMENTION_SEND=true; always
+    // best-effort and detached, so it never blocks or fails the publish.
+    crate::http::webmention_send::maybe_send(&state, &document.slug, &document.body_markdown);
     Ok((StatusCode::OK, Json(DocumentEnvelope::from(document))).into_response())
 }
 

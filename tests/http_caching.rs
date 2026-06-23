@@ -38,6 +38,7 @@ fn router_with_unreachable_database() -> Result<axum::Router> {
             voyage_api_key: None,
             anthropic_api_key: None,
             llm_model: inkwell::config::DEFAULT_LLM_MODEL.to_string(),
+            webmention_send: false,
         }),
         pool,
     ))

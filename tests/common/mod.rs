@@ -50,6 +50,9 @@ pub fn test_config(database_url: String) -> Arc<Config> {
         voyage_api_key: None,
         anthropic_api_key: None,
         llm_model: inkwell::config::DEFAULT_LLM_MODEL.to_string(),
+        // Webmention send stays OFF in tests: the receive path and SSRF guard are
+        // what we exercise; send is asserted inert separately.
+        webmention_send: false,
     })
 }
 
@@ -61,6 +64,14 @@ pub async fn maybe_router() -> Result<Option<axum::Router>> {
         test_config(std::env::var("DATABASE_URL")?),
         pool,
     )))
+}
+
+/// Build a router from an already-acquired pool, reusing the shared
+/// [`test_config`]. Lets a test do its own setup against `pool` (e.g. seed
+/// documents/webmentions) and then exercise the HTTP surface over the SAME pool.
+pub fn router_for(pool: PgPool) -> axum::Router {
+    let database_url = std::env::var("DATABASE_URL").unwrap_or_default();
+    build_router(test_config(database_url), pool)
 }
 
 /// Router wired with the deterministic mock embedder AND mock LLM, so the eval

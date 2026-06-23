@@ -5,6 +5,7 @@ pub mod config;
 pub mod db;
 pub mod domain;
 pub mod error;
+pub mod federation;
 pub mod garden;
 pub mod http;
 pub mod mcp;
