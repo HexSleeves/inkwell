@@ -17,6 +17,13 @@ COPY . .
 RUN cargo build --release --bin inkwell
 
 FROM debian:bookworm-slim AS runtime
+# `debian:bookworm-slim` ships without ca-certificates. reqwest's default
+# native-tls backend loads the system root cert store when a client is built;
+# with no cert bundle, `reqwest::Client::builder().build()` fails — breaking
+# every server-side HTTP client (ai/voyage, ai/claude, federation/fetch).
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
 RUN useradd --system --uid 10001 inkwell
 COPY --from=builder /app/target/release/inkwell /usr/local/bin/inkwell
 USER inkwell
