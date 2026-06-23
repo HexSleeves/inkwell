@@ -73,7 +73,12 @@ fn render_page_emits_valid_html_attributes() {
     assert!(html.contains(r#"<header class="site-header">"#));
     assert!(html.contains(r#"<div class="site-header-inner">"#));
     assert!(html.contains(r#"<a class="site-brand" href="/">"#));
-    assert!(html.contains(r#"<a class="site-nav" href="/tags">Tags</a>"#));
+    // The nav and brand now carry a leading inline-SVG glyph, so match the
+    // opening tag and the trailing label rather than the bare old markup.
+    assert!(html.contains(r#"<a class="site-nav" href="/tags">"#));
+    assert!(html.contains(r#"Tags</a>"#));
+    assert!(html.contains(r#"<span class="brand-name">Inkwell</span>"#));
+    assert!(html.contains(r#"<div class="botanical-band" aria-hidden="true">"#));
     assert!(html.contains(r#"<main class="site-main">"#));
     assert!(html.contains(r#"<footer class="site-footer">Published with Inkwell.</footer>"#));
     assert!(!html.contains(r#"\""#));

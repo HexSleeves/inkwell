@@ -11,7 +11,7 @@ use crate::ai::{Embedder, Llm};
 use crate::config::Config;
 use crate::http::AppState;
 
-use super::{ai, api, feed, pages, search, security_headers, sitemap, webmention};
+use super::{ai, api, assets, feed, pages, search, security_headers, sitemap, webmention};
 
 pub fn build_router(config: Arc<Config>, pool: sqlx::PgPool) -> Router {
     // Provider selection from config: real providers when keys are set, else the
@@ -59,6 +59,7 @@ pub fn build_router_with_providers(
             get(sitemap::sitemap_documents_page),
         )
         .route("/sitemaps/tags/{page}", get(sitemap::sitemap_tags_page))
+        .route("/assets/fonts/nunito.woff2", get(assets::nunito_font))
         .route("/search", get(search::search))
         .route("/tags", get(pages::tags_index))
         .route("/tags/{tag}", get(pages::tag_page))

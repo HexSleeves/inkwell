@@ -5,8 +5,8 @@ use crate::domain::document::{Document, GrowthStage, timestamp};
 use crate::rendering::wikilink::render_snippet_with_links;
 
 use super::layout::{
-    HeadMeta, SITE_NAME, date_line, derive_excerpt, escape_html, json_ld_document,
-    normalize_site_url, render_page, render_tag_chips, truncate_on_char_boundary,
+    BADGE_ICONS, HeadMeta, SITE_NAME, SPROUT_ICON, date_line, derive_excerpt, escape_html,
+    json_ld_document, normalize_site_url, render_page, render_tag_chips, truncate_on_char_boundary,
 };
 
 /// Longest backlink context snippet (in bytes) shown before multibyte-safe
@@ -81,8 +81,9 @@ pub fn render_document_page(
 /// vocabulary, so it is safe to interpolate into both the class and the label.
 fn render_growth_chip(growth: GrowthStage) -> String {
     format!(
-        r#" &middot; <span class="growth growth-{stage}">{stage}</span>"#,
+        r#" &middot; <span class="growth growth-{stage}">{icon}{stage}</span>"#,
         stage = growth.as_str(),
+        icon = SPROUT_ICON,
     )
 }
 
@@ -96,7 +97,8 @@ fn render_backlinks_panel(backlinks: &[Backlink], snippet_links: &HashSet<String
     }
     let items = backlinks
         .iter()
-        .map(|backlink| {
+        .enumerate()
+        .map(|(index, backlink)| {
             let snippet = backlink
                 .context_snippet
                 .as_deref()
@@ -113,16 +115,23 @@ fn render_backlinks_panel(backlinks: &[Backlink], snippet_links: &HashSet<String
                     // stubs); everything else is escaped by the snippet renderer.
                     format!(
                         r#"
-            <p class="backlink-context">{}{}</p>"#,
+              <p class="backlink-context">{}{}</p>"#,
                         render_snippet_with_links(clipped.trim_end(), snippet_links),
                         ellipsis
                     )
                 })
                 .unwrap_or_default();
+            // Cycle a small set of plant glyphs across the card badges so the
+            // panel reads as a little garden rather than a plain list.
+            let badge = BADGE_ICONS[index % BADGE_ICONS.len()];
             format!(
                 r#"          <li>
-            <a class="backlink" href="/{}">{}</a>{}
+            <span class="backlink-badge" aria-hidden="true">{}</span>
+            <div class="backlink-main">
+              <a class="backlink" href="/{}">{}</a>{}
+            </div>
           </li>"#,
+                badge,
                 urlencoding::encode(&backlink.source_slug),
                 escape_html(&backlink.source_title),
                 snippet
@@ -133,12 +142,13 @@ fn render_backlinks_panel(backlinks: &[Backlink], snippet_links: &HashSet<String
     format!(
         r#"
         <aside class="backlinks" aria-label="Linked from">
-          <h2>Linked from</h2>
+          <h2>{icon}Linked from</h2>
           <ul class="backlinks-list">
-{}
+{items}
           </ul>
         </aside>"#,
-        items
+        icon = SPROUT_ICON,
+        items = items,
     )
 }
 

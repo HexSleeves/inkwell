@@ -56,7 +56,16 @@ const STYLES: &str = r#"
      Font note: prefers Nunito/Quicksand if installed, else falls back to the
      OS rounded sans (SF Rounded on Apple). A bundled web font would make this
      identical cross-platform; tracked as a follow-up. */
-  :root { color-scheme: light dark; }
+  @font-face {
+    font-family: "Nunito";
+    font-style: normal;
+    font-weight: 200 1000;
+    font-display: swap;
+    src: url(/assets/fonts/nunito.woff2) format("woff2");
+  }
+  /* This theme is intentionally light-only: the warm cream canvas is the
+     identity. (A faithful botanical dark mode can be added later.) */
+  :root { color-scheme: light; }
   * { box-sizing: border-box; }
   body { margin: 0; }
   .site-body {
@@ -156,16 +165,23 @@ const STYLES: &str = r#"
   ul.index a.title:hover { color: rgb(197 107 71); }
   ul.index .excerpt { margin: 0.35rem 0 0; color: rgb(96 110 100); }
   .backlinks { margin-top: 3rem; }
-  .backlinks h2 { color: rgb(47 93 69); font-size: 1.35rem; margin: 0 0 1rem; }
-  ul.backlinks-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 0.85rem; }
-  ul.backlinks-list li {
-    margin: 0; padding: 1rem 1.1rem; background: rgb(255 255 255);
-    border: 1px solid rgb(226 234 226); border-radius: 1rem;
-    box-shadow: 0 1px 3px rgb(47 93 69 / 0.06), 0 1px 2px rgb(47 93 69 / 0.04);
+  .backlinks h2 {
+    display: inline-flex; align-items: center; gap: 0.5rem;
+    color: rgb(47 93 69); font-size: 1.45rem; margin: 0 0 1.1rem;
   }
-  a.backlink { color: rgb(47 93 69); font-weight: 800; text-decoration: none; }
+  .backlinks h2 .ico { width: 1.05em; height: 1.05em; color: rgb(91 138 104); }
+  ul.backlinks-list {
+    list-style: none; padding: 0; margin: 0; display: grid; gap: 1rem;
+    grid-template-columns: repeat(auto-fit, minmax(19rem, 1fr)); align-items: stretch;
+  }
+  ul.backlinks-list li {
+    margin: 0; padding: 1rem 1.15rem; background: rgb(255 255 255);
+    border: 1px solid rgb(226 234 226); border-radius: 1.1rem;
+    box-shadow: 0 2px 5px rgb(47 93 69 / 0.05), 0 1px 2px rgb(47 93 69 / 0.04);
+  }
+  a.backlink { color: rgb(47 93 69); font-weight: 800; text-decoration: none; line-height: 1.3; display: inline-block; }
   a.backlink:hover { color: rgb(197 107 71); }
-  .backlink-context { margin: 0.35rem 0 0; color: rgb(96 110 100); font-size: 0.92rem; line-height: 1.55; }
+  .backlink-context { margin: 0.45rem 0 0; color: rgb(96 110 100); font-size: 0.9rem; line-height: 1.5; }
   .backlink-context a { color: rgb(197 107 71); }
   .backlink-context a.stub { color: rgb(150 120 104); text-decoration-style: dotted; }
   form.search { display: flex; gap: 0.65rem; margin: 0 0 2rem; }
@@ -182,6 +198,40 @@ const STYLES: &str = r#"
   nav.pager a { text-decoration: none; color: rgb(197 107 71); font-weight: 700; }
   nav.pager .spacer { color: transparent; }
   .empty { color: rgb(120 132 123); font-style: italic; }
+  /* Bubbly header: wordmark + nav as rounded pills with a leaf/tag glyph. */
+  .site-brand {
+    display: inline-flex; align-items: center; gap: 0.5rem;
+    padding: 0.4rem 0.9rem 0.4rem 0.75rem; border-radius: 999px;
+    background: rgb(255 255 255); border: 1px solid rgb(206 224 208);
+    box-shadow: 0 1px 2px rgb(47 93 69 / 0.05);
+  }
+  .site-brand:hover { color: rgb(47 93 69); border-color: rgb(168 192 170); background: rgb(247 251 247); }
+  .site-nav {
+    display: inline-flex; align-items: center; gap: 0.4rem;
+    padding: 0.4rem 0.85rem; border-radius: 999px;
+    background: rgb(255 255 255); border: 1px solid rgb(212 220 213);
+  }
+  .site-nav:hover { background: rgb(247 251 247); border-color: rgb(168 192 170); }
+  .ico { display: inline-block; flex: none; vertical-align: middle; }
+  .site-brand .ico { color: rgb(91 138 104); }
+  .site-nav .ico { color: rgb(150 162 152); }
+  .growth .ico { margin-right: 0.3rem; color: rgb(91 138 104); }
+  /* Backlink cards: a circular plant-icon badge beside the title + snippet. */
+  ul.backlinks-list li { display: flex; gap: 0.85rem; align-items: flex-start; }
+  .backlink-badge {
+    flex: none; width: 2.4rem; height: 2.4rem; border-radius: 999px;
+    display: grid; place-items: center; background: rgb(234 241 234);
+    border: 1px solid rgb(206 224 208); color: rgb(74 122 88);
+  }
+  .backlink-main { min-width: 0; }
+  /* Decorative botanical band painted along the bottom of every page. */
+  .botanical-band {
+    position: fixed; left: 0; right: 0; bottom: 0; height: clamp(84px, 13vw, 168px);
+    pointer-events: none; z-index: 0; overflow: hidden; line-height: 0;
+  }
+  .botanical-band svg { width: 100%; height: 100%; display: block; }
+  .site-header, .site-main, .site-footer { position: relative; z-index: 1; }
+  .site-footer { padding-bottom: clamp(5rem, 14vw, 9rem); }
   @media (min-width: 640px) {
     .site-header-inner, .site-main, .site-footer {
       padding-left: 1.5rem;
@@ -192,34 +242,31 @@ const STYLES: &str = r#"
       padding-bottom: 4rem;
     }
   }
-  @media (prefers-color-scheme: dark) {
-    .site-body { background: rgb(20 26 22); color: rgb(220 228 219); }
-    .site-shell { border-top-color: rgb(78 112 86); }
-    .site-header {
-      border-bottom-color: rgb(40 50 42);
-      background: rgb(20 26 22 / 0.8);
-    }
-    .site-brand { color: rgb(150 195 162); }
-    .site-brand:hover, .site-nav:hover { color: rgb(222 150 116); }
-    .site-nav, .site-footer { color: rgb(140 156 143); }
-    main h1, main h2, main h3, main h4, main h5, main h6, ul.index a.title, .backlinks h2 { color: rgb(150 195 162); }
-    main a, nav.pager a, ul.index a.title:hover, a.backlink:hover, .backlink-context a { color: rgb(222 150 116); }
-    a.backlink { color: rgb(150 195 162); }
-    main code { background: rgb(34 44 37); color: rgb(206 220 208); }
-    main pre { background: rgb(15 20 17); border-color: rgb(48 60 51); }
-    main blockquote, ul.index .excerpt, .backlink-context { color: rgb(180 196 183); }
-    main blockquote { border-left-color: rgb(78 112 86); }
-    main th, main td, ul.index li { border-color: rgb(48 60 51); }
-    main th { background: rgb(30 40 33); }
-    .meta, .empty { color: rgb(140 156 143); }
-    .growth { color: rgb(160 205 172); background: rgb(28 44 33); border-color: rgb(46 70 52); }
-    ul.tags a { color: rgb(226 168 140); background: rgb(34 46 38); border-color: rgb(52 72 57); }
-    ul.tags a:hover { background: rgb(42 56 46); border-color: rgb(78 112 86); }
-    ul.backlinks-list li { background: rgb(28 36 30); border-color: rgb(46 58 49); box-shadow: none; }
-    .backlink-context a.stub { color: rgb(176 150 134); }
-    form.search input[type="search"] { background: rgb(28 36 30); border-color: rgb(48 60 51); }
-  }
 "#;
+
+/// Leaf glyph for the wordmark pill.
+pub(crate) const LEAF_ICON: &str = r##"<svg class="ico" width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 19c0-7.5 5.2-13.2 14-14 .2 9.3-5.8 14-14 14Z" fill="currentColor"/><path d="M6 18C9.5 13.5 12.5 11 16.5 9" stroke="#fbfaf6" stroke-width="1.4" stroke-linecap="round"/></svg>"##;
+
+/// Tag glyph for the nav pill.
+pub(crate) const TAG_ICON: &str = r##"<svg class="ico" width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 4.5h7L20 13l-7 7-9-9V4.5Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><circle cx="8" cy="8.5" r="1.5" fill="currentColor"/></svg>"##;
+
+/// Small sprout glyph for the growth/maturity chip.
+pub(crate) const SPROUT_ICON: &str = r##"<svg class="ico" width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 21v-8" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/><path d="M12 14c0-3.6-2.7-5.6-6.5-5.6C5.5 12 8.2 14 12 14Z" fill="currentColor"/><path d="M12 12.5c0-3 2.2-4.6 5.8-4.6C17.8 11 15.6 12.5 12 12.5Z" fill="currentColor"/></svg>"##;
+
+/// Plant glyphs cycled across the "Linked from" backlink card badges.
+pub(crate) const BADGE_ICONS: [&str; 3] = [
+    // leaf
+    r##"<svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 19c0-7.5 5.2-13.2 14-14 .2 9.3-5.8 14-14 14Z" fill="currentColor"/><path d="M6 18C9.5 13.5 12.5 11 16.5 9" stroke="#eaf1ea" stroke-width="1.4" stroke-linecap="round"/></svg>"##,
+    // sprig
+    r##"<svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 21V5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><path d="M12 13c0-3.2-2.4-5-6-5 0 3.2 2.4 5 6 5Z" fill="currentColor"/><path d="M12 10c0-3 2.2-4.4 5.6-4.4C17.6 8.6 15.4 10 12 10Z" fill="currentColor"/></svg>"##,
+    // flower
+    r##"<svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true"><g fill="currentColor"><circle cx="12" cy="6.5" r="2.7"/><circle cx="12" cy="17.5" r="2.7"/><circle cx="6.5" cy="12" r="2.7"/><circle cx="17.5" cy="12" r="2.7"/></g><circle cx="12" cy="12" r="2.6" fill="#c56b47"/></svg>"##,
+];
+
+/// Decorative botanical band painted full-width along the bottom of every page.
+/// Hardcoded sage/clay palette; purely ornamental (`aria-hidden`), anchored to
+/// the bottom and cropped on the sides via `xMidYMax slice`.
+pub(crate) const BOTANICAL_BAND: &str = r##"<svg viewBox="0 0 1440 168" preserveAspectRatio="xMidYMax slice" fill="none" aria-hidden="true"><g stroke="#7a9a7c" stroke-width="3" stroke-linecap="round"><path d="M120 168V70"/><path d="M360 168V96"/><path d="M620 168V60"/><path d="M880 168V104"/><path d="M1120 168V78"/><path d="M1320 168V110"/></g><g fill="#9cba9c"><path d="M120 96c0-22-15-34-40-34 0 20 15 34 40 34Z"/><path d="M120 78c0-19 14-30 36-30 0 18-14 30-36 30Z"/><path d="M360 118c0-18-12-28-33-28 0 16 12 28 33 28Z"/><path d="M620 92c0-24-16-38-44-38 0 22 16 38 44 38Z"/><path d="M620 70c0-20 15-32 38-32 0 19-15 32-38 32Z"/><path d="M880 128c0-16-11-26-30-26 0 15 11 26 30 26Z"/><path d="M1120 104c0-22-15-34-40-34 0 20 15 34 40 34Z"/><path d="M1120 86c0-18 13-29 35-29 0 17-13 29-35 29Z"/><path d="M1320 132c0-16-11-25-29-25 0 14 11 25 29 25Z"/></g><g fill="#8aab8c"><path d="M120 96c0-20 14-32 38-32 0 19-14 32-38 32Z" opacity=".5"/><path d="M620 92c0-22 15-36 42-36 0 21-15 36-42 36Z" opacity=".5"/><path d="M1120 104c0-20 14-32 38-32 0 19-14 32-38 32Z" opacity=".5"/></g><g><g transform="translate(240 58)"><circle r="7" fill="#c56b47"/><g fill="#e6b7a4"><circle cx="0" cy="-12" r="6"/><circle cx="0" cy="12" r="6"/><circle cx="-12" cy="0" r="6"/><circle cx="12" cy="0" r="6"/></g><circle r="5" fill="#c56b47"/></g><g transform="translate(760 44) scale(.85)"><g fill="#eac24a"><circle cx="0" cy="-12" r="6"/><circle cx="0" cy="12" r="6"/><circle cx="-12" cy="0" r="6"/><circle cx="12" cy="0" r="6"/></g><circle r="5" fill="#c56b47"/></g><g transform="translate(1240 66) scale(.9)"><g fill="#e6b7a4"><circle cx="0" cy="-12" r="6"/><circle cx="0" cy="12" r="6"/><circle cx="-12" cy="0" r="6"/><circle cx="12" cy="0" r="6"/></g><circle r="5" fill="#c56b47"/></g></g></svg>"##;
 
 pub fn render_page(meta: HeadMeta<'_>, main: &str) -> String {
     let mut tags = vec![
@@ -284,14 +331,15 @@ pub fn render_page(meta: HeadMeta<'_>, main: &str) -> String {
 <html lang="en">
   <head>
     {}
+    <link rel="preload" href="/assets/fonts/nunito.woff2" as="font" type="font/woff2" crossorigin />
     <style>{}</style>
   </head>
   <body class="site-body">
     <div class="site-shell">
       <header class="site-header">
         <div class="site-header-inner">
-          <a class="site-brand" href="/">{}</a>
-          <a class="site-nav" href="/tags">Tags</a>
+          <a class="site-brand" href="/">{}<span class="brand-name">{}</span></a>
+          <a class="site-nav" href="/tags">{}Tags</a>
         </div>
       </header>
       <main class="site-main">
@@ -299,13 +347,17 @@ pub fn render_page(meta: HeadMeta<'_>, main: &str) -> String {
       </main>
       <footer class="site-footer">Published with Inkwell.</footer>
     </div>
+    <div class="botanical-band" aria-hidden="true">{}</div>
   </body>
 </html>
 "#,
         tags.join("\n    "),
         STYLES,
+        LEAF_ICON,
         escape_html(SITE_NAME),
-        main
+        TAG_ICON,
+        main,
+        BOTANICAL_BAND
     )
 }
 

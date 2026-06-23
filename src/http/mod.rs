@@ -7,6 +7,7 @@ use crate::config::Config;
 
 pub mod ai;
 pub mod api;
+pub mod assets;
 pub mod auth;
 pub mod cache;
 pub mod extractors;
