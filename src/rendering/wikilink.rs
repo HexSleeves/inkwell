@@ -187,6 +187,60 @@ pub fn render_markdown_with_links(markdown: &str, resolved: &HashSet<String>) ->
     render_inner(markdown, resolved, &HashMap::new())
 }
 
+/// Render a backlinks **context snippet** to inline HTML.
+///
+/// The snippet is a *preview* of the source note's raw text, so the literal
+/// `[[ ]]` brackets are **kept** — they signal "wikilink as authored" and set
+/// the panel apart from a normal prose link (the rendered body, by contrast,
+/// strips the brackets). This rewrites only the `[[target]]` / `[[target|alias]]`
+/// tokens into a clickable `<a href="/{slug}">[[display]]</a>` (or
+/// `<a class="stub" …>` when the slug is not in `resolved`), keeping the
+/// brackets *inside* the link so the whole token is clickable, and HTML-escapes
+/// everything around them. Unlike [`render_markdown_with_links`] it stays inline
+/// (no `<p>` wrapper) so it can sit inside the panel's own
+/// `<p class="backlink-context">`, and it builds the markup directly (the
+/// surrounding text and `display` are escaped, `slug` is already `[a-z0-9-]`), so
+/// no HTML sanitizer pass is needed. An `![[embed]]` mention isn't navigational
+/// in a preview, so it stays as literal, non-clickable `![[display]]` text.
+pub fn render_snippet_with_links(snippet: &str, resolved: &HashSet<String>) -> String {
+    let matches = scan(snippet);
+    if matches.is_empty() {
+        return escape_html(snippet);
+    }
+    let mut out = String::with_capacity(snippet.len() + 16);
+    let mut cursor = 0usize;
+    for m in &matches {
+        if m.start > cursor {
+            out.push_str(&escape_html(&snippet[cursor..m.start]));
+        }
+        let display = m.alias.clone().unwrap_or_else(|| m.inner.clone());
+        let bracketed = escape_html(&format!("[[{display}]]"));
+        if m.is_embed {
+            // Embeds are transclusion mentions, not navigation: keep the literal
+            // `![[…]]` form, un-clickable.
+            out.push_str(&format!("!{bracketed}"));
+        } else {
+            let slug = slugify(&m.inner);
+            let class = if resolved.contains(&slug) {
+                ""
+            } else {
+                " class=\"stub\""
+            };
+            out.push_str(&format!(
+                "<a{class} href=\"/{slug}\">{bracketed}</a>",
+                class = class,
+                slug = slug,
+                bracketed = bracketed,
+            ));
+        }
+        cursor = m.end;
+    }
+    if cursor < snippet.len() {
+        out.push_str(&escape_html(&snippet[cursor..]));
+    }
+    out
+}
+
 /// Like [`render_markdown_with_links`], but each `![[note]]` embed is replaced
 /// by its [`EmbedResolution`]: a published target's pre-rendered content, or a
 /// neutral placeholder for a draft/missing target, a cycle, or an exceeded
@@ -452,6 +506,42 @@ mod tests {
         let html = render_markdown_with_links("x < y and [[a]] done", &resolved);
         assert!(html.contains("href=\"/a\""));
         assert!(html.contains("&lt;"));
+    }
+
+    #[test]
+    fn snippet_resolved_link_keeps_brackets_clickable_and_escapes_text() {
+        let resolved: HashSet<String> = ["welcome".to_string()].into_iter().collect();
+        let html = render_snippet_with_links("Start at [[welcome]] & go", &resolved);
+        // Brackets are preserved and live *inside* the anchor, so the whole
+        // `[[welcome]]` token is clickable.
+        assert_eq!(html, r#"Start at <a href="/welcome">[[welcome]]</a> &amp; go"#);
+    }
+
+    #[test]
+    fn snippet_unresolved_link_is_a_stub_with_brackets() {
+        let resolved: HashSet<String> = HashSet::new();
+        let html = render_snippet_with_links("read [[Missing Note]]", &resolved);
+        assert!(html.contains(r#"<a class="stub" href="/missing-note">[[Missing Note]]</a>"#));
+    }
+
+    #[test]
+    fn snippet_alias_shows_bracketed_alias_links_to_target() {
+        let resolved: HashSet<String> = ["my-note".to_string()].into_iter().collect();
+        let html = render_snippet_with_links("see [[my-note|the alias]]", &resolved);
+        assert!(html.contains(r#"<a href="/my-note">[[the alias]]</a>"#));
+    }
+
+    #[test]
+    fn snippet_embed_mention_stays_literal_and_unclickable() {
+        let html = render_snippet_with_links("here ![[diagram]] there", &HashSet::new());
+        assert_eq!(html, "here ![[diagram]] there");
+        assert!(!html.contains("href"));
+    }
+
+    #[test]
+    fn snippet_without_wikilinks_is_just_escaped() {
+        let html = render_snippet_with_links("plain <text> & more", &HashSet::new());
+        assert_eq!(html, "plain &lt;text&gt; &amp; more");
     }
 
     #[test]

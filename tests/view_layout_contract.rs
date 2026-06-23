@@ -133,7 +133,13 @@ fn document_page_with_tags_has_no_literal_backslash_n() {
     // The fixture carries tags so the tag-chip template is exercised; this
     // assertion would have FAILED before the fix.
     let document = tagged_document();
-    let html = render_document_page(&document, &[], Some("http://localhost"), "nonce123");
+    let html = render_document_page(
+        &document,
+        &[],
+        &std::collections::HashSet::new(),
+        Some("http://localhost"),
+        "nonce123",
+    );
     assert!(
         html.contains(r#"<ul class="tags">"#),
         "tag chips must render"

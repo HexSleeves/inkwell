@@ -55,6 +55,11 @@ pub async fn document_page(
                     Vec::new()
                 }
             };
+            // Resolve the wikilink targets that appear inside the backlink
+            // context snippets, so the panel can render them as live links (or
+            // stubs). Resolution is Public, exactly like the body and the panel
+            // itself: a draft target stays an unresolved stub and never leaks.
+            let snippet_links = resolve_snippet_links(&state.pool, &backlinks).await;
             cache::html_response(
                 &headers,
                 "document",
@@ -62,6 +67,7 @@ pub async fn document_page(
                 render_document_page(
                     &document,
                     &backlinks,
+                    &snippet_links,
                     state.config.site_url.as_deref(),
                     csp_nonce.as_str(),
                 ),
@@ -73,6 +79,33 @@ pub async fn document_page(
         )
             .into_response(),
         Err(_) => error_page(&state),
+    }
+}
+
+/// Resolve the `[[wikilink]]` targets that appear in backlink context snippets
+/// to the set of slugs that exist in the **public** garden, so the panel can
+/// render them as live links and leave the rest as stubs. Failure degrades to
+/// an empty set (every snippet link renders as a stub) rather than 500-ing the
+/// page.
+async fn resolve_snippet_links(
+    pool: &sqlx::PgPool,
+    backlinks: &[links::Backlink],
+) -> std::collections::HashSet<String> {
+    let slugs: Vec<String> = backlinks
+        .iter()
+        .filter_map(|backlink| backlink.context_snippet.as_deref())
+        .flat_map(crate::rendering::wikilink::extract_wikilinks)
+        .map(|reference| reference.target_slug)
+        .collect();
+    if slugs.is_empty() {
+        return std::collections::HashSet::new();
+    }
+    match links::resolve_slug_ids(pool, &slugs, Visibility::Public).await {
+        Ok(map) => map.into_keys().collect(),
+        Err(error) => {
+            tracing::warn!(%error, "snippet link resolution failed; rendering backlink snippets without live links");
+            std::collections::HashSet::new()
+        }
     }
 }
 

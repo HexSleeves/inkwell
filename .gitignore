@@ -19,3 +19,4 @@ coverage/
 
 # Local agent/tool working state
 .claude/
+.gstack/

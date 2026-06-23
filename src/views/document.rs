@@ -1,5 +1,8 @@
+use std::collections::HashSet;
+
 use crate::db::links::Backlink;
 use crate::domain::document::{Document, GrowthStage, timestamp};
+use crate::rendering::wikilink::render_snippet_with_links;
 
 use super::layout::{
     HeadMeta, SITE_NAME, date_line, derive_excerpt, escape_html, json_ld_document,
@@ -13,6 +16,7 @@ const BACKLINK_SNIPPET_MAX: usize = 160;
 pub fn render_document_page(
     document: &Document,
     backlinks: &[Backlink],
+    snippet_links: &HashSet<String>,
     site_url: Option<&str>,
     csp_nonce: &str,
 ) -> String {
@@ -39,7 +43,11 @@ pub fn render_document_page(
         render_tag_chips(&document.tags),
         document.rendered_html()
     );
-    let main = format!("{}{}", main, render_backlinks_panel(backlinks));
+    let main = format!(
+        "{}{}",
+        main,
+        render_backlinks_panel(backlinks, snippet_links)
+    );
     render_page(
         HeadMeta {
             title: &format!("{} — {}", document.title, SITE_NAME),
@@ -82,7 +90,7 @@ fn render_growth_chip(growth: GrowthStage) -> String {
 /// Each entry links to `/{source_slug}` (slug URL-encoded, title escaped) with
 /// its context snippet beneath, truncated multibyte-safely. Returns an empty
 /// string when there are no backlinks so the caller emits no empty box.
-fn render_backlinks_panel(backlinks: &[Backlink]) -> String {
+fn render_backlinks_panel(backlinks: &[Backlink], snippet_links: &HashSet<String>) -> String {
     if backlinks.is_empty() {
         return String::new();
     }
@@ -101,10 +109,12 @@ fn render_backlinks_panel(backlinks: &[Backlink]) -> String {
                     } else {
                         ""
                     };
+                    // `[[wikilinks]]` inside the context become live links (or
+                    // stubs); everything else is escaped by the snippet renderer.
                     format!(
                         r#"
             <p class="backlink-context">{}{}</p>"#,
-                        escape_html(clipped.trim_end()),
+                        render_snippet_with_links(clipped.trim_end(), snippet_links),
                         ellipsis
                     )
                 })
@@ -162,7 +172,7 @@ mod tests {
 
     #[test]
     fn empty_backlinks_omit_the_panel_entirely() {
-        assert_eq!(render_backlinks_panel(&[]), "");
+        assert_eq!(render_backlinks_panel(&[], &HashSet::new()), "");
     }
 
     #[test]
@@ -176,8 +186,11 @@ mod tests {
 
     #[test]
     fn panel_links_to_each_source_with_escaped_title_and_encoded_slug() {
-        let html =
-            render_backlinks_panel(&[backlink("a b", "Title & <Stuff>", Some("see [[here]]"))]);
+        let resolved: HashSet<String> = ["here".to_string()].into_iter().collect();
+        let html = render_backlinks_panel(
+            &[backlink("a b", "Title & <Stuff>", Some("see [[here]]"))],
+            &resolved,
+        );
         assert!(html.contains(r#"class="backlinks""#));
         assert!(html.contains("Linked from"));
         // Slug is URL-encoded in the href.
@@ -187,8 +200,18 @@ mod tests {
         );
         // Title is HTML-escaped.
         assert!(html.contains("Title &amp; &lt;Stuff&gt;"));
-        // Context snippet appears beneath the link.
-        assert!(html.contains("see [[here]]"));
+        // The `[[here]]` in the context snippet becomes a live link with its
+        // brackets preserved inside the anchor.
+        assert!(html.contains(r#"<a href="/here">[[here]]</a>"#));
+    }
+
+    #[test]
+    fn panel_snippet_wikilink_to_a_missing_target_is_a_stub() {
+        let html = render_backlinks_panel(
+            &[backlink("s", "S", Some("see [[ghost]]"))],
+            &HashSet::new(),
+        );
+        assert!(html.contains(r#"<a class="stub" href="/ghost">[[ghost]]</a>"#));
     }
 
     #[test]
@@ -196,7 +219,7 @@ mod tests {
         // A multibyte char (é = 2 bytes) straddling the cap must not panic and
         // must not appear half-sliced.
         let snippet = format!("{}é tail", "x".repeat(BACKLINK_SNIPPET_MAX));
-        let html = render_backlinks_panel(&[backlink("s", "S", Some(&snippet))]);
+        let html = render_backlinks_panel(&[backlink("s", "S", Some(&snippet))], &HashSet::new());
         assert!(
             html.contains('…'),
             "long snippet is truncated with an ellipsis"
@@ -206,7 +229,7 @@ mod tests {
 
     #[test]
     fn blank_snippet_renders_link_without_a_context_paragraph() {
-        let html = render_backlinks_panel(&[backlink("s", "S", Some("   "))]);
+        let html = render_backlinks_panel(&[backlink("s", "S", Some("   "))], &HashSet::new());
         assert!(html.contains(r#"href="/s""#));
         assert!(
             !html.contains("backlink-context"),
