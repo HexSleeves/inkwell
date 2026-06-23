@@ -51,21 +51,26 @@ fn json_for_script(value: serde_json::Value) -> String {
 }
 
 const STYLES: &str = r#"
+  /* Theme: "Botanical Soft" — friendly, organic, rounded. Forest-green
+     headings, warm-clay links, sage tag pills, soft rounded backlink cards.
+     Font note: prefers Nunito/Quicksand if installed, else falls back to the
+     OS rounded sans (SF Rounded on Apple). A bundled web font would make this
+     identical cross-platform; tracked as a follow-up. */
   :root { color-scheme: light dark; }
   * { box-sizing: border-box; }
   body { margin: 0; }
   .site-body {
     min-height: 100vh;
-    background: rgb(250 250 250);
-    color: rgb(9 9 11);
-    font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: rgb(251 250 246);
+    color: rgb(54 64 58);
+    font-family: "Nunito", "Quicksand", ui-rounded, "SF Pro Rounded", system-ui, -apple-system, "Segoe UI", sans-serif;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
   }
-  .site-shell { min-height: 100vh; border-top: 4px solid rgb(14 165 233); }
+  .site-shell { min-height: 100vh; border-top: 4px solid rgb(168 192 170); }
   .site-header {
-    border-bottom: 1px solid rgb(228 228 231 / 0.8);
-    background: rgb(255 255 255 / 0.85);
+    border-bottom: 1px solid rgb(224 232 224 / 0.8);
+    background: rgb(251 250 246 / 0.85);
     backdrop-filter: blur(12px);
   }
   .site-header-inner, .site-main, .site-footer {
@@ -84,79 +89,99 @@ const STYLES: &str = r#"
   }
   .site-brand, .site-nav { text-decoration: none; }
   .site-brand {
-    color: rgb(9 9 11);
+    color: rgb(47 93 69);
     font-size: 1.125rem;
-    font-weight: 900;
+    font-weight: 800;
     letter-spacing: 0;
   }
-  .site-brand:hover { color: rgb(2 132 199); }
+  .site-brand:hover { color: rgb(197 107 71); }
   .site-nav {
-    color: rgb(113 113 122);
+    color: rgb(120 132 123);
     font-size: 0.875rem;
-    font-weight: 500;
+    font-weight: 600;
   }
-  .site-nav:hover { color: rgb(2 132 199); }
+  .site-nav:hover { color: rgb(197 107 71); }
   .site-main {
     padding-top: 3rem;
     padding-bottom: 4rem;
   }
   .site-footer {
     padding-bottom: 3rem;
-    color: rgb(113 113 122);
+    color: rgb(120 132 123);
     font-size: 0.875rem;
   }
-  main { line-height: 1.7; }
+  main { line-height: 1.75; }
   main h1, main h2, main h3, main h4, main h5, main h6 {
-    color: rgb(24 24 27); font-weight: 750; line-height: 1.15; letter-spacing: 0;
+    color: rgb(47 93 69); font-weight: 800; line-height: 1.18; letter-spacing: -0.01em;
     margin: 2.25rem 0 0.85rem;
   }
   main h1 { font-size: clamp(2rem, 4vw, 3rem); margin-top: 0; }
   main h2 { font-size: 1.65rem; }
   main h3 { font-size: 1.25rem; }
   main p, main ul, main ol, main blockquote, main table, main pre, main figure { margin: 0 0 1.15rem; }
-  main ul:not(.index):not(.tags), main ol { padding-left: 1.4rem; }
+  main ul:not(.index):not(.tags):not(.backlinks-list), main ol { padding-left: 1.4rem; }
   main li { margin: 0.25rem 0; }
-  main a { color: rgb(2 132 199); text-decoration-thickness: 0.08em; text-underline-offset: 0.18em; }
-  main img { max-width: 100%; height: auto; border-radius: 0.5rem; }
+  main a { color: rgb(197 107 71); text-decoration-thickness: 0.08em; text-underline-offset: 0.18em; }
+  main a:hover { color: rgb(176 90 56); }
+  main img { max-width: 100%; height: auto; border-radius: 0.85rem; }
   main pre {
-    background: rgb(24 24 27); color: rgb(244 244 245); padding: 1rem; border-radius: 0.5rem;
-    overflow-x: auto; border: 1px solid rgb(39 39 42);
+    background: rgb(43 53 47); color: rgb(238 242 236); padding: 1rem; border-radius: 0.85rem;
+    overflow-x: auto; border: 1px solid rgb(58 70 61);
   }
-  main code { background: rgb(244 244 245); color: rgb(63 63 70); padding: 0.15em 0.35em; border-radius: 0.25rem; font-size: 0.9em; }
+  main code { background: rgb(234 241 234); color: rgb(61 84 68); padding: 0.15em 0.4em; border-radius: 0.4rem; font-size: 0.9em; }
   main pre code { background: transparent; color: inherit; padding: 0; }
   .hljs { color: inherit; }
-  main blockquote { border-left: 4px solid rgb(14 165 233); margin-left: 0; padding-left: 1rem; color: rgb(82 82 91); }
+  main blockquote { border-left: 4px solid rgb(168 192 170); margin-left: 0; padding-left: 1rem; color: rgb(96 110 100); }
   main table { border-collapse: collapse; width: 100%; font-size: 0.95rem; }
-  main th, main td { border: 1px solid rgb(228 228 231); padding: 0.55rem 0.7rem; text-align: left; }
-  main th { background: rgb(244 244 245); }
-  .meta { color: rgb(113 113 122); font-size: 0.875rem; margin: 0.35rem 0 0.85rem; }
+  main th, main td { border: 1px solid rgb(224 232 224); padding: 0.55rem 0.7rem; text-align: left; }
+  main th { background: rgb(238 244 238); }
+  .meta { color: rgb(120 132 123); font-size: 0.875rem; margin: 0.35rem 0 0.85rem; }
+  .growth {
+    display: inline-flex; align-items: center; min-height: 1.5rem; font-size: 0.72rem; font-weight: 700;
+    text-transform: lowercase; letter-spacing: 0.02em; padding: 0.2rem 0.6rem; border-radius: 999px;
+    color: rgb(61 110 78); background: rgb(228 240 230); border: 1px solid rgb(198 222 202);
+  }
   ul.tags { list-style: none; padding: 0; margin: 0.75rem 0 1.25rem; display: flex; flex-wrap: wrap; gap: 0.5rem; }
   ul.tags li { margin: 0; }
   ul.tags a {
-    display: inline-flex; align-items: center; min-height: 1.75rem; font-size: 0.78rem; line-height: 1;
-    text-decoration: none; padding: 0.35rem 0.65rem; border: 1px solid rgb(186 230 253);
-    border-radius: 999px; color: rgb(3 105 161); background: rgb(240 249 255);
+    display: inline-flex; align-items: center; min-height: 1.75rem; font-size: 0.78rem; line-height: 1; font-weight: 600;
+    text-decoration: none; padding: 0.35rem 0.7rem; border: 1px solid rgb(201 219 203);
+    border-radius: 999px; color: rgb(166 87 53); background: rgb(234 241 234);
   }
-  ul.tags a:hover { border-color: rgb(14 165 233); background: rgb(224 242 254); }
-  ul.tags .count { color: rgb(113 113 122); }
+  ul.tags a:hover { border-color: rgb(168 192 170); background: rgb(224 235 225); }
+  ul.tags .count { color: rgb(120 132 123); }
   ul.index { list-style: none; padding: 0; display: grid; gap: 1.15rem; }
-  ul.index li { margin: 0; padding: 1.1rem 0; border-bottom: 1px solid rgb(228 228 231); }
-  ul.index a.title { color: rgb(24 24 27); font-size: 1.2rem; font-weight: 700; text-decoration: none; }
-  ul.index a.title:hover { color: rgb(2 132 199); }
-  ul.index .excerpt { margin: 0.35rem 0 0; color: rgb(82 82 91); }
+  ul.index li { margin: 0; padding: 1.1rem 0; border-bottom: 1px solid rgb(224 232 224); }
+  ul.index a.title { color: rgb(47 93 69); font-size: 1.2rem; font-weight: 800; text-decoration: none; }
+  ul.index a.title:hover { color: rgb(197 107 71); }
+  ul.index .excerpt { margin: 0.35rem 0 0; color: rgb(96 110 100); }
+  .backlinks { margin-top: 3rem; }
+  .backlinks h2 { color: rgb(47 93 69); font-size: 1.35rem; margin: 0 0 1rem; }
+  ul.backlinks-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 0.85rem; }
+  ul.backlinks-list li {
+    margin: 0; padding: 1rem 1.1rem; background: rgb(255 255 255);
+    border: 1px solid rgb(226 234 226); border-radius: 1rem;
+    box-shadow: 0 1px 3px rgb(47 93 69 / 0.06), 0 1px 2px rgb(47 93 69 / 0.04);
+  }
+  a.backlink { color: rgb(47 93 69); font-weight: 800; text-decoration: none; }
+  a.backlink:hover { color: rgb(197 107 71); }
+  .backlink-context { margin: 0.35rem 0 0; color: rgb(96 110 100); font-size: 0.92rem; line-height: 1.55; }
+  .backlink-context a { color: rgb(197 107 71); }
+  .backlink-context a.stub { color: rgb(150 120 104); text-decoration-style: dotted; }
   form.search { display: flex; gap: 0.65rem; margin: 0 0 2rem; }
   form.search input[type="search"] {
-    flex: 1; min-width: 0; padding: 0.65rem 0.85rem; font-size: 1rem; border: 1px solid rgb(212 212 216);
-    border-radius: 0.5rem; background: #fff; color: inherit;
+    flex: 1; min-width: 0; padding: 0.65rem 0.85rem; font-size: 1rem; border: 1px solid rgb(206 220 208);
+    border-radius: 0.85rem; background: #fff; color: inherit;
   }
   form.search button {
-    padding: 0.65rem 1rem; font-size: 1rem; border: 1px solid rgb(2 132 199); border-radius: 0.5rem;
-    background: rgb(2 132 199); color: #fff; cursor: pointer;
+    padding: 0.65rem 1.1rem; font-size: 1rem; font-weight: 700; border: 1px solid rgb(197 107 71); border-radius: 0.85rem;
+    background: rgb(197 107 71); color: #fff; cursor: pointer;
   }
+  form.search button:hover { background: rgb(176 90 56); border-color: rgb(176 90 56); }
   nav.pager { display: flex; justify-content: space-between; gap: 1rem; margin-top: 2.5rem; }
-  nav.pager a { text-decoration: none; color: rgb(2 132 199); font-weight: 650; }
+  nav.pager a { text-decoration: none; color: rgb(197 107 71); font-weight: 700; }
   nav.pager .spacer { color: transparent; }
-  .empty { color: rgb(113 113 122); font-style: italic; }
+  .empty { color: rgb(120 132 123); font-style: italic; }
   @media (min-width: 640px) {
     .site-header-inner, .site-main, .site-footer {
       padding-left: 1.5rem;
@@ -168,25 +193,31 @@ const STYLES: &str = r#"
     }
   }
   @media (prefers-color-scheme: dark) {
-    .site-body { background: rgb(9 9 11); color: rgb(244 244 245); }
+    .site-body { background: rgb(20 26 22); color: rgb(220 228 219); }
+    .site-shell { border-top-color: rgb(78 112 86); }
     .site-header {
-      border-bottom-color: rgb(39 39 42);
-      background: rgb(9 9 11 / 0.8);
+      border-bottom-color: rgb(40 50 42);
+      background: rgb(20 26 22 / 0.8);
     }
-    .site-brand { color: rgb(250 250 250); }
-    .site-brand:hover, .site-nav:hover { color: rgb(56 189 248); }
-    .site-nav, .site-footer { color: rgb(161 161 170); }
-    main h1, main h2, main h3, main h4, main h5, main h6, ul.index a.title { color: rgb(250 250 250); }
-    main a, nav.pager a, ul.index a.title:hover { color: rgb(56 189 248); }
-    main code { background: rgb(39 39 42); color: rgb(228 228 231); }
-    main pre { background: rgb(9 9 11); border-color: rgb(63 63 70); }
-    main blockquote, ul.index .excerpt { color: rgb(212 212 216); }
-    main th, main td, ul.index li { border-color: rgb(63 63 70); }
-    main th { background: rgb(39 39 42); }
-    .meta, .empty { color: rgb(161 161 170); }
-    ul.tags a { color: rgb(125 211 252); background: rgb(8 47 73); border-color: rgb(12 74 110); }
-    ul.tags a:hover { background: rgb(7 89 133); border-color: rgb(14 165 233); }
-    form.search input[type="search"] { background: rgb(24 24 27); border-color: rgb(63 63 70); }
+    .site-brand { color: rgb(150 195 162); }
+    .site-brand:hover, .site-nav:hover { color: rgb(222 150 116); }
+    .site-nav, .site-footer { color: rgb(140 156 143); }
+    main h1, main h2, main h3, main h4, main h5, main h6, ul.index a.title, .backlinks h2 { color: rgb(150 195 162); }
+    main a, nav.pager a, ul.index a.title:hover, a.backlink:hover, .backlink-context a { color: rgb(222 150 116); }
+    a.backlink { color: rgb(150 195 162); }
+    main code { background: rgb(34 44 37); color: rgb(206 220 208); }
+    main pre { background: rgb(15 20 17); border-color: rgb(48 60 51); }
+    main blockquote, ul.index .excerpt, .backlink-context { color: rgb(180 196 183); }
+    main blockquote { border-left-color: rgb(78 112 86); }
+    main th, main td, ul.index li { border-color: rgb(48 60 51); }
+    main th { background: rgb(30 40 33); }
+    .meta, .empty { color: rgb(140 156 143); }
+    .growth { color: rgb(160 205 172); background: rgb(28 44 33); border-color: rgb(46 70 52); }
+    ul.tags a { color: rgb(226 168 140); background: rgb(34 46 38); border-color: rgb(52 72 57); }
+    ul.tags a:hover { background: rgb(42 56 46); border-color: rgb(78 112 86); }
+    ul.backlinks-list li { background: rgb(28 36 30); border-color: rgb(46 58 49); box-shadow: none; }
+    .backlink-context a.stub { color: rgb(176 150 134); }
+    form.search input[type="search"] { background: rgb(28 36 30); border-color: rgb(48 60 51); }
   }
 "#;
 

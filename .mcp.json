@@ -4,7 +4,7 @@
       "command": "/Users/lecoqjacob/Projects/personal/inkwell/target/debug/inkwell",
       "args": ["mcp"],
       "env": {
-        "INKWELL_API_URL": "http://localhost:3002",
+        "INKWELL_API_URL": "https://inkwell-production-6396.up.railway.app",
         "INKWELL_MCP_KEY": "dev-key-123"
       }
     }
