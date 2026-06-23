@@ -33,6 +33,10 @@ Removed stale TypeScript-era plan files: 002, 003, 005, 008, 009, 011, and 013.
 | 020 | `derive_excerpt` truncates on a char boundary (UTF-8 panic fix) | bug | P1 | S | none | new @c7b0a46 | DONE |
 | 021 | Consolidate the duplicated document-list rendering | tech-debt | P3 | S | none (coord. 020) | new @c7b0a46 | DONE |
 | 022 | Redact the API key in `Config`'s `Debug` impl | security | P3 | S | none | new @c7b0a46 | DONE |
+| 023 | Bound the public `/ask` cost surface | security/perf | P1 | S | none | new @fef38ad | TODO |
+| 024 | Use stored chunks for related-note retrieval | bug/perf | P1 | M | none | new @fef38ad | TODO |
+| 025 | Track embedding provider provenance | bug/architecture | P2 | L | none | new @fef38ad | TODO |
+| 026 | Harden the RAG prompt boundary | security/AI correctness | P2 | M | 023 | new @fef38ad | TODO |
 | 002 | Enforce coverage gate in GitHub Actions CI | dx | - | S | - | obsolete Node/Vitest coverage plan | REJECTED: remove |
 | 003 | Fix README export-surface + env-var drift | docs | - | S | - | obsolete package-export docs plan | REJECTED: remove |
 | 005 | Dedupe `escapeXml` + `normalizeSiteUrl` | tech-debt | - | S | - | fixed by Rust layout helpers | REJECTED: remove |
@@ -54,6 +58,9 @@ Deep Rust audit addendum at `8bcd1ea`: plans 001, 004, 006, 007, 010, 012, 014, 
 - **007 and 019** both touch public read paths; run 019 before 007 if sitemap routes change.
 - **016 should land before 019** if both are selected, so sitemap work does not preserve the existing swallowed database error behavior.
 - **017 should land before any CSP/header plan** because removing the Tailwind runtime avoids baking third-party script allowances into the policy.
+- **023 should land before 026** because a bounded `/ask` input makes prompt-hardening tests and provider-cost behavior easier to reason about.
+- **024 is independent of 025**, but if both are selected, 024 reduces `/related` provider calls immediately while 025 fixes mixed-provider stored vectors.
+- **025 is the semantic-index lifecycle plan**: execute it before changing `VOYAGE_MODEL` or telling operators to switch a real deployment from mock embeddings to Voyage embeddings.
 
 ## Findings considered & rejected (so they are not re-audited)
 
@@ -184,3 +191,52 @@ Verification this pass: read-only. `grep`/`git` confirmation of merged plan
 state; no source modified by the advisor. Not audited: `node_modules/`,
 `target/`, live-browser runtime behavior, production deployment beyond the
 checked Docker/CI files.
+
+## Deep audit 2026-06-23 @fef38ad
+
+Scope: read-only deep pass across the Rust service after T10 shipped embeddings,
+FTS, related notes, and ask-your-garden. Audited source, tests, migrations,
+README/docs, CI, Docker/Compose, Railway config, and existing plans. Skipped
+`target/`, dependency internals, live browser rendering, and production runtime
+outside checked deployment files.
+
+Verification run:
+
+- `cargo fmt --check` - passed.
+- `cargo clippy --all-targets --all-features -- -D warnings` - passed.
+- `cargo test --all` - passed locally, with DB-backed tests skipped because
+  `DATABASE_URL` was not set.
+- `INKWELL_REQUIRE_DB_TESTS=1 cargo test --all` - failed as expected without
+  `DATABASE_URL`; this confirms the explicit DB-test guard still works.
+- `cargo audit` - not installed in this environment (`no such command: audit`).
+- `cargo tree -d` - duplicate transitive crates observed, but no high-confidence
+  actionable dependency finding from that output alone.
+
+Vetted findings:
+
+| # | Finding | Category | Impact | Effort | Risk | Confidence | Evidence |
+|---|---------|----------|--------|--------|------|------------|----------|
+| 023 | Public `/ask` has no application-level question cap before provider calls | security/perf | A public request can drive Voyage + Anthropic work with an arbitrarily large question within framework/request limits | S | LOW | HIGH | `src/http/router.rs:44`, `src/http/ai.rs:153`, `src/http/ai.rs:195`, `src/http/ai.rs:225` |
+| 024 | `/documents/{slug}/related` embeds the full document body on every request instead of using stored chunks | bug/perf | Long valid notes can make related-note reads slow or fail with a real provider despite the existing chunk index | M | MED | HIGH | `src/ai/mod.rs:31`, `src/http/ai.rs:86`, `src/db/chunks.rs:61`, `migrations/0009_create_note_chunks.sql:12` |
+| 025 | Stored embeddings have no provider/model provenance | bug/architecture | Switching from mock embeddings to Voyage compares incompatible vectors and returns arbitrary semantic results until every note is saved again | L | MED | HIGH | `src/ai/mod.rs:152`, `src/db/chunks.rs:85`, `migrations/0009_create_note_chunks.sql:12`, `.env.example:21` |
+| 026 | RAG prompt does not explicitly treat note excerpts as untrusted data | security/AI correctness | Author-controlled note text can attempt prompt injection against answer behavior and citations | M | LOW | MED | `src/ai/claude.rs:30`, `src/http/ai.rs:190`, `src/ai/claude.rs:96` |
+
+Direction options:
+
+- The accepted scoped-token ADR is still the right next security/product slice
+  after AI hardening. `docs/adr/0009-scoped-author-tokens.md` is proposed, while
+  `src/http/auth.rs` and write routes still accept shared keys for all writes.
+- The semantic layer now needs an operator lifecycle: reindexing, provenance,
+  and model-change guidance. Plan 025 covers the first durable slice; later work
+  can add background jobs or scheduled refreshes if real deployments need them.
+
+Considered and rejected this pass:
+
+- **`INKWELL_REQUIRE_DB_TESTS=1 cargo test --all` failed without `DATABASE_URL`**
+  - not a code finding; this is the intended explicit guard from Plan 018.
+- **Duplicate `VOYAGE_API_KEY` / `ANTHROPIC_API_KEY` entries in `.env.example`**
+  - low-risk docs cleanup, not worth a standalone execution plan.
+- **`cargo audit` missing locally** - noted, but no advisory evidence was
+  available; add CI advisory scanning only if the project wants that gate.
+- **Provider error bodies in logs** - noted as a future hardening candidate, but
+  no code evidence showed secrets or note bodies being logged by providers.
