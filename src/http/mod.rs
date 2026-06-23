@@ -16,6 +16,8 @@ pub mod router;
 pub mod search;
 pub mod security_headers;
 pub mod sitemap;
+pub mod webmention;
+pub mod webmention_send;
 
 #[derive(Clone)]
 pub struct AppState {

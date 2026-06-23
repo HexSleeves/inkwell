@@ -27,6 +27,11 @@ pub struct Config {
     /// Claude model (`INKWELL_LLM_MODEL`) used for synthesis. Defaults to
     /// [`DEFAULT_LLM_MODEL`].
     pub llm_model: String,
+    /// Whether to SEND Webmentions when a published note links out
+    /// (`INKWELL_WEBMENTION_SEND`). Conservative default: **off**. Receiving is
+    /// always on; sending is opt-in and, when off, the send code path is fully
+    /// inert (no outbound requests). Not a secret, but a behavior toggle.
+    pub webmention_send: bool,
 }
 
 impl std::fmt::Debug for Config {
@@ -49,6 +54,7 @@ impl std::fmt::Debug for Config {
                 &self.anthropic_api_key.as_ref().map(|_| "<redacted>"),
             )
             .field("llm_model", &self.llm_model)
+            .field("webmention_send", &self.webmention_send)
             .finish()
     }
 }
@@ -83,6 +89,11 @@ impl Config {
         let anthropic_api_key = trimmed_env("ANTHROPIC_API_KEY");
         let llm_model =
             trimmed_env("INKWELL_LLM_MODEL").unwrap_or_else(|| DEFAULT_LLM_MODEL.to_string());
+        // Webmention send is opt-in: only the explicit string "true" (case-
+        // insensitive, trimmed) enables it. Anything else — absent, empty,
+        // "false", "1", garbage — leaves it off, the safe default.
+        let webmention_send = trimmed_env("INKWELL_WEBMENTION_SEND")
+            .is_some_and(|value| value.eq_ignore_ascii_case("true"));
 
         Ok(Self {
             database_url,
@@ -94,6 +105,7 @@ impl Config {
             voyage_api_key,
             anthropic_api_key,
             llm_model,
+            webmention_send,
         })
     }
 }
@@ -195,6 +207,7 @@ mod tests {
             voyage_api_key: Some("sentinel-voyage-value".to_string()),
             anthropic_api_key: Some("sentinel-anthropic-value".to_string()),
             llm_model: DEFAULT_LLM_MODEL.to_string(),
+            webmention_send: false,
         };
         let rendered = format!("{config:?}");
         assert!(!rendered.contains("sentinel-key-value"));
