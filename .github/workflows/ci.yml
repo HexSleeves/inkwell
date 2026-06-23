@@ -10,7 +10,10 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:18-alpine
+        # pgvector image (matches docker-compose) so migration 0009's
+        # `CREATE EXTENSION vector` resolves; plain postgres lacks the extension.
+        # pgvector tracks pg17 (no pg18 tag yet).
+        image: pgvector/pgvector:pg17
         env:
           POSTGRES_USER: inkwell
           POSTGRES_PASSWORD: inkwell

@@ -1,3 +1,4 @@
+use crate::db::links::Visibility;
 use crate::domain::document::{
     Document, DocumentPatch, DocumentStatus, ListByTagOptions, ListOptions, NewDocument,
     SearchOptions, StatusFilter, TagCount,
@@ -358,15 +359,31 @@ pub async fn search_published_documents(
     query: &str,
     options: SearchOptions,
 ) -> Result<Vec<Document>, sqlx::Error> {
+    search_documents(pool, query, Visibility::Public, options).await
+}
+
+/// Visibility-aware full-text search: identical to
+/// [`search_published_documents`] but applies the caller's
+/// [`Visibility`] status filter (owners see drafts/unlisted; the public sees
+/// only published). Keeps the ask-your-garden FTS fallback consistent with the
+/// vector path's visibility contract.
+pub async fn search_documents(
+    pool: &PgPool,
+    query: &str,
+    visibility: Visibility,
+    options: SearchOptions,
+) -> Result<Vec<Document>, sqlx::Error> {
     let mut builder = QueryBuilder::<Postgres>::new(
         "SELECT id, slug, title, body_markdown, rendered_html, status, growth, tags, version, created_at, updated_at
          FROM documents
-         WHERE status = 'published'
-         AND search_vector @@ websearch_to_tsquery('english', ",
+         WHERE search_vector @@ websearch_to_tsquery('english', ",
     );
+    builder.push_bind(query).push(")");
+    if let Some(status) = visibility.status_filter() {
+        builder.push(" AND status = ").push_bind(status.as_str());
+    }
     builder
-        .push_bind(query)
-        .push(") ORDER BY ts_rank(search_vector, websearch_to_tsquery('english', ")
+        .push(" ORDER BY ts_rank(search_vector, websearch_to_tsquery('english', ")
         .push_bind(query)
         .push(")) DESC, created_at DESC, id DESC");
     if let Some(limit) = options.limit {

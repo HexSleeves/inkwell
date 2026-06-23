@@ -203,6 +203,15 @@ pub async fn index_note(
         return Ok(());
     }
     let embeddings = embedder.embed(&chunks).await?;
+    // `zip` would silently truncate on a length mismatch, persisting a partial
+    // chunk set. Fail fast so indexing stays all-or-nothing.
+    if embeddings.len() != chunks.len() {
+        anyhow::bail!(
+            "embedder returned {} embeddings for {} chunks",
+            embeddings.len(),
+            chunks.len()
+        );
+    }
     let rows: Vec<NewChunk> = chunks
         .into_iter()
         .zip(embeddings)

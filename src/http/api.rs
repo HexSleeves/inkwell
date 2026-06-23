@@ -379,8 +379,9 @@ async fn create_document(
         tracing::warn!(document_id = %document.id, %error, "persist_source_edges failed; edges rebuild on next save");
     }
     // Best-effort embedding index (mirrors the edge-persist pattern): chunk the
-    // body, embed via the configured provider, upsert into note_chunks. A no-op
-    // when no Voyage key is set (mock embedder), and a failure only warns — it
+    // body, embed via the configured provider, upsert into note_chunks. With no
+    // Voyage key the deterministic MockEmbedder is used, so chunks are still
+    // indexed (just not with real semantic vectors). A failure only warns — it
     // never 500s a create that succeeded; the index rebuilds on the next save.
     if let Err(error) = crate::ai::index_note(
         &state.pool,

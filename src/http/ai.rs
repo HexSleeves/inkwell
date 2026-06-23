@@ -233,12 +233,14 @@ async fn retrieve_context(
             return Ok(hits);
         }
     }
-    // FTS fallback: pull the top published documents by full-text rank and use
-    // their bodies as context. Only ever runs when vector search returned
-    // nothing (empty or unindexed garden).
-    let docs = crate::db::documents::search_published_documents(
+    // FTS fallback: pull the top documents by full-text rank and use their
+    // bodies as context. Only ever runs when vector search returned nothing
+    // (empty or unindexed garden). Visibility-filtered to match the vector path,
+    // so an authenticated owner still sees draft/unlisted context here.
+    let docs = crate::db::documents::search_documents(
         &state.pool,
         query,
+        visibility,
         crate::domain::document::SearchOptions {
             limit: Some(ASK_TOP_K as u32),
             offset: Some(0),
