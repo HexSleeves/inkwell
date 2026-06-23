@@ -2,10 +2,23 @@ mod common;
 
 use axum::body::{Body, to_bytes};
 use http::{Method, Request, StatusCode};
+use std::sync::LazyLock;
+use tokio::sync::{Mutex, MutexGuard};
 use tower::ServiceExt;
+
+/// These tests share one database and `maybe_pool` truncates it on entry, so
+/// they must not run concurrently (libtest runs a binary's tests on parallel
+/// threads). Hold this lock for the whole test to serialize them. Cargo already
+/// runs separate test binaries sequentially, so this is sufficient.
+static DB_TEST_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+
+async fn db_guard() -> MutexGuard<'static, ()> {
+    DB_TEST_LOCK.lock().await
+}
 
 #[tokio::test]
 async fn create_and_fetch_document() -> anyhow::Result<()> {
+    let _guard = db_guard().await;
     let Some(router) = common::maybe_router().await? else {
         return Ok(());
     };
@@ -44,6 +57,7 @@ async fn create_and_fetch_document() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn create_exposes_growth_in_the_envelope_defaulting_to_seedling() -> anyhow::Result<()> {
+    let _guard = db_guard().await;
     let Some(router) = common::maybe_router().await? else {
         return Ok(());
     };
@@ -90,6 +104,7 @@ async fn create_exposes_growth_in_the_envelope_defaulting_to_seedling() -> anyho
 
 #[tokio::test]
 async fn graph_route_hides_drafts_from_public_callers() -> anyhow::Result<()> {
+    let _guard = db_guard().await;
     let Some(router) = common::maybe_router().await? else {
         return Ok(());
     };

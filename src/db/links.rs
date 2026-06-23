@@ -433,8 +433,10 @@ pub async fn garden_graph(pool: &PgPool, visibility: Visibility) -> Result<Graph
 /// and the edges among that set. Visibility-filtered exactly like
 /// [`garden_graph`] — a public neighborhood never includes a draft neighbor or
 /// an edge touching one. Returns an empty graph when the center note is not
-/// visible. Hard depth cap of [`MAX_GRAPH_DEPTH`] (one hop); bounded by the same
-/// node/edge caps.
+/// visible. Hard depth cap of [`MAX_GRAPH_DEPTH`] (one hop). Built center-first
+/// (the center's own one-hop edges), so it is bounded by [`MAX_GRAPH_EDGES`] /
+/// [`MAX_GRAPH_NODES`] without depending on the global graph's node-cap window —
+/// the center and its neighbors are never dropped in a large garden.
 pub async fn note_neighborhood(
     pool: &PgPool,
     slug: &str,
@@ -458,35 +460,104 @@ pub async fn note_neighborhood(
                 .await?
         }
     };
-    if center_exists.is_none() {
+    let Some(center_slug) = center_exists else {
         return Ok(Graph::default());
-    }
+    };
 
-    // Build the full visibility-filtered graph, then restrict to the center and
-    // its one-hop neighbors. The full graph is already hard-bounded, so this is
-    // a bounded operation; restriction never widens beyond one hop.
-    let full = garden_graph(pool, visibility).await?;
-    let mut keep: HashSet<&str> = HashSet::new();
-    keep.insert(slug);
-    for edge in &full.edges {
-        if edge.source_slug == slug {
-            keep.insert(edge.target_slug.as_str());
-        } else if edge.target_slug == slug {
-            keep.insert(edge.source_slug.as_str());
+    // Center-first: pull only the center's one-hop resolved internal edges
+    // (in either direction), visibility-filtered on BOTH endpoints, bounded by
+    // the edge cap. This is independent of the global node cap, so the center
+    // and its neighbors are never silently dropped in a large garden.
+    let edge_rows: Vec<(String, String)> = match visibility.status_filter() {
+        Some(status) => {
+            sqlx::query_as::<Postgres, (String, String)>(
+                r#"
+                SELECT src.slug, tgt.slug
+                FROM links
+                JOIN documents AS src ON src.id = links.source_note_id
+                JOIN documents AS tgt ON tgt.id = links.target_note_id
+                WHERE links.target_kind = 'internal'
+                  AND links.resolved = true
+                  AND src.status = $1
+                  AND tgt.status = $1
+                  AND (src.slug = $2 OR tgt.slug = $2)
+                ORDER BY src.slug, tgt.slug
+                LIMIT $3
+                "#,
+            )
+            .bind(status.as_str())
+            .bind(&center_slug)
+            .bind(MAX_GRAPH_EDGES)
+            .fetch_all(pool)
+            .await?
         }
+        None => {
+            sqlx::query_as::<Postgres, (String, String)>(
+                r#"
+                SELECT src.slug, tgt.slug
+                FROM links
+                JOIN documents AS src ON src.id = links.source_note_id
+                JOIN documents AS tgt ON tgt.id = links.target_note_id
+                WHERE links.target_kind = 'internal'
+                  AND links.resolved = true
+                  AND (src.slug = $1 OR tgt.slug = $1)
+                ORDER BY src.slug, tgt.slug
+                LIMIT $2
+                "#,
+            )
+            .bind(&center_slug)
+            .bind(MAX_GRAPH_EDGES)
+            .fetch_all(pool)
+            .await?
+        }
+    };
+
+    // The kept set is the center plus each one-hop neighbor.
+    let mut keep: HashSet<String> = HashSet::new();
+    keep.insert(center_slug.clone());
+    for (src, tgt) in &edge_rows {
+        keep.insert(src.clone());
+        keep.insert(tgt.clone());
     }
-    let nodes: Vec<GraphNode> = full
-        .nodes
-        .iter()
-        .filter(|n| keep.contains(n.slug.as_str()))
-        .cloned()
+    let edges: Vec<GraphEdge> = edge_rows
+        .into_iter()
+        .map(|(source_slug, target_slug)| GraphEdge {
+            source_slug,
+            target_slug,
+        })
         .collect();
-    let edges: Vec<GraphEdge> = full
-        .edges
-        .iter()
-        .filter(|e| keep.contains(e.source_slug.as_str()) && keep.contains(e.target_slug.as_str()))
-        .cloned()
+
+    // Fetch titles for exactly the kept slugs (the center always exists). The
+    // set is at most edge-cap-sized, so this stays bounded; cap defensively.
+    let keep_slugs: Vec<String> = keep.iter().cloned().collect();
+    let node_rows: Vec<(String, String)> = match visibility.status_filter() {
+        Some(status) => {
+            sqlx::query_as::<Postgres, (String, String)>(
+                "SELECT slug, title FROM documents \
+                 WHERE slug = ANY($1) AND status = $2 ORDER BY slug LIMIT $3",
+            )
+            .bind(&keep_slugs)
+            .bind(status.as_str())
+            .bind(MAX_GRAPH_NODES)
+            .fetch_all(pool)
+            .await?
+        }
+        None => {
+            sqlx::query_as::<Postgres, (String, String)>(
+                "SELECT slug, title FROM documents \
+                 WHERE slug = ANY($1) ORDER BY slug LIMIT $2",
+            )
+            .bind(&keep_slugs)
+            .bind(MAX_GRAPH_NODES)
+            .fetch_all(pool)
+            .await?
+        }
+    };
+    let nodes: Vec<GraphNode> = node_rows
+        .into_iter()
+        .map(|(slug, title)| GraphNode { slug, title })
         .collect();
+
     Ok(Graph { nodes, edges })
 }
 

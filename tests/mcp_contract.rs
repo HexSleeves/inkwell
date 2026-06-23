@@ -58,6 +58,7 @@ async fn mcp_round_trip_create_read_search_and_stale_update() -> anyhow::Result<
             body: "# Hello\n\nFrom the MCP server.".to_string(),
             slug: None,
             tags: Some(vec!["mcp".to_string(), "test".to_string()]),
+            growth: None,
         }))
         .await
         .expect("create_note should succeed");

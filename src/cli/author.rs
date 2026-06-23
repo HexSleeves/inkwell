@@ -163,9 +163,7 @@ pub fn parse_markdown(input: &str) -> Result<ParsedDocument> {
     }
 
     if let Some(growth) = growth.as_deref()
-        && growth != "seedling"
-        && growth != "budding"
-        && growth != "evergreen"
+        && crate::domain::document::GrowthStage::parse(growth).is_none()
     {
         bail!(
             "Front matter \"growth\" must be \"seedling\", \"budding\", or \"evergreen\", saw {growth:?}."

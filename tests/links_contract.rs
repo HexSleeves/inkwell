@@ -633,6 +633,34 @@ async fn garden_graph_bounds_the_node_count() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+async fn garden_graph_truncates_at_the_node_cap() -> anyhow::Result<()> {
+    let _guard = db_guard().await;
+    let Some(pool) = common::maybe_pool().await? else {
+        return Ok(());
+    };
+
+    // Insert one more than the cap so the LIMIT actually fires. Bulk-insert via
+    // generate_series to keep this exact-bound test cheap (no per-row fan-out).
+    sqlx::query(
+        "INSERT INTO documents (slug, title, body_markdown, rendered_html, status) \
+         SELECT 'cap-' || to_char(g, 'FM0000'), 'Cap ' || g, '# x', '<h1>x</h1>', 'published' \
+         FROM generate_series(1, $1) AS g",
+    )
+    .bind(MAX_GRAPH_NODES + 1)
+    .execute(&pool)
+    .await?;
+
+    let graph = garden_graph(&pool, Visibility::Public).await?;
+    assert_eq!(
+        graph.nodes.len() as i64,
+        MAX_GRAPH_NODES,
+        "node count is hard-bounded to exactly the cap when the garden exceeds it"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn note_neighborhood_is_one_hop_and_visibility_filtered() -> anyhow::Result<()> {
     let _guard = db_guard().await;
     let Some(pool) = common::maybe_pool().await? else {
