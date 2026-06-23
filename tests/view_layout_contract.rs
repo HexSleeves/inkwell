@@ -2,6 +2,8 @@ use inkwell::domain::document::{Document, DocumentStatus, GrowthStage};
 use inkwell::views::document::render_document_page;
 use inkwell::views::index::render_index_page;
 use inkwell::views::layout::{HeadMeta, derive_excerpt, render_page};
+use inkwell::views::search::render_search_page;
+use inkwell::views::tags::render_tag_page;
 use serde_json::json;
 
 /// A published note carrying tags and an excerpt-worthy body — exactly the
@@ -156,6 +158,39 @@ fn index_listing_with_tags_has_no_literal_backslash_n() {
     assert!(
         html.contains(r#"<ul class="tags">"#),
         "tag chips must render"
+    );
+    assert!(
+        !html.contains("\\n"),
+        "rendered HTML must not contain a literal backslash-n"
+    );
+}
+
+#[test]
+fn search_results_pager_has_no_literal_backslash_n() {
+    // The search pager template was built from a raw-string `\n` literal. It only
+    // renders when there is more than one page, so drive `total_pages > 1` to
+    // exercise the `<nav class="pager">` path that was fixed.
+    let documents = vec![tagged_document()];
+    let html = render_search_page("hello", &documents, 1, 3, Some("http://localhost"));
+    assert!(
+        html.contains(r#"<nav class="pager">"#),
+        "search pager must render when total_pages > 1"
+    );
+    assert!(
+        !html.contains("\\n"),
+        "rendered HTML must not contain a literal backslash-n"
+    );
+}
+
+#[test]
+fn tag_page_pager_has_no_literal_backslash_n() {
+    // The per-tag pager template was likewise built from a raw-string `\n`
+    // literal. Drive `total_pages > 1` so the `<nav class="pager">` path renders.
+    let documents = vec![tagged_document()];
+    let html = render_tag_page("rust", &documents, 1, 3, Some("http://localhost"));
+    assert!(
+        html.contains(r#"<nav class="pager">"#),
+        "tag pager must render when total_pages > 1"
     );
     assert!(
         !html.contains("\\n"),
