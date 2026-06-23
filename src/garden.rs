@@ -16,10 +16,17 @@
 
 use crate::db::documents;
 use crate::db::links::{self, LinkType, NewLink, TargetKind, Visibility};
-use crate::rendering::wikilink::{extract_wikilinks, render_markdown_with_links};
+use crate::domain::document::DocumentStatus;
+use crate::rendering::wikilink::{EmbedResolution, extract_wikilinks, render_markdown_with_embeds};
 use sqlx::{PgPool, Postgres};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
+
+/// Maximum transclusion nesting depth. An embed chain `A → B → C → …` expands at
+/// most this many levels before further embeds collapse to a placeholder. A
+/// small hard const so a deep (or accidentally deep) chain can never blow the
+/// stack or the rendered-HTML size — bounded exactly like every other surface.
+const MAX_EMBED_DEPTH: u32 = 3;
 
 /// A wikilink/embed reference after resolution against the live garden.
 #[derive(Clone, Debug)]
@@ -31,8 +38,14 @@ pub struct ResolvedRef {
 }
 
 /// Render `markdown` to the HTML to store (wikilinks resolved against the public
-/// garden) and return the resolved references so the caller can persist edges
-/// once the source note's id is known.
+/// garden, `![[embeds]]` transcluded) and return the resolved references so the
+/// caller can persist edges once the source note's id is known.
+///
+/// Writes resolve at [`Visibility::Public`], so a wikilink to a draft renders as
+/// a stub and an embed of a draft renders only a neutral placeholder — never the
+/// draft's content (the systemic no-draft-leak invariant). Transclusion is
+/// bounded by [`MAX_EMBED_DEPTH`] and a cycle guard, so a self/transitive embed
+/// terminates with a placeholder instead of looping.
 pub async fn render_and_resolve(
     pool: &PgPool,
     markdown: &str,
@@ -41,7 +54,18 @@ pub async fn render_and_resolve(
     let slugs: Vec<String> = refs.iter().map(|r| r.target_slug.clone()).collect();
     let resolved = links::resolve_slug_ids(pool, &slugs, Visibility::Public).await?;
     let existing: HashSet<String> = resolved.keys().cloned().collect();
-    let html = render_markdown_with_links(markdown, &existing);
+
+    // Expand `![[embeds]]` recursively (depth- and cycle-bounded) at the same
+    // public visibility the write path uses everywhere else.
+    let embed_slugs: HashSet<String> = refs
+        .iter()
+        .filter(|r| r.is_embed)
+        .map(|r| r.target_slug.clone())
+        .collect();
+    let mut visited: HashSet<String> = HashSet::new();
+    let embeds = resolve_embeds(pool, &embed_slugs, Visibility::Public, 0, &mut visited).await?;
+
+    let html = render_markdown_with_embeds(markdown, &existing, &embeds);
 
     let out = refs
         .into_iter()
@@ -54,6 +78,110 @@ pub async fn render_and_resolve(
         .collect();
 
     Ok((html, out))
+}
+
+/// Resolve a set of embed target slugs to their [`EmbedResolution`], recursing
+/// into each published target's own embeds.
+///
+/// Guards (every path terminates):
+///   - DEPTH: at `depth >= MAX_EMBED_DEPTH` every embed collapses to a
+///     placeholder, so the recursion can never exceed the cap.
+///   - CYCLE: a target already on the current expansion path (`visited`) renders
+///     a placeholder instead of recursing, so `A → B → A` (and a direct
+///     self-embed) terminate.
+///   - NO-LEAK: a target that is not visible at `visibility` (a draft, or
+///     missing) renders a neutral placeholder — never its content.
+async fn resolve_embeds(
+    pool: &PgPool,
+    slugs: &HashSet<String>,
+    visibility: Visibility,
+    depth: u32,
+    visited: &mut HashSet<String>,
+) -> Result<HashMap<String, EmbedResolution>, sqlx::Error> {
+    let mut out: HashMap<String, EmbedResolution> = HashMap::new();
+    if slugs.is_empty() {
+        return Ok(out);
+    }
+    // Depth cap: stop expanding; every embed at this level is a placeholder.
+    if depth >= MAX_EMBED_DEPTH {
+        for slug in slugs {
+            out.insert(slug.clone(), EmbedResolution::Placeholder);
+        }
+        return Ok(out);
+    }
+
+    for slug in slugs {
+        // Cycle: this slug is already being expanded on the path to here.
+        if visited.contains(slug) {
+            out.insert(slug.clone(), EmbedResolution::Placeholder);
+            continue;
+        }
+        // Fetch the target's status + body. A draft (under Public) or a missing
+        // note yields a placeholder — never any of the target's content.
+        let Some((status, body)) = fetch_embed_target(pool, slug, visibility).await? else {
+            out.insert(slug.clone(), EmbedResolution::Placeholder);
+            continue;
+        };
+        if visibility == Visibility::Public && status != DocumentStatus::Published {
+            out.insert(slug.clone(), EmbedResolution::Placeholder);
+            continue;
+        }
+
+        // Recurse into the target's own content with this slug on the path.
+        visited.insert(slug.clone());
+        let child_refs = extract_wikilinks(&body);
+        let child_link_slugs: Vec<String> =
+            child_refs.iter().map(|r| r.target_slug.clone()).collect();
+        let child_resolved = links::resolve_slug_ids(pool, &child_link_slugs, visibility).await?;
+        let child_existing: HashSet<String> = child_resolved.keys().cloned().collect();
+        let child_embed_slugs: HashSet<String> = child_refs
+            .iter()
+            .filter(|r| r.is_embed)
+            .map(|r| r.target_slug.clone())
+            .collect();
+        let child_embeds = Box::pin(resolve_embeds(
+            pool,
+            &child_embed_slugs,
+            visibility,
+            depth + 1,
+            visited,
+        ))
+        .await?;
+        let content = render_markdown_with_embeds(&body, &child_existing, &child_embeds);
+        visited.remove(slug);
+
+        out.insert(slug.clone(), EmbedResolution::Content(content));
+    }
+    Ok(out)
+}
+
+/// Fetch an embed target's `(status, body_markdown)` by slug at `visibility`.
+/// Under [`Visibility::Public`] a draft target is filtered out at the SQL level
+/// (returns `None`), so a draft can never reach the renderer as content.
+async fn fetch_embed_target(
+    pool: &PgPool,
+    slug: &str,
+    visibility: Visibility,
+) -> Result<Option<(DocumentStatus, String)>, sqlx::Error> {
+    match visibility.status_filter() {
+        Some(status) => {
+            sqlx::query_as::<Postgres, (DocumentStatus, String)>(
+                "SELECT status, body_markdown FROM documents WHERE slug = $1 AND status = $2",
+            )
+            .bind(slug)
+            .bind(status.as_str())
+            .fetch_optional(pool)
+            .await
+        }
+        None => {
+            sqlx::query_as::<Postgres, (DocumentStatus, String)>(
+                "SELECT status, body_markdown FROM documents WHERE slug = $1",
+            )
+            .bind(slug)
+            .fetch_optional(pool)
+            .await
+        }
+    }
 }
 
 /// Replace `source_id`'s outbound edges with the given resolved references.

@@ -17,9 +17,9 @@ pub enum DbError {
 pub async fn create_document(pool: &PgPool, input: NewDocument) -> Result<Document, DbError> {
     let result = sqlx::query_as::<Postgres, Document>(
         r#"
-        INSERT INTO documents (slug, title, body_markdown, rendered_html, status, tags)
-        VALUES ($1, $2, $3, $4, COALESCE($5, 'draft'), $6)
-        RETURNING id, slug, title, body_markdown, rendered_html, status, tags, version, created_at, updated_at
+        INSERT INTO documents (slug, title, body_markdown, rendered_html, status, growth, tags)
+        VALUES ($1, $2, $3, $4, COALESCE($5, 'draft'), COALESCE($6, 'seedling'), $7)
+        RETURNING id, slug, title, body_markdown, rendered_html, status, growth, tags, version, created_at, updated_at
         "#,
     )
     .bind(&input.slug)
@@ -27,6 +27,7 @@ pub async fn create_document(pool: &PgPool, input: NewDocument) -> Result<Docume
     .bind(&input.body_markdown)
     .bind(&input.rendered_html)
     .bind(input.status.map(|status| status.as_str().to_string()))
+    .bind(input.growth.map(|growth| growth.as_str().to_string()))
     .bind(&input.tags)
     .fetch_one(pool)
     .await;
@@ -43,7 +44,7 @@ pub async fn get_document_by_slug(
         Some(status) => {
             sqlx::query_as::<Postgres, Document>(
                 r#"
-                SELECT id, slug, title, body_markdown, rendered_html, status, tags, version, created_at, updated_at
+                SELECT id, slug, title, body_markdown, rendered_html, status, growth, tags, version, created_at, updated_at
                 FROM documents
                 WHERE slug = $1 AND status = $2
                 "#,
@@ -56,7 +57,7 @@ pub async fn get_document_by_slug(
         None => {
             sqlx::query_as::<Postgres, Document>(
                 r#"
-                SELECT id, slug, title, body_markdown, rendered_html, status, tags, version, created_at, updated_at
+                SELECT id, slug, title, body_markdown, rendered_html, status, growth, tags, version, created_at, updated_at
                 FROM documents
                 WHERE slug = $1
                 "#,
@@ -73,7 +74,7 @@ pub async fn list_documents(
     options: ListOptions,
 ) -> Result<Vec<Document>, sqlx::Error> {
     let mut builder = QueryBuilder::<Postgres>::new(
-        "SELECT id, slug, title, body_markdown, rendered_html, status, tags, version, created_at, updated_at FROM documents",
+        "SELECT id, slug, title, body_markdown, rendered_html, status, growth, tags, version, created_at, updated_at FROM documents",
     );
     if let Some(status) = options.status {
         builder.push(" WHERE status = ").push_bind(status.as_str());
@@ -117,17 +118,19 @@ pub async fn update_document_by_slug(
         SET title = COALESCE($2, title),
             body_markdown = COALESCE($3, body_markdown),
             rendered_html = COALESCE($4, rendered_html),
-            tags = COALESCE($5, tags),
+            growth = COALESCE($5, growth),
+            tags = COALESCE($6, tags),
             version = version + 1,
             updated_at = now()
         WHERE slug = $1
-        RETURNING id, slug, title, body_markdown, rendered_html, status, tags, version, created_at, updated_at
+        RETURNING id, slug, title, body_markdown, rendered_html, status, growth, tags, version, created_at, updated_at
         "#,
     )
     .bind(slug)
     .bind(&patch.title)
     .bind(&patch.body_markdown)
     .bind(&patch.rendered_html)
+    .bind(patch.growth.map(|growth| growth.as_str().to_string()))
     .bind(&patch.tags)
     .fetch_optional(pool)
     .await;
@@ -170,11 +173,12 @@ pub async fn update_document_by_slug_if_version(
         SET title = COALESCE($3, title),
             body_markdown = COALESCE($4, body_markdown),
             rendered_html = COALESCE($5, rendered_html),
-            tags = COALESCE($6, tags),
+            growth = COALESCE($6, growth),
+            tags = COALESCE($7, tags),
             version = version + 1,
             updated_at = now()
         WHERE slug = $1 AND version = $2
-        RETURNING id, slug, title, body_markdown, rendered_html, status, tags, version, created_at, updated_at
+        RETURNING id, slug, title, body_markdown, rendered_html, status, growth, tags, version, created_at, updated_at
         "#,
     )
     .bind(slug)
@@ -182,6 +186,7 @@ pub async fn update_document_by_slug_if_version(
     .bind(&patch.title)
     .bind(&patch.body_markdown)
     .bind(&patch.rendered_html)
+    .bind(patch.growth.map(|growth| growth.as_str().to_string()))
     .bind(&patch.tags)
     .fetch_optional(pool)
     .await;
@@ -215,7 +220,7 @@ pub async fn set_document_status(
         UPDATE documents
         SET status = $2
         WHERE slug = $1
-        RETURNING id, slug, title, body_markdown, rendered_html, status, tags, version, created_at, updated_at
+        RETURNING id, slug, title, body_markdown, rendered_html, status, growth, tags, version, created_at, updated_at
         "#,
     )
     .bind(slug)
@@ -255,7 +260,7 @@ pub async fn list_documents_by_tag(
     options: ListByTagOptions,
 ) -> Result<Vec<Document>, sqlx::Error> {
     let mut builder = QueryBuilder::<Postgres>::new(
-        "SELECT id, slug, title, body_markdown, rendered_html, status, tags, version, created_at, updated_at FROM documents WHERE ",
+        "SELECT id, slug, title, body_markdown, rendered_html, status, growth, tags, version, created_at, updated_at FROM documents WHERE ",
     );
     builder.push_bind(tag).push(" = ANY(tags)");
     if let Some(status) = options.status {
@@ -346,7 +351,7 @@ pub async fn search_published_documents(
 ) -> Result<Vec<Document>, sqlx::Error> {
     let pattern = format!("%{}%", escape_like_pattern(query));
     let mut builder = QueryBuilder::<Postgres>::new(
-        "SELECT id, slug, title, body_markdown, rendered_html, status, tags, version, created_at, updated_at
+        "SELECT id, slug, title, body_markdown, rendered_html, status, growth, tags, version, created_at, updated_at
          FROM documents
          WHERE status = 'published'
          AND (title ILIKE ",

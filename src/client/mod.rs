@@ -31,6 +31,9 @@ pub struct DocumentInput {
     pub slug: String,
     pub body: String,
     pub tags: Vec<String>,
+    /// Optional digital-garden maturity stage (`seedling`|`budding`|`evergreen`).
+    /// `None` lets the server keep the column default / existing value.
+    pub growth: Option<String>,
 }
 
 /// Outcome of a [`InkwellClient::push`]: whether the document was newly created
@@ -93,6 +96,8 @@ struct CreatePayload<'a> {
     slug: &'a str,
     body_markdown: &'a str,
     tags: &'a [String],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    growth: Option<&'a str>,
 }
 
 #[derive(Serialize)]
@@ -101,6 +106,8 @@ struct UpdatePayload<'a> {
     title: &'a str,
     body_markdown: &'a str,
     tags: &'a [String],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    growth: Option<&'a str>,
 }
 
 #[derive(Deserialize)]
@@ -249,6 +256,7 @@ impl InkwellClient {
                 title: &doc.title,
                 body_markdown: &doc.body,
                 tags: &doc.tags,
+                growth: doc.growth.as_deref(),
             };
             Ok((
                 PushAction::Updated,
@@ -260,6 +268,7 @@ impl InkwellClient {
                 slug: &doc.slug,
                 body_markdown: &doc.body,
                 tags: &doc.tags,
+                growth: doc.growth.as_deref(),
             };
             Ok((PushAction::Created, self.create(&payload).await?))
         }
@@ -345,6 +354,7 @@ impl InkwellClient {
             slug: &doc.slug,
             body_markdown: &doc.body,
             tags: &doc.tags,
+            growth: doc.growth.as_deref(),
         };
         self.create(&payload).await
     }
@@ -382,6 +392,7 @@ impl InkwellClient {
             title,
             body_markdown: body,
             tags: &tags,
+            growth: None,
         };
         self.update(slug, &payload, Some(expected_version)).await
     }

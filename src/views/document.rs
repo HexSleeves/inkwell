@@ -1,5 +1,5 @@
 use crate::db::links::Backlink;
-use crate::domain::document::{Document, timestamp};
+use crate::domain::document::{Document, GrowthStage, timestamp};
 
 use super::layout::{
     HeadMeta, SITE_NAME, date_line, derive_excerpt, escape_html, json_ld_document,
@@ -29,12 +29,13 @@ pub fn render_document_page(
     let main = format!(
         r#"<article>
           <h1>{}</h1>
-          <div class="meta">{}{}</div>{}
+          <div class="meta">{}{}{}</div>{}
 {}
         </article>"#,
         escape_html(&document.title),
         date_line("Published", document.created_at),
         updated_text,
+        render_growth_chip(document.growth),
         render_tag_chips(&document.tags),
         document.rendered_html()
     );
@@ -64,6 +65,16 @@ pub fn render_document_page(
             csp_nonce: Some(csp_nonce),
         },
         &main,
+    )
+}
+
+/// Render the digital-garden maturity chip (seedling/budding/evergreen) for the
+/// note's `<div class="meta">` line. The stage token is a fixed, sanitized
+/// vocabulary, so it is safe to interpolate into both the class and the label.
+fn render_growth_chip(growth: GrowthStage) -> String {
+    format!(
+        r#" &middot; <span class="growth growth-{stage}">{stage}</span>"#,
+        stage = growth.as_str(),
     )
 }
 
@@ -152,6 +163,15 @@ mod tests {
     #[test]
     fn empty_backlinks_omit_the_panel_entirely() {
         assert_eq!(render_backlinks_panel(&[]), "");
+    }
+
+    #[test]
+    fn growth_chip_renders_the_stage_as_a_labelled_span() {
+        let chip = render_growth_chip(GrowthStage::Budding);
+        assert!(chip.contains(r#"class="growth growth-budding""#));
+        assert!(chip.contains(">budding<"));
+        // Seedling default also renders.
+        assert!(render_growth_chip(GrowthStage::Seedling).contains("seedling"));
     }
 
     #[test]

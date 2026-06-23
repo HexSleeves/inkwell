@@ -8,10 +8,10 @@ use serde_json::Value;
 use tokio::time::{Duration, timeout};
 
 use crate::db::documents;
-use crate::db::links::{self, Backlink, Visibility};
+use crate::db::links::{self, Backlink, Graph, GraphEdge, GraphNode, Visibility};
 use crate::domain::document::{
-    DEFAULT_LIMIT, Document, DocumentPatch, DocumentStatus, MAX_BODY_MARKDOWN_LENGTH, MAX_LIMIT,
-    MAX_REQUEST_BODY_BYTES, MAX_TITLE_LENGTH, NewDocument, StatusFilter,
+    DEFAULT_LIMIT, Document, DocumentPatch, DocumentStatus, GrowthStage, MAX_BODY_MARKDOWN_LENGTH,
+    MAX_LIMIT, MAX_REQUEST_BODY_BYTES, MAX_TITLE_LENGTH, NewDocument, StatusFilter,
 };
 use crate::domain::slug::{is_valid_slug, slugify};
 use crate::domain::tags::normalize_tags;
@@ -30,6 +30,8 @@ struct DocumentEnvelope {
     body_markdown: String,
     rendered_html: String,
     status: DocumentStatus,
+    /// Digital-garden maturity stage (seedling | budding | evergreen).
+    growth: GrowthStage,
     tags: Vec<String>,
     /// Monotonic revision counter. MCP clients echo this back as the
     /// `If-Match` header on an update to detect stale writes (409).
@@ -49,6 +51,7 @@ impl From<Document> for DocumentEnvelope {
             body_markdown: value.body_markdown,
             rendered_html: value.rendered_html,
             status: value.status,
+            growth: value.growth,
             tags: value.tags,
             version: value.version,
             created_at: value.created_at,
@@ -79,6 +82,62 @@ impl From<Backlink> for BacklinkEnvelope {
             slug: value.source_slug,
             title: value.source_title,
             snippet: value.context_snippet,
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GraphNodeEnvelope {
+    slug: String,
+    title: String,
+}
+
+impl From<GraphNode> for GraphNodeEnvelope {
+    fn from(value: GraphNode) -> Self {
+        Self {
+            slug: value.slug,
+            title: value.title,
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GraphEdgeEnvelope {
+    source_slug: String,
+    target_slug: String,
+}
+
+impl From<GraphEdge> for GraphEdgeEnvelope {
+    fn from(value: GraphEdge) -> Self {
+        Self {
+            source_slug: value.source_slug,
+            target_slug: value.target_slug,
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GraphEnvelope {
+    nodes: Vec<GraphNodeEnvelope>,
+    edges: Vec<GraphEdgeEnvelope>,
+}
+
+impl From<Graph> for GraphEnvelope {
+    fn from(value: Graph) -> Self {
+        Self {
+            nodes: value
+                .nodes
+                .into_iter()
+                .map(GraphNodeEnvelope::from)
+                .collect(),
+            edges: value
+                .edges
+                .into_iter()
+                .map(GraphEdgeEnvelope::from)
+                .collect(),
         }
     }
 }
@@ -185,6 +244,57 @@ pub async fn document_backlinks(
     Ok((StatusCode::OK, Json(envelopes)).into_response())
 }
 
+/// `GET /graph` — the whole garden's bounded link graph as JSON.
+///
+/// Visibility follows the same rule as [`get_document`]: an authenticated
+/// caller sees every note (`All`), an anonymous one only published notes
+/// (`Public`). The query itself enforces the no-draft-leak invariant — a public
+/// graph never returns a draft node nor an edge touching one — and is hard
+/// bounded by the node/edge caps in [`links`]. GET only; any other method 405s.
+pub async fn graph(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+) -> Result<Response, AppError> {
+    if method != Method::GET {
+        return Err(AppError::MethodNotAllowed(vec!["GET"]));
+    }
+    let visibility = request_visibility(&headers, &state.config);
+    let graph = links::garden_graph(&state.pool, visibility).await?;
+    Ok((StatusCode::OK, Json(GraphEnvelope::from(graph))).into_response())
+}
+
+/// `GET /documents/{slug}/graph` — the one-hop neighborhood graph around a note.
+///
+/// Same visibility rule as [`graph`]/[`get_document`]: a note the caller cannot
+/// see 404s rather than leaking its existence, and the neighborhood is fetched
+/// at the SAME visibility so a public caller never sees a draft neighbor or an
+/// edge touching one. Bounded and depth-capped in [`links`]. GET only.
+pub async fn document_graph(
+    State(state): State<AppState>,
+    Path(slug): Path<String>,
+    method: Method,
+    headers: HeaderMap,
+) -> Result<Response, AppError> {
+    if method != Method::GET {
+        return Err(AppError::MethodNotAllowed(vec!["GET"]));
+    }
+    let visibility = request_visibility(&headers, &state.config);
+    let filter = StatusFilter {
+        status: visibility.status_filter(),
+    };
+    if documents::get_document_by_slug(&state.pool, &slug, filter)
+        .await?
+        .is_none()
+    {
+        return Err(AppError::NotFound(format!(
+            "No document with slug \"{slug}\"."
+        )));
+    }
+    let graph = links::note_neighborhood(&state.pool, &slug, visibility).await?;
+    Ok((StatusCode::OK, Json(GraphEnvelope::from(graph))).into_response())
+}
+
 pub async fn publish_document(
     State(state): State<AppState>,
     Path(slug): Path<String>,
@@ -246,6 +356,7 @@ async fn create_document(
     )?;
     let slug = resolve_slug(map.get("slug"), &title)?;
     let tags = resolve_tags(map.get("tags"))?;
+    let growth = resolve_growth(map.get("growth"))?;
     let (rendered_html, refs) = garden::render_and_resolve(&state.pool, &body_markdown).await?;
     let document = documents::create_document(
         &state.pool,
@@ -255,6 +366,7 @@ async fn create_document(
             body_markdown,
             rendered_html,
             status: None,
+            growth,
             tags,
         },
     )
@@ -402,9 +514,16 @@ async fn update_document(
     if map.contains_key("tags") {
         patch.tags = Some(resolve_tags(map.get("tags"))?);
     }
-    if patch.title.is_none() && patch.body_markdown.is_none() && patch.tags.is_none() {
+    if map.contains_key("growth") {
+        patch.growth = resolve_growth(map.get("growth"))?;
+    }
+    if patch.title.is_none()
+        && patch.body_markdown.is_none()
+        && patch.tags.is_none()
+        && patch.growth.is_none()
+    {
         return Err(AppError::BadRequest(
-            "Provide at least one of \"title\", \"bodyMarkdown\", or \"tags\" to update."
+            "Provide at least one of \"title\", \"bodyMarkdown\", \"tags\", or \"growth\" to update."
                 .to_string(),
         ));
     }
@@ -547,6 +666,23 @@ fn resolve_tags(value: Option<&Value>) -> Result<Vec<String>, AppError> {
     }
 }
 
+/// Parse the optional `growth` field into a [`GrowthStage`]. Absent/null leaves
+/// it unset so the column default (create) or stored value (update) stands; a
+/// present-but-unknown token is a client error rather than a silent default.
+fn resolve_growth(value: Option<&Value>) -> Result<Option<GrowthStage>, AppError> {
+    match value {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(raw)) => GrowthStage::parse(raw).map(Some).ok_or_else(|| {
+            AppError::BadRequest(
+                "Field \"growth\" must be one of: seedling, budding, evergreen.".to_string(),
+            )
+        }),
+        _ => Err(AppError::BadRequest(
+            "Field \"growth\" must be one of: seedling, budding, evergreen.".to_string(),
+        )),
+    }
+}
+
 fn resolve_list_status(
     authenticated: bool,
     raw: Option<&str>,
@@ -561,6 +697,22 @@ fn resolve_list_status(
         _ => Err(AppError::BadRequest(
             "Query param \"status\" must be one of: draft, published, all.".to_string(),
         )),
+    }
+}
+
+/// Map the request's credentials to a read [`Visibility`]: an authenticated
+/// caller sees everything (`All`), an anonymous one only published content
+/// (`Public`). The single place read-scope is derived for the graph surfaces,
+/// mirroring the inline rule in [`document_backlinks`]/[`get_document`].
+fn request_visibility(headers: &HeaderMap, config: &crate::config::Config) -> Visibility {
+    if is_authenticated(
+        headers,
+        config.api_key.as_deref(),
+        config.mcp_key.as_deref(),
+    ) {
+        Visibility::All
+    } else {
+        Visibility::Public
     }
 }
 

@@ -116,6 +116,8 @@ async fn plant(pool: &PgPool, doc: &ParsedDocument) -> Result<Seeded> {
             // Seeded notes MUST be published: drafts are invisible to the public
             // site, backlinks, and search, which would leave the demo empty.
             status: Some(DocumentStatus::Published),
+            // Let the column default the maturity stage (seedling).
+            growth: None,
             tags: doc.tags.clone(),
         },
     )

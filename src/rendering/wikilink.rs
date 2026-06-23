@@ -17,7 +17,7 @@
 //!     resolved wikilinks to `<a href="/{slug}">` and unresolved ones to a
 //!     `<a class="stub" …>` (so a future create/rename can light them up).
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use comrak::nodes::{AstNode, NodeValue};
 use comrak::{Arena, Options, format_html, parse_document};
@@ -28,6 +28,21 @@ use super::sanitize::sanitize_html;
 
 /// Max characters kept for a backlink context snippet.
 const CONTEXT_SNIPPET_MAX_CHARS: usize = 160;
+
+/// How a single `![[note]]` embed should render. The DB-aware pipeline
+/// ([`crate::garden`]) resolves every embed to one of these before handing the
+/// map to [`render_markdown_with_embeds`]; the pure renderer never decides
+/// visibility or recursion, it only splices in what it is told.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum EmbedResolution {
+    /// Splice this already-rendered, already-sanitized HTML in place of the
+    /// embed (a published target's transcluded content).
+    Content(String),
+    /// Render a neutral placeholder. Used for a draft/missing target (no leak),
+    /// a cycle, or an exceeded depth limit — never reveals anything about the
+    /// target beyond the requested slug.
+    Placeholder,
+}
 
 /// A wikilink or embed reference found in a document.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -166,8 +181,35 @@ pub fn extract_wikilinks(markdown: &str) -> Vec<WikilinkRef> {
 /// Render `markdown` to sanitized HTML, rewriting `[[note]]` wikilinks to
 /// anchors. `resolved` is the set of slugs that currently exist; a wikilink
 /// whose slug is absent renders as a `stub`. Embeds (`![[note]]`) are left as
-/// literal text in this phase.
+/// literal text — use [`render_markdown_with_embeds`] (via the DB-aware
+/// pipeline) to expand them.
 pub fn render_markdown_with_links(markdown: &str, resolved: &HashSet<String>) -> String {
+    render_inner(markdown, resolved, &HashMap::new())
+}
+
+/// Like [`render_markdown_with_links`], but each `![[note]]` embed is replaced
+/// by its [`EmbedResolution`]: a published target's pre-rendered content, or a
+/// neutral placeholder for a draft/missing target, a cycle, or an exceeded
+/// depth limit. An embed whose slug is absent from `embeds` falls back to a
+/// placeholder so a forgotten resolution can never leak the literal `![[...]]`.
+///
+/// The recursion, cycle/depth guard, and visibility decision all live in
+/// [`crate::garden`]; this function only splices in the resolutions it is given.
+/// Embeds inside code spans / fenced blocks stay literal (only `Text` nodes are
+/// rewritten), exactly like wikilinks.
+pub fn render_markdown_with_embeds(
+    markdown: &str,
+    resolved: &HashSet<String>,
+    embeds: &HashMap<String, EmbedResolution>,
+) -> String {
+    render_inner(markdown, resolved, embeds)
+}
+
+fn render_inner(
+    markdown: &str,
+    resolved: &HashSet<String>,
+    embeds: &HashMap<String, EmbedResolution>,
+) -> String {
     if markdown.trim().is_empty() {
         return String::new();
     }
@@ -195,8 +237,28 @@ pub fn render_markdown_with_links(markdown: &str, resolved: &HashSet<String>) ->
                 append_text(&arena, node, &literal[cursor..m.start]);
             }
             if m.is_embed {
-                // P1: embeds are recognized but not rendered — keep them literal.
-                append_text(&arena, node, &literal[m.start..m.end]);
+                let slug = slugify(&m.inner);
+                match embeds.get(&slug) {
+                    Some(EmbedResolution::Content(content)) => {
+                        append_html(&arena, node, embed_wrapper(&slug, content));
+                    }
+                    Some(EmbedResolution::Placeholder) => {
+                        append_html(&arena, node, embed_placeholder(&slug).to_string());
+                    }
+                    None => {
+                        // No resolution supplied (e.g. the pure
+                        // `render_markdown_with_links` path, or a forgotten
+                        // slug): emit a placeholder rather than leaking the raw
+                        // `![[...]]` markup.
+                        if embeds.is_empty() {
+                            // Pure path: keep the literal markup unchanged so
+                            // existing wikilink-only rendering is untouched.
+                            append_text(&arena, node, &literal[m.start..m.end]);
+                        } else {
+                            append_html(&arena, node, embed_placeholder(&slug).to_string());
+                        }
+                    }
+                }
             } else {
                 let slug = slugify(&m.inner);
                 let display = m.alias.clone().unwrap_or_else(|| m.inner.clone());
@@ -225,6 +287,24 @@ pub fn render_markdown_with_links(markdown: &str, resolved: &HashSet<String>) ->
     // format_html only errors on a write failure into a String, which can't happen.
     let _ = format_html(root, &options, &mut html);
     sanitize_html(&html)
+}
+
+/// Wrap transcluded content in a labelled `<figure>` so it is visually distinct
+/// from the host note. `content` is already sanitized HTML and the whole result
+/// is re-sanitized by the caller. Only the `class` attribute is used, so nothing
+/// is stripped by the sanitizer.
+fn embed_wrapper(_slug: &str, content: &str) -> String {
+    format!(
+        r#"<figure class="embed">{content}</figure>"#,
+        content = content
+    )
+}
+
+/// Neutral placeholder for an embed that cannot (or must not) be expanded: a
+/// draft/missing target, a cycle, or an exceeded depth limit. It reveals nothing
+/// about the target — not even the slug — upholding draft invisibility.
+fn embed_placeholder(_slug: &str) -> &'static str {
+    r#"<figure class="embed embed-missing"><p>Embed omitted.</p></figure>"#
 }
 
 fn collect_text_nodes<'a>(node: &'a AstNode<'a>, out: &mut Vec<&'a AstNode<'a>>) {
@@ -372,5 +452,70 @@ mod tests {
         let html = render_markdown_with_links("x < y and [[a]] done", &resolved);
         assert!(html.contains("href=\"/a\""));
         assert!(html.contains("&lt;"));
+    }
+
+    #[test]
+    fn embed_with_content_resolution_splices_the_content() {
+        let mut embeds = HashMap::new();
+        embeds.insert(
+            "diagram".to_string(),
+            EmbedResolution::Content("<p>embedded body</p>".to_string()),
+        );
+        let html =
+            render_markdown_with_embeds("before ![[diagram]] after", &HashSet::new(), &embeds);
+        assert!(html.contains("embedded body"), "content is spliced inline");
+        assert!(html.contains(r#"class="embed""#));
+        assert!(
+            !html.contains("![["),
+            "the raw embed markup is consumed, not left literal"
+        );
+    }
+
+    #[test]
+    fn embed_with_placeholder_resolution_renders_neutral_placeholder() {
+        let mut embeds = HashMap::new();
+        embeds.insert("secret".to_string(), EmbedResolution::Placeholder);
+        let html = render_markdown_with_embeds("![[secret]]", &HashSet::new(), &embeds);
+        assert!(html.contains("Embed omitted"), "placeholder is rendered");
+        assert!(
+            !html.contains("secret"),
+            "a placeholder reveals nothing about the target, not even its slug"
+        );
+    }
+
+    #[test]
+    fn unmapped_embed_in_db_path_falls_back_to_placeholder_not_literal() {
+        // A non-empty embed map signals the DB-aware path: a missing key must
+        // become a placeholder, never leak the literal `![[...]]`.
+        let mut embeds = HashMap::new();
+        embeds.insert("other".to_string(), EmbedResolution::Placeholder);
+        let html = render_markdown_with_embeds("![[forgotten]]", &HashSet::new(), &embeds);
+        assert!(html.contains("Embed omitted"));
+        assert!(!html.contains("![["));
+    }
+
+    #[test]
+    fn embed_inside_code_stays_literal_even_with_a_resolution() {
+        let mut embeds = HashMap::new();
+        embeds.insert(
+            "note".to_string(),
+            EmbedResolution::Content("<p>should not appear</p>".to_string()),
+        );
+        let html = render_markdown_with_embeds("`![[note]]`", &HashSet::new(), &embeds);
+        assert!(html.contains("<code>"), "code span is preserved");
+        assert!(
+            !html.contains("should not appear"),
+            "an embed inside code is never expanded"
+        );
+    }
+
+    #[test]
+    fn embeds_stay_literal_in_the_pure_wikilink_path() {
+        // render_markdown_with_links uses an empty embed map → embeds untouched.
+        let html = render_markdown_with_links("![[diagram]]", &HashSet::new());
+        assert!(
+            html.contains("![[diagram]]"),
+            "the wikilink-only path leaves embeds literal"
+        );
     }
 }

@@ -37,6 +37,46 @@ impl std::fmt::Display for DocumentStatus {
     }
 }
 
+/// Digital-garden maturity of a note. A note grows from a rough `Seedling`
+/// through `Budding` to a polished `Evergreen`. Stored as `text` with a CHECK
+/// constraint (migration 0007), decoded directly into this enum — exactly the
+/// shape of [`DocumentStatus`]. New notes default to [`Seedling`](Self::Seedling).
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize, sqlx::Type)]
+#[sqlx(type_name = "text", rename_all = "lowercase")]
+#[serde(rename_all = "lowercase")]
+pub enum GrowthStage {
+    #[default]
+    Seedling,
+    Budding,
+    Evergreen,
+}
+
+impl GrowthStage {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Seedling => "seedling",
+            Self::Budding => "budding",
+            Self::Evergreen => "evergreen",
+        }
+    }
+
+    /// Parse the wire/front-matter token into a stage, or `None` if unknown.
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "seedling" => Some(Self::Seedling),
+            "budding" => Some(Self::Budding),
+            "evergreen" => Some(Self::Evergreen),
+            _ => None,
+        }
+    }
+}
+
+impl std::fmt::Display for GrowthStage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 #[derive(Clone, Debug, Serialize, sqlx::FromRow)]
 #[serde(rename_all = "camelCase")]
 pub struct Document {
@@ -46,6 +86,8 @@ pub struct Document {
     pub body_markdown: String,
     pub rendered_html: String,
     pub status: DocumentStatus,
+    /// Digital-garden maturity stage. Defaults to `seedling` (migration 0007).
+    pub growth: GrowthStage,
     pub tags: Vec<String>,
     /// Monotonic per-note revision counter, bumped on every content edit.
     /// Powers the MCP `If-Match` optimistic-concurrency check (T6).
@@ -73,6 +115,8 @@ pub struct NewDocument {
     pub body_markdown: String,
     pub rendered_html: String,
     pub status: Option<DocumentStatus>,
+    /// Maturity stage; `None` lets the column default to `seedling`.
+    pub growth: Option<GrowthStage>,
     pub tags: Vec<String>,
 }
 
@@ -81,6 +125,7 @@ pub struct DocumentPatch {
     pub title: Option<String>,
     pub body_markdown: Option<String>,
     pub rendered_html: Option<String>,
+    pub growth: Option<GrowthStage>,
     pub tags: Option<Vec<String>>,
 }
 

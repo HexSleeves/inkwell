@@ -142,6 +142,7 @@ async fn wrong_api_key_reports_unauthorized() -> anyhow::Result<()> {
         title: "Nope".to_string(),
         slug: Some("nope".to_string()),
         status: None,
+        growth: None,
         tags: vec![],
         body: "x".to_string(),
     };

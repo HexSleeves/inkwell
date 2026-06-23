@@ -161,6 +161,7 @@ impl InkwellMcpServer {
             slug,
             body: args.body,
             tags: args.tags.unwrap_or_default(),
+            growth: None,
         };
         let summary = self
             .client
