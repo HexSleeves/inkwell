@@ -75,11 +75,25 @@ Compose runs migrate → seed → serve automatically once Postgres is healthy.
 - `cargo run --bin inkwell -- db migrate` — run pending migrations
 - `cargo run --bin inkwell -- seed` — seed sample notes (idempotent)
 - `cargo run --bin inkwell -- mcp` — start MCP server over stdio (requires running HTTP server)
-- `cargo build --release --bin inkwell` — release build
-- `cargo fmt --check` — format check
-- `cargo clippy --all-targets --all-features -- -D warnings` — lint (CI gate)
-- `cargo test --all` — run all tests; DB-backed integration tests skip if `DATABASE_URL` not set
-- `INKWELL_REQUIRE_DB_TESTS=1 cargo test --all` — fail fast if `DATABASE_URL` missing
+- `cargo build --release --bin inkwell --locked` — release build (CI `build-release` job)
+- `cargo fmt --all -- --check` — format check (CI `fmt` job)
+- `cargo clippy --all-targets --all-features --locked -- -D warnings` — lint (CI `clippy` job)
+- `cargo nextest run --locked --profile ci-fast --lib` — fast unit tests (CI `test-fast` job)
+- `cargo test --all --locked` — full test suite; DB-backed integration tests skip if `DATABASE_URL` not set
+- `INKWELL_REQUIRE_DB_TESTS=1 cargo test --all --locked` — fail fast if `DATABASE_URL` missing (CI `test-integration` job)
+
+## CI Workflows
+
+GitHub Actions (`.github/workflows/`):
+
+| Workflow | Jobs | When |
+|----------|------|------|
+| `ci.yml` | `fmt`, `clippy`, `test-fast`, `test-integration`, `build-release`, `docker` (parallel) | PR + push to `main` |
+| `security.yml` | `dependency-review`, `cargo-audit`, `cargo-deny` | PR + push to `main` + weekly |
+| `codeql.yml` | `analyze` | PR + push to `main` + weekly |
+| `release.yml` | `build-and-push`, `github-release` | semver tag `v*.*.*` (GHCR image + linux binary tarball) |
+
+`test-integration` uses pgvector Postgres (migration 0009). `test-fast` uses cargo-nextest on non-DB contract tests only.
 
 ## Common Issues
 

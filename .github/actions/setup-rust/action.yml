@@ -1,0 +1,22 @@
+name: Setup Rust
+description: Checkout, install toolchain from rust-toolchain.toml, and cache dependencies
+
+inputs:
+  install-nextest:
+    description: Install cargo-nextest for faster parallel test execution
+    required: false
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/checkout@v4
+
+    - uses: actions-rust-lang/setup-rust-toolchain@v1
+
+    - uses: Swatinem/rust-cache@v2
+      with:
+        shared-key: v1
+
+    - if: inputs.install-nextest == 'true'
+      uses: taiki-e/install-action@nextest

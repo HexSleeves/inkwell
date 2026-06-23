@@ -1,0 +1,6 @@
+[profile.ci-fast]
+test-threads = "num-cpus"
+
+# DB-backed integration binaries intentionally use plain `cargo test` in CI
+# (test-integration job) so libtest runs each binary sequentially against the
+# shared database. Do not add DB contract tests to this profile.

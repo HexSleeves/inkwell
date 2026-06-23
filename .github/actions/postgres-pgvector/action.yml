@@ -1,0 +1,25 @@
+name: Postgres pgvector
+description: Export DATABASE_URL for the pgvector Postgres service (service must be defined on the job)
+
+outputs:
+  database_url:
+    description: Connection string for the inkwell_test database
+    value: postgres://inkwell:inkwell@localhost:5432/inkwell_test
+
+runs:
+  using: composite
+  steps:
+    - name: Verify pgvector Postgres is reachable
+      shell: bash
+      run: |
+        set -euo pipefail
+        for attempt in $(seq 1 30); do
+          if (echo > /dev/tcp/localhost/5432) >/dev/null 2>&1; then
+            echo "Postgres is ready"
+            exit 0
+          fi
+          echo "Waiting for Postgres (attempt ${attempt}/30)..."
+          sleep 2
+        done
+        echo "Postgres did not become ready in time" >&2
+        exit 1

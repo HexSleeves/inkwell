@@ -5,8 +5,42 @@ on:
     branches: [main]
   pull_request:
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
 jobs:
-  rust:
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: ./.github/actions/setup-rust
+      - run: cargo fmt --all -- --check
+
+  clippy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: ./.github/actions/setup-rust
+      - run: cargo clippy --all-targets --all-features --locked -- -D warnings
+
+  test-fast:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: ./.github/actions/setup-rust
+        with:
+          install-nextest: "true"
+      - run: |
+          cargo nextest run --locked --profile ci-fast --lib
+          cargo nextest run --locked --profile ci-fast \
+            --test domain_contract \
+            --test rendering_contract \
+            --test clap_cli_contract \
+            --test view_layout_contract \
+            --test security_headers_contract
+
+  test-integration:
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -28,13 +62,22 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo fmt --check
-      - run: cargo clippy --all-targets --all-features -- -D warnings
-      - run: cargo test --all
+      - uses: ./.github/actions/setup-rust
+      - id: postgres
+        uses: ./.github/actions/postgres-pgvector
+      - run: cargo test --all --locked
         env:
           INKWELL_REQUIRE_DB_TESTS: "1"
-          DATABASE_URL: postgres://inkwell:inkwell@localhost:5432/inkwell_test
-      - run: cargo build --release --bin inkwell
+          DATABASE_URL: ${{ steps.postgres.outputs.database_url }}
+
+  build-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: ./.github/actions/setup-rust
+      - run: cargo build --release --bin inkwell --locked
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t inkwell:ci .
