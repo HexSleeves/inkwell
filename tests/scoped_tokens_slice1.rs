@@ -259,7 +259,7 @@ async fn mutations_emit_one_audit_row_each() -> anyhow::Result<()> {
 
     // Every audit row is attributed to the bootstrap admin in slice 1.
     let actor: Option<Uuid> = sqlx::query_scalar(
-        "SELECT actor_author_id FROM write_audit WHERE slug = 'audit-me' LIMIT 1",
+        "SELECT actor_author_id FROM write_audit WHERE slug = 'audit-me' ORDER BY at DESC LIMIT 1",
     )
     .fetch_one(&pool)
     .await?;
