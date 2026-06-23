@@ -12,12 +12,16 @@ services:
     volumes:
       - inkwell-pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-inkwell} -d ${POSTGRES_DB:-inkwell}']
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER:-inkwell} -d ${POSTGRES_DB:-inkwell}",
+        ]
       interval: 5s
       timeout: 5s
       retries: 10
     ports:
-      - '${POSTGRES_PORT:-5433}:5432'
+      - "${POSTGRES_PORT:-5433}:5432"
 
   app:
     build:
@@ -25,9 +29,9 @@ services:
       dockerfile: Dockerfile
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-inkwell}:${POSTGRES_PASSWORD:-inkwell}@db:5432/${POSTGRES_DB:-inkwell}
-      PORT: '3000'
+      PORT: "3000"
       HOST: 0.0.0.0
-      INKWELL_API_KEY: '${INKWELL_API_KEY:?Set INKWELL_API_KEY in your shell or .env before running docker compose.}'
+      INKWELL_API_KEY: "${INKWELL_API_KEY:?Set INKWELL_API_KEY in your shell or .env before running docker compose.}"
       # Optional MCP credential for the AI walkthrough (docs/QUICKSTART.md). Left
       # empty by default — the demo browses fine without it; set it (in your
       # shell or .env) to a non-empty value to enable the `inkwell mcp` server.
@@ -41,7 +45,7 @@ services:
     # demo nor clobber your own content.
     command: sh -c 'inkwell db migrate && inkwell seed /app/examples/garden && inkwell serve'
     ports:
-      - '${PORT:-3000}:3000'
+      - "${PORT:-3000}:3000"
 
 volumes:
   inkwell-pgdata:

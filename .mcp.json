@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "inkwell": {
+      "command": "/Users/lecoqjacob/Projects/personal/inkwell/target/debug/inkwell",
+      "args": ["mcp"],
+      "env": {
+        "INKWELL_API_URL": "http://localhost:3002",
+        "INKWELL_MCP_KEY": "dev-key-123"
+      }
+    }
+  }
+}
