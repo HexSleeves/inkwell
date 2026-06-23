@@ -49,12 +49,33 @@ pub struct RetrievedChunk {
 /// is deleted and the new set inserted in one transaction, so a re-embed never
 /// leaves a partial mix of stale and fresh chunks. An empty `chunks` clears the
 /// note's embeddings (e.g. a body that chunks to nothing).
+///
+/// `expected_version` guards against stale overwrites under concurrent updates:
+/// indexing runs after the document write, so a slower OLDER update could
+/// otherwise clobber embeddings produced by a newer one. The document row is
+/// locked (`FOR UPDATE`) and its current `version` re-read inside the same
+/// transaction; if it no longer matches `expected_version`, a newer write has
+/// landed (and will run — or has run — its own indexing), so this replace is
+/// skipped. Returns `true` if the chunks were written, `false` if skipped as
+/// stale. A vanished note (deleted concurrently) is treated as stale.
 pub async fn replace_note_chunks(
     pool: &PgPool,
     note_id: Uuid,
+    expected_version: i64,
     chunks: &[NewChunk],
-) -> Result<(), sqlx::Error> {
+) -> Result<bool, sqlx::Error> {
     let mut tx = pool.begin().await?;
+    let current_version: Option<i64> = sqlx::query_scalar::<Postgres, i64>(
+        "SELECT version FROM documents WHERE id = $1 FOR UPDATE",
+    )
+    .bind(note_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    if current_version != Some(expected_version) {
+        // A newer revision (or a delete) won the race; leave its embeddings be.
+        tx.rollback().await?;
+        return Ok(false);
+    }
     sqlx::query("DELETE FROM note_chunks WHERE note_id = $1")
         .bind(note_id)
         .execute(&mut *tx)
@@ -73,7 +94,7 @@ pub async fn replace_note_chunks(
         .await?;
     }
     tx.commit().await?;
-    Ok(())
+    Ok(true)
 }
 
 /// Number of chunk rows stored for a note (used by tests and re-embed checks).

@@ -189,17 +189,23 @@ pub fn build_llm(config: &crate::config::Config) -> Option<Arc<dyn Llm>> {
 /// A body that chunks to nothing clears the note's embeddings. A provider error
 /// propagates so the caller can log-and-continue without failing the write; the
 /// `MockEmbedder` never errors, so the no-key path always indexes.
+///
+/// `expected_version` is the `documents.version` the caller just wrote. It is
+/// threaded into the replace so a slower OLDER concurrent update can't overwrite
+/// a newer revision's embeddings (the replace is skipped when the row's current
+/// version no longer matches).
 pub async fn index_note(
     pool: &sqlx::PgPool,
     embedder: &dyn Embedder,
     note_id: uuid::Uuid,
+    expected_version: i64,
     body: &str,
 ) -> anyhow::Result<()> {
     use crate::db::chunks::{NewChunk, replace_note_chunks};
 
     let chunks = chunk_text(body);
     if chunks.is_empty() {
-        replace_note_chunks(pool, note_id, &[]).await?;
+        replace_note_chunks(pool, note_id, expected_version, &[]).await?;
         return Ok(());
     }
     let embeddings = embedder.embed(&chunks).await?;
@@ -222,7 +228,7 @@ pub async fn index_note(
             embedding,
         })
         .collect();
-    replace_note_chunks(pool, note_id, &rows).await?;
+    replace_note_chunks(pool, note_id, expected_version, &rows).await?;
     Ok(())
 }
 

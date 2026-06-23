@@ -387,6 +387,7 @@ async fn create_document(
         &state.pool,
         state.embedder.as_ref(),
         document.id,
+        document.version,
         &document.body_markdown,
     )
     .await
@@ -592,6 +593,7 @@ async fn update_document(
             &state.pool,
             state.embedder.as_ref(),
             document.id,
+            document.version,
             &document.body_markdown,
         )
         .await
