@@ -1,0 +1,11 @@
+{
+  "aiTools": [
+    "claude",
+    "cursor",
+    "codex"
+  ],
+  "scaffold_id": "064b3acf-bf1e-446e-967e-889e55d99cd1",
+  "scaffold_name": "inkwell",
+  "origin": null,
+  "upstream": null
+}

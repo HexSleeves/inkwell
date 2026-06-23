@@ -37,6 +37,11 @@ services:
       # shell or .env) to a non-empty value to enable the `inkwell mcp` server.
       INKWELL_MCP_KEY: ${INKWELL_MCP_KEY:-}
       INKWELL_SITE_URL: ${INKWELL_SITE_URL:-http://localhost:3000}
+      # Optional AI providers. Left empty by default so the demo runs with the
+      # deterministic mock embedder and the "AI not configured" /ask response.
+      # Set them (shell or .env) to use real Voyage embeddings + Claude answers.
+      VOYAGE_API_KEY: ${VOYAGE_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
     depends_on:
       db:
         condition: service_healthy
