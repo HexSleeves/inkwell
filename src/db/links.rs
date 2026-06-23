@@ -199,9 +199,55 @@ pub async fn replace_source_edges(
     edges: &[NewLink],
 ) -> Result<(), sqlx::Error> {
     let mut tx = pool.begin().await?;
+    delete_and_insert_edges(&mut tx, source_id, edges).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Version-guarded [`replace_source_edges`], mirroring
+/// [`replace_note_chunks`](crate::db::chunks::replace_note_chunks). Edge
+/// persistence runs AFTER the document write on the update path, so a slower
+/// OLDER concurrent update could otherwise clobber the link graph of a NEWER
+/// revision, leaving edges stale versus the note's body. The document row is
+/// locked (`FOR UPDATE`) and its current `version` re-read inside the same
+/// transaction; if it no longer matches `expected_version`, a newer write has
+/// landed (and runs — or has run — its own edge replace), so this one is
+/// skipped. Returns `true` if the edges were written, `false` if skipped as
+/// stale. A vanished note (deleted concurrently) is treated as stale.
+pub async fn replace_source_edges_if_version(
+    pool: &PgPool,
+    source_id: Uuid,
+    expected_version: i64,
+    edges: &[NewLink],
+) -> Result<bool, sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    let current_version: Option<i64> = sqlx::query_scalar::<Postgres, i64>(
+        "SELECT version FROM documents WHERE id = $1 FOR UPDATE",
+    )
+    .bind(source_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    if current_version != Some(expected_version) {
+        // A newer revision (or a delete) won the race; leave its edges be.
+        tx.rollback().await?;
+        return Ok(false);
+    }
+    delete_and_insert_edges(&mut tx, source_id, edges).await?;
+    tx.commit().await?;
+    Ok(true)
+}
+
+/// Replace `source_id`'s outbound edge set inside an existing transaction: drop
+/// the old rows, insert `edges`. Shared by the plain and version-guarded
+/// replacers so the delete and the inserts never diverge.
+async fn delete_and_insert_edges(
+    tx: &mut sqlx::Transaction<'_, Postgres>,
+    source_id: Uuid,
+    edges: &[NewLink],
+) -> Result<(), sqlx::Error> {
     sqlx::query("DELETE FROM links WHERE source_note_id = $1")
         .bind(source_id)
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
     for edge in edges {
         sqlx::query(
@@ -221,10 +267,9 @@ pub async fn replace_source_edges(
         .bind(edge.link_type.as_str())
         .bind(&edge.context_snippet)
         .bind(edge.resolved)
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
     }
-    tx.commit().await?;
     Ok(())
 }
 

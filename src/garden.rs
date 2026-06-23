@@ -227,8 +227,30 @@ pub async fn persist_source_edges(
     source_id: Uuid,
     refs: &[ResolvedRef],
 ) -> Result<(), sqlx::Error> {
-    let edges: Vec<NewLink> = refs
-        .iter()
+    let edges = refs_to_edges(source_id, refs);
+    links::replace_source_edges(pool, source_id, &edges).await
+}
+
+/// Version-guarded [`persist_source_edges`]. The update path persists edges
+/// AFTER the document write, so a slower OLDER concurrent update could otherwise
+/// overwrite the edges of a NEWER revision, leaving the link graph stale versus
+/// the note's body. Threading the version the caller just wrote lets the replace
+/// skip itself when a newer revision has since landed — the same guard
+/// [`crate::ai::index_note`] uses for embeddings. Returns `true` if the edges
+/// were written, `false` if skipped as stale.
+pub async fn persist_source_edges_if_version(
+    pool: &PgPool,
+    source_id: Uuid,
+    expected_version: i64,
+    refs: &[ResolvedRef],
+) -> Result<bool, sqlx::Error> {
+    let edges = refs_to_edges(source_id, refs);
+    links::replace_source_edges_if_version(pool, source_id, expected_version, &edges).await
+}
+
+/// Build the outbound `links` rows for `source_id` from resolved references.
+fn refs_to_edges(source_id: Uuid, refs: &[ResolvedRef]) -> Vec<NewLink> {
+    refs.iter()
         .map(|r| NewLink {
             source_note_id: source_id,
             target_kind: TargetKind::Internal,
@@ -243,8 +265,7 @@ pub async fn persist_source_edges(
             context_snippet: Some(r.context_snippet.clone()),
             resolved: r.target_note_id.is_some(),
         })
-        .collect();
-    links::replace_source_edges(pool, source_id, &edges).await
+        .collect()
 }
 
 /// Source notes whose stored HTML may need re-rendering because the note

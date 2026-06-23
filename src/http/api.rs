@@ -581,12 +581,20 @@ async fn update_document(
             document
         }
     };
-    // Body changed → its outbound edges changed; replace them. Best-effort for the
-    // same reason as create: the update already succeeded and the note renders
-    // correctly; stale edges self-heal on the next save. A failure only warns and
-    // never 500s the write.
+    // Body changed → its outbound edges changed; replace them. Version-guarded
+    // (against this update's version) so a slower OLDER concurrent update can't
+    // overwrite a newer revision's edges — the same staleness guard index_note
+    // uses for embeddings. Best-effort for the same reason as create: the update
+    // already succeeded and the note renders correctly; stale edges self-heal on
+    // the next save. A failure only warns and never 500s the write.
     if let Some(refs) = body_refs
-        && let Err(error) = garden::persist_source_edges(&state.pool, document.id, &refs).await
+        && let Err(error) = garden::persist_source_edges_if_version(
+            &state.pool,
+            document.id,
+            document.version,
+            &refs,
+        )
+        .await
     {
         tracing::warn!(document_id = %document.id, %error, "persist_source_edges failed; edges may be stale until next save");
     }
