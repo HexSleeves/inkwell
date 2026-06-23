@@ -1462,6 +1462,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "axum",
+ "clap",
  "comrak",
  "dotenvy",
  "http",

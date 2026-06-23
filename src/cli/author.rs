@@ -5,19 +5,14 @@
 //! API client. Authors write Markdown files with a small YAML-ish front matter
 //! block and round-trip them through `new` -> `push` -> `publish`.
 
-use std::path::Path;
+use std::path::PathBuf;
 
 use anyhow::{Context, Result, anyhow, bail};
 
+use crate::cli::args::AuthorCommand;
 use crate::client::{DocumentInput, InkwellClient};
 use crate::config::AuthorConfig;
 use crate::domain::slug::{is_valid_slug, slugify};
-
-const USAGE: &str = "usage: inkwell author <new|push|publish|unpublish> ...
-  inkwell author new <title> [--slug <slug>] [--status draft|published] [--tag <tag>]... [-o <file>] [--force]
-  inkwell author push <file> [--server <url>]
-  inkwell author publish <slug> [--server <url>]
-  inkwell author unpublish <slug> [--server <url>]";
 
 /// A document parsed from a local Markdown file: front matter plus body.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -286,45 +281,30 @@ fn yaml_scalar(value: &str) -> String {
 // ---------------------------------------------------------------------------
 
 /// Dispatch `inkwell author <subcommand>`.
-pub async fn run(mut args: impl Iterator<Item = String>) -> Result<()> {
-    match args.next().as_deref() {
-        Some("new") => cmd_new(args),
-        Some("push") => cmd_push(args).await,
-        Some("publish") => cmd_publish(args).await,
-        Some("unpublish") => cmd_unpublish(args).await,
-        Some(other) => bail!("unknown author subcommand {other:?}\n{USAGE}"),
-        None => bail!("{USAGE}"),
+pub async fn run(command: AuthorCommand) -> Result<()> {
+    match command {
+        AuthorCommand::New {
+            title,
+            slug,
+            status,
+            tags,
+            output,
+            force,
+        } => cmd_new(title, slug, status, tags, output, force),
+        AuthorCommand::Push { file, server } => cmd_push(file, server).await,
+        AuthorCommand::Publish { slug, server } => cmd_publish(slug, server).await,
+        AuthorCommand::Unpublish { slug, server } => cmd_unpublish(slug, server).await,
     }
 }
 
-fn cmd_new(args: impl Iterator<Item = String>) -> Result<()> {
-    let mut title: Option<String> = None;
-    let mut slug: Option<String> = None;
-    let mut status = "draft".to_string();
-    let mut tags: Vec<String> = Vec::new();
-    let mut output: Option<String> = None;
-    let mut force = false;
-
-    let mut args = args.peekable();
-    while let Some(arg) = args.next() {
-        match arg.as_str() {
-            "--slug" => slug = Some(take_value(&mut args, "--slug")?),
-            "--status" => status = take_value(&mut args, "--status")?,
-            "--tag" => tags.push(take_value(&mut args, "--tag")?),
-            "--title" => title = Some(take_value(&mut args, "--title")?),
-            "-o" | "--output" => output = Some(take_value(&mut args, "--output")?),
-            "--force" => force = true,
-            other if other.starts_with('-') => bail!("unknown flag {other:?}\n{USAGE}"),
-            _ => {
-                if title.is_some() {
-                    bail!("unexpected extra argument {arg:?}\n{USAGE}");
-                }
-                title = Some(arg);
-            }
-        }
-    }
-
-    let title = title.ok_or_else(|| anyhow!("a title is required\n{USAGE}"))?;
+fn cmd_new(
+    title: String,
+    slug: Option<String>,
+    status: String,
+    tags: Vec<String>,
+    output: Option<PathBuf>,
+    force: bool,
+) -> Result<()> {
     let opts = NewOptions {
         title,
         slug,
@@ -339,19 +319,18 @@ fn cmd_new(args: impl Iterator<Item = String>) -> Result<()> {
         None => {
             // Re-derive the slug exactly as render_new_document resolved it.
             let parsed = parse_markdown(&rendered)?;
-            format!("{}.md", parsed.effective_slug()?)
+            PathBuf::from(format!("{}.md", parsed.effective_slug()?))
         }
     };
-    if !force && Path::new(&path).exists() {
+    if !force && path.exists() {
         bail!("refusing to overwrite existing file {path:?}; pass --force to replace it.");
     }
     std::fs::write(&path, rendered).with_context(|| format!("writing {path:?}"))?;
-    println!("Wrote {path}");
+    println!("Wrote {}", path.display());
     Ok(())
 }
 
-async fn cmd_push(args: impl Iterator<Item = String>) -> Result<()> {
-    let (path, server) = parse_target_args(args, "push <file>")?;
+async fn cmd_push(path: PathBuf, server: Option<String>) -> Result<()> {
     let source = std::fs::read_to_string(&path).with_context(|| format!("reading {path:?}"))?;
     let doc = parse_markdown(&source)?;
     let input = doc.to_input()?;
@@ -366,53 +345,18 @@ async fn cmd_push(args: impl Iterator<Item = String>) -> Result<()> {
     Ok(())
 }
 
-async fn cmd_publish(args: impl Iterator<Item = String>) -> Result<()> {
-    let (slug, server) = parse_target_args(args, "publish <slug>")?;
+async fn cmd_publish(slug: String, server: Option<String>) -> Result<()> {
     let client = build_client(server.as_deref())?;
     let summary = client.publish(&slug).await?;
     println!("Published {} (status: {})", summary.slug, summary.status);
     Ok(())
 }
 
-async fn cmd_unpublish(args: impl Iterator<Item = String>) -> Result<()> {
-    let (slug, server) = parse_target_args(args, "unpublish <slug>")?;
+async fn cmd_unpublish(slug: String, server: Option<String>) -> Result<()> {
     let client = build_client(server.as_deref())?;
     let summary = client.unpublish(&slug).await?;
     println!("Unpublished {} (status: {})", summary.slug, summary.status);
     Ok(())
-}
-
-/// Parse a single positional argument plus an optional `--server <url>` flag.
-fn parse_target_args(
-    args: impl Iterator<Item = String>,
-    usage_tail: &str,
-) -> Result<(String, Option<String>)> {
-    let mut positional: Option<String> = None;
-    let mut server: Option<String> = None;
-    let mut args = args.peekable();
-    while let Some(arg) = args.next() {
-        match arg.as_str() {
-            "--server" => server = Some(take_value(&mut args, "--server")?),
-            other if other.starts_with('-') => bail!("unknown flag {other:?}\n{USAGE}"),
-            _ => {
-                if positional.is_some() {
-                    bail!("unexpected extra argument {arg:?}\n{USAGE}");
-                }
-                positional = Some(arg);
-            }
-        }
-    }
-    let positional =
-        positional.ok_or_else(|| anyhow!("usage: inkwell author {usage_tail} [--server <url>]"))?;
-    Ok((positional, server))
-}
-
-fn take_value<I: Iterator<Item = String>>(
-    args: &mut std::iter::Peekable<I>,
-    flag: &str,
-) -> Result<String> {
-    args.next()
-        .ok_or_else(|| anyhow!("flag {flag} requires a value"))
 }
 
 /// Build an [`InkwellClient`] from the environment-derived config plus an

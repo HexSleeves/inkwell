@@ -18,76 +18,28 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
 
+use crate::cli::args::ImportCommand;
 use crate::cli::author::{ParsedDocument, parse_markdown};
 use crate::client::{InkwellClient, PushAction};
 use crate::config::AuthorConfig;
 use crate::domain::slug::slugify;
 
-const USAGE: &str = "usage: inkwell import <vault> [--server <url>] [--dry-run]";
-
 /// Dispatch `inkwell import <vault>`.
-pub async fn run(args: impl Iterator<Item = String>) -> Result<()> {
-    let opts = ImportOptions::parse(args)?;
-    let scan =
-        collect_notes(&opts.vault).with_context(|| format!("scanning vault {:?}", opts.vault))?;
+pub async fn run(command: ImportCommand) -> Result<()> {
+    let scan = collect_notes(&command.vault)
+        .with_context(|| format!("scanning vault {:?}", command.vault))?;
 
     if scan.notes.is_empty() && scan.load_failures.is_empty() {
-        println!("No Markdown notes found under {:?}.", opts.vault);
+        println!("No Markdown notes found under {:?}.", command.vault);
         return Ok(());
     }
 
-    if opts.dry_run {
+    if command.dry_run {
         return report_dry_run(&scan);
     }
 
-    let client = build_client(opts.server.as_deref())?;
+    let client = build_client(command.server.as_deref())?;
     push_notes(&client, &scan).await
-}
-
-/// Parsed `inkwell import` invocation.
-#[derive(Debug, Clone)]
-struct ImportOptions {
-    vault: PathBuf,
-    server: Option<String>,
-    dry_run: bool,
-}
-
-impl ImportOptions {
-    fn parse(args: impl Iterator<Item = String>) -> Result<Self> {
-        let mut vault: Option<PathBuf> = None;
-        let mut server: Option<String> = None;
-        let mut dry_run = false;
-
-        let mut args = args.peekable();
-        while let Some(arg) = args.next() {
-            match arg.as_str() {
-                "--server" => {
-                    let value = args
-                        .next()
-                        .ok_or_else(|| anyhow!("flag --server requires a value\n{USAGE}"))?;
-                    if value.starts_with('-') {
-                        bail!("flag --server requires a value, got flag {value:?}\n{USAGE}");
-                    }
-                    server = Some(value);
-                }
-                "--dry-run" => dry_run = true,
-                other if other.starts_with('-') => bail!("unknown flag {other:?}\n{USAGE}"),
-                _ => {
-                    if vault.is_some() {
-                        bail!("unexpected extra argument {arg:?}\n{USAGE}");
-                    }
-                    vault = Some(PathBuf::from(arg));
-                }
-            }
-        }
-
-        let vault = vault.ok_or_else(|| anyhow!("a vault directory is required\n{USAGE}"))?;
-        Ok(Self {
-            vault,
-            server,
-            dry_run,
-        })
-    }
 }
 
 /// A note discovered in the vault: its source path plus the document derived
@@ -319,6 +271,8 @@ fn build_client(server: Option<&str>) -> Result<InkwellClient> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cli::args::{Cli, Command};
+    use clap::Parser;
 
     /// A throwaway directory under the system temp dir, removed on drop. Keeps
     /// the vault-walk tests pure (filesystem only, no network) without pulling
@@ -454,41 +408,39 @@ mod tests {
     #[test]
     fn parse_rejects_dry_run_value_flag() {
         // `--server` needs a value.
-        let args = ["/vault".to_string(), "--server".to_string()].into_iter();
-        assert!(ImportOptions::parse(args).is_err());
+        assert!(Cli::try_parse_from(["inkwell", "import", "/vault", "--server"]).is_err());
     }
 
     #[test]
     fn parse_rejects_flag_as_server_value() {
         // A following flag must not be silently consumed as the server URL.
-        let args = [
-            "/vault".to_string(),
-            "--server".to_string(),
-            "--dry-run".to_string(),
-        ]
-        .into_iter();
-        assert!(ImportOptions::parse(args).is_err());
+        assert!(
+            Cli::try_parse_from(["inkwell", "import", "/vault", "--server", "--dry-run"]).is_err()
+        );
     }
 
     #[test]
     fn parse_collects_vault_server_and_dry_run() {
-        let args = [
-            "/vault".to_string(),
-            "--server".to_string(),
-            "https://example.com".to_string(),
-            "--dry-run".to_string(),
-        ]
-        .into_iter();
-        let opts = ImportOptions::parse(args).unwrap();
-        assert_eq!(opts.vault, PathBuf::from("/vault"));
-        assert_eq!(opts.server.as_deref(), Some("https://example.com"));
-        assert!(opts.dry_run);
+        let cli = Cli::parse_from([
+            "inkwell",
+            "import",
+            "/vault",
+            "--server",
+            "https://example.com",
+            "--dry-run",
+        ]);
+        assert!(matches!(
+            cli.command,
+            Command::Import(ref opts)
+                if opts.vault == Path::new("/vault")
+                    && opts.server.as_deref() == Some("https://example.com")
+                    && opts.dry_run
+        ));
     }
 
     #[test]
     fn parse_requires_vault() {
-        let args = std::iter::empty::<String>();
-        assert!(ImportOptions::parse(args).is_err());
+        assert!(Cli::try_parse_from(["inkwell", "import"]).is_err());
     }
 
     #[test]

@@ -9,6 +9,7 @@ ammonia = "4"
 anyhow = "1"
 async-trait = "0.1.89"
 axum = { version = "0.8", features = ["json"] }
+clap = { version = "4", features = ["derive"] }
 comrak = "0.52"
 dotenvy = "0.15"
 http = "1"

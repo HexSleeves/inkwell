@@ -5,6 +5,8 @@ use anyhow::Result;
 use tokio::net::TcpListener;
 use tracing::info;
 
+use clap::Parser;
+use inkwell::cli::args::{Cli, Command, DbCommand};
 use inkwell::cli::author;
 use inkwell::cli::import;
 use inkwell::cli::migrate::{db_migrate, db_rollback, db_status};
@@ -16,51 +18,40 @@ use inkwell::mcp;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let mut args = std::env::args().skip(1);
-    let command = args.next();
+    let cli = Cli::parse();
     // The MCP server speaks JSON-RPC over stdout, so its logs must go to stderr
     // to avoid corrupting the protocol stream. Every other command logs to
     // stdout as before.
-    let mcp_mode = command.as_deref() == Some("mcp");
+    let mcp_mode = matches!(cli.command, Command::Mcp);
     init_tracing(mcp_mode);
 
-    match command.as_deref() {
-        Some("serve") => serve().await,
-        Some("mcp") => run_mcp().await,
-        Some("db") => match args.next().as_deref() {
-            Some("migrate") => {
+    match cli.command {
+        Command::Serve => serve().await,
+        Command::Mcp => run_mcp().await,
+        Command::Db { command } => match command {
+            DbCommand::Migrate => {
                 let config = Config::from_env()?;
                 let pool = create_pool(&config.database_url)?;
                 db_migrate(&pool).await
             }
-            Some("rollback") => {
-                let steps = args
-                    .next()
-                    .as_deref()
-                    .map(str::parse::<usize>)
-                    .transpose()?
-                    .unwrap_or(1);
+            DbCommand::Rollback { steps } => {
                 let config = Config::from_env()?;
                 let pool = create_pool(&config.database_url)?;
                 db_rollback(&pool, steps).await
             }
-            Some("status") => {
+            DbCommand::Status => {
                 let config = Config::from_env()?;
                 let pool = create_pool(&config.database_url)?;
                 db_status(&pool).await
             }
-            _ => anyhow::bail!("usage: inkwell db <migrate|rollback [n]|status>"),
         },
-        Some("seed") => {
+        Command::Seed(command) => {
             let config = Config::from_env()?;
             let pool = create_pool(&config.database_url)?;
-            seed::run(&pool, args).await
+            seed::run(&pool, command).await
         }
-        Some("author") => author::run(args).await,
-        Some("import") => import::run(args).await,
-        _ => anyhow::bail!(
-            "usage: inkwell <serve|mcp|db migrate|db rollback [n]|db status|seed [<vault>]|author <new|push|publish|unpublish>|import <vault> [--server <url>] [--dry-run]>"
-        ),
+        Command::Author { command } => author::run(command).await,
+        Command::Import(command) => import::run(command).await,
     }
 }
 

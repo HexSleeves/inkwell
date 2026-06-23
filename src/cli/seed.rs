@@ -25,6 +25,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use sqlx::PgPool;
 
+use crate::cli::args::SeedCommand;
 use crate::cli::author::{ParsedDocument, parse_markdown};
 use crate::db::documents::{create_document, set_rendered_html};
 use crate::domain::document::{DocumentStatus, NewDocument, StatusFilter};
@@ -37,17 +38,10 @@ const DEFAULT_VAULT: &str = "examples/garden";
 /// Dispatch `inkwell seed [<vault>]`. The optional positional argument is a
 /// directory of front-mattered Markdown notes; it defaults to the bundled
 /// sample vault.
-pub async fn run(pool: &PgPool, mut args: impl Iterator<Item = String>) -> Result<()> {
-    let vault = match args.next() {
-        Some(arg) if arg.starts_with('-') => {
-            bail!("usage: inkwell seed [<vault>]")
-        }
-        Some(arg) => PathBuf::from(arg),
-        None => PathBuf::from(DEFAULT_VAULT),
-    };
-    if args.next().is_some() {
-        bail!("usage: inkwell seed [<vault>]");
-    }
+pub async fn run(pool: &PgPool, command: SeedCommand) -> Result<()> {
+    let vault = command
+        .vault
+        .unwrap_or_else(|| PathBuf::from(DEFAULT_VAULT));
     seed(pool, &vault).await
 }
 
