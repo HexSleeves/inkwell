@@ -29,7 +29,9 @@ An open, API-first Markdown publishing platform (digital garden) implemented as 
 - MCP: `cargo run --bin inkwell -- mcp` (requires running serve)
 
 ## Scaffold Growth
+
 After meaningful work, run GROW:
+
 - Ground: what changed in reality?
 - Record: update `ROUTER.md` and relevant `context/` files
 - Orient: create or update a `patterns/` runbook if this can recur
@@ -38,5 +40,6 @@ After meaningful work, run GROW:
 The scaffold grows from real work, not just setup. See the GROW step in `ROUTER.md` for details.
 
 ## Navigation
+
 At the start of every session, read `ROUTER.md` before doing anything else.
 For full project context, patterns, and task guidance — everything is there.

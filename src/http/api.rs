@@ -351,7 +351,12 @@ pub async fn publish_document(
     // links to. Fully inert unless INKWELL_WEBMENTION_SEND=true; always
     // best-effort and detached, so it never blocks or fails the publish.
     crate::http::webmention_send::maybe_send(&state, &document.slug, &document.body_markdown);
-    record_audit(&state, AuditAction::Publish, Some(document.id), &document.slug);
+    record_audit(
+        &state,
+        AuditAction::Publish,
+        Some(document.id),
+        &document.slug,
+    );
     Ok((StatusCode::OK, Json(DocumentEnvelope::from(document))).into_response())
 }
 
@@ -374,7 +379,12 @@ pub async fn unpublish_document(
     };
     // No longer publicly resolvable: downgrade links pointing at this slug to stubs.
     garden::backfill_after_change(&state.pool, document.id, &document.slug).await;
-    record_audit(&state, AuditAction::Unpublish, Some(document.id), &document.slug);
+    record_audit(
+        &state,
+        AuditAction::Unpublish,
+        Some(document.id),
+        &document.slug,
+    );
     Ok((StatusCode::OK, Json(DocumentEnvelope::from(document))).into_response())
 }
 
@@ -435,7 +445,12 @@ async fn create_document(
     }
     // Light up any existing stubs that pointed at this new slug.
     garden::backfill_after_change(&state.pool, document.id, &document.slug).await;
-    record_audit(&state, AuditAction::Create, Some(document.id), &document.slug);
+    record_audit(
+        &state,
+        AuditAction::Create,
+        Some(document.id),
+        &document.slug,
+    );
     Ok((StatusCode::CREATED, Json(DocumentEnvelope::from(document))).into_response())
 }
 
@@ -658,7 +673,12 @@ async fn update_document(
     {
         tracing::warn!(document_id = %document.id, %error, "index_note failed; embeddings may be stale until next save");
     }
-    record_audit(&state, AuditAction::Update, Some(document.id), &document.slug);
+    record_audit(
+        &state,
+        AuditAction::Update,
+        Some(document.id),
+        &document.slug,
+    );
     Ok((StatusCode::OK, Json(DocumentEnvelope::from(document))).into_response())
 }
 

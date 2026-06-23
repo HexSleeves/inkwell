@@ -28,6 +28,7 @@ Then read this file fully before doing anything else in this session.
 ## Current Project State
 
 **Working:**
+
 - Full REST CRUD API for documents (`/documents`, `/documents/{slug}`, publish/unpublish)
 - Backlinks (`/documents/{slug}/backlinks`) + garden graph (`/graph`, `/documents/{slug}/graph`)
 - Wikilink rendering with `[[links]]` and `![[embeds]]` transclusion (depth + cycle bounded)
@@ -43,11 +44,13 @@ Then read this file fully before doing anything else in this session.
 - `inkwell import` CLI for bulk import from Markdown files
 
 **Not yet built:**
+
 - Slug rename / redirect handling (slugs are currently immutable after creation)
 - Media/image upload (notes are Markdown text only)
 - Multi-user / per-user auth (single shared API key today)
 
 **Known issues:**
+
 - `set_document_status` (`publish`/`unpublish`) does not bump `version` or `updated_at` — status changes are invisible to the `If-Match` concurrency guard
 
 ## Routing Table
