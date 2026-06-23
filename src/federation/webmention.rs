@@ -38,14 +38,32 @@ pub fn body_links_to_target(body: &str, target_url: &str) -> bool {
     if needle.is_empty() {
         return false;
     }
-    if body.contains(needle) {
+    if contains_url_token(body, needle) {
         return true;
     }
     // Tolerate a trailing-slash mismatch in either direction.
     match needle.strip_suffix('/') {
-        Some(stripped) => !stripped.is_empty() && body.contains(stripped),
-        None => body.contains(&format!("{needle}/")),
+        Some(stripped) => !stripped.is_empty() && contains_url_token(body, stripped),
+        None => contains_url_token(body, &format!("{needle}/")),
     }
+}
+
+/// Whether `body` contains `needle` as a complete URL token, i.e. not merely as a
+/// prefix of a longer URL. A bare `body.contains` would wrongly accept
+/// `https://x/notes/hello-world` as a mention of `https://x/notes/hello`; we
+/// require the character right after the match to be a URL boundary (a quote,
+/// bracket, fragment/query delimiter, whitespace, or end-of-string).
+fn contains_url_token(body: &str, needle: &str) -> bool {
+    body.match_indices(needle).any(|(start, _)| {
+        let end = start + needle.len();
+        match body[end..].chars().next() {
+            None => true,
+            Some(c) => {
+                c.is_whitespace()
+                    || matches!(c, '"' | '\'' | '<' | '>' | ')' | ']' | '}' | '?' | '#')
+            }
+        }
+    })
 }
 
 /// Deliver a Webmention for `source_url` → `target_url`: discover the target's
@@ -141,7 +159,10 @@ fn extract_attr(tag: &str, attr: &str) -> Option<String> {
         let value = match rest.chars().next() {
             Some('"') => rest[1..].split('"').next(),
             Some('\'') => rest[1..].split('\'').next(),
-            _ => rest.split([' ', '\t', '\n', '\r', '>', '/']).next(),
+            // Unquoted: split on whitespace and the tag terminator only — NOT on
+            // '/', or a URL like `href=https://t.example/wm` would truncate to
+            // `https:` and a root-relative `href=/webmention` to an empty value.
+            _ => rest.split([' ', '\t', '\n', '\r', '>']).next(),
         };
         return value.map(|v| v.to_string());
     }
@@ -251,5 +272,34 @@ mod tests {
         );
         // Must not match a different attribute that ends in the name.
         assert_eq!(extract_attr("<a data-href=no>", "href"), None);
+        // Unquoted values must not be split on '/': a root-relative path and a
+        // full URL both come through intact.
+        assert_eq!(
+            extract_attr("<link href=/webmention rel=webmention>", "href").as_deref(),
+            Some("/webmention")
+        );
+        assert_eq!(
+            extract_attr("<link href=https://t.example/wm rel=webmention>", "href").as_deref(),
+            Some("https://t.example/wm")
+        );
+    }
+
+    #[test]
+    fn body_links_to_target_rejects_prefix_of_longer_url() {
+        let target = "https://blog.example.com/notes/hello";
+        // A longer note whose URL has `hello` as a prefix must NOT count.
+        assert!(!body_links_to_target(
+            r#"<a href="https://blog.example.com/notes/hello-world">x</a>"#,
+            target
+        ));
+        // But the exact URL followed by a query/fragment still counts.
+        assert!(body_links_to_target(
+            r#"<a href="https://blog.example.com/notes/hello?utm=x">x</a>"#,
+            target
+        ));
+        assert!(body_links_to_target(
+            r#"<a href="https://blog.example.com/notes/hello#section">x</a>"#,
+            target
+        ));
     }
 }

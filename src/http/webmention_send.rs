@@ -41,7 +41,7 @@ pub fn maybe_send(state: &AppState, slug: &str, body_markdown: &str) {
         return;
     };
 
-    let targets = external_links(body_markdown);
+    let targets = external_links(body_markdown, site_url);
     if targets.is_empty() {
         return;
     }
@@ -70,18 +70,38 @@ fn note_public_url(site_url: &str, slug: &str) -> Option<String> {
     base.join(slug).ok().map(|u| u.to_string())
 }
 
-/// Extract distinct external http(s) URLs the note links out to. Scans markdown
+/// Extract distinct *external* http(s) URLs the note links out to. Scans markdown
 /// inline/auto links and bare URLs; internal wikilinks (`[[...]]`) carry no
-/// scheme and are ignored. The result is deduplicated and order-stable.
-fn external_links(markdown: &str) -> Vec<String> {
+/// scheme and are ignored. URLs whose origin matches `site_url` are dropped so a
+/// note never sends a Webmention to itself via an absolute internal link. The
+/// result is deduplicated and order-stable.
+fn external_links(markdown: &str, site_url: &str) -> Vec<String> {
+    let site = reqwest::Url::parse(site_url).ok();
     let mut seen = HashSet::new();
     let mut out = Vec::new();
     for url in scan_http_urls(markdown) {
+        if is_same_origin(&url, site.as_ref()) {
+            continue;
+        }
         if seen.insert(url.clone()) {
             out.push(url);
         }
     }
     out
+}
+
+/// Whether `url` shares an origin (host + effective port) with the local site, so
+/// it should be excluded from outbound send targets. A URL that fails to parse is
+/// treated as not-same-origin (the SSRF guard re-validates it before any fetch).
+fn is_same_origin(url: &str, site: Option<&reqwest::Url>) -> bool {
+    let Some(site) = site else {
+        return false;
+    };
+    let Ok(parsed) = reqwest::Url::parse(url) else {
+        return false;
+    };
+    parsed.host_str() == site.host_str()
+        && parsed.port_or_known_default() == site.port_or_known_default()
 }
 
 /// Find every `http://` / `https://` URL substring in `text`, trimming common
@@ -129,10 +149,14 @@ fn utf8_len(first: u8) -> usize {
 mod tests {
     use super::*;
 
+    // A site URL that does not match any link in these fixtures, so the
+    // same-origin filter is a no-op for the external-extraction assertions.
+    const OTHER_SITE: &str = "https://blog.example.org";
+
     #[test]
     fn extracts_inline_and_bare_external_links() {
         let md = "See [example](https://example.com/post) and https://other.org/page too.";
-        let links = external_links(md);
+        let links = external_links(md, OTHER_SITE);
         assert!(links.contains(&"https://example.com/post".to_string()));
         assert!(links.contains(&"https://other.org/page".to_string()));
     }
@@ -140,16 +164,23 @@ mod tests {
     #[test]
     fn dedupes_and_ignores_wikilinks() {
         let md = "[[internal-note]] https://example.com/a https://example.com/a";
-        let links = external_links(md);
+        let links = external_links(md, OTHER_SITE);
         assert_eq!(links, vec!["https://example.com/a".to_string()]);
     }
 
     #[test]
     fn trims_trailing_markdown_punctuation() {
         let md = "(see https://example.com/x). Also: https://example.com/y!";
-        let links = external_links(md);
+        let links = external_links(md, OTHER_SITE);
         assert!(links.contains(&"https://example.com/x".to_string()));
         assert!(links.contains(&"https://example.com/y".to_string()));
+    }
+
+    #[test]
+    fn excludes_same_origin_internal_links() {
+        let md = "internal https://blog.example.com/other and external https://example.com/x";
+        let links = external_links(md, "https://blog.example.com");
+        assert_eq!(links, vec!["https://example.com/x".to_string()]);
     }
 
     #[test]
@@ -166,6 +197,6 @@ mod tests {
 
     #[test]
     fn no_external_links_yields_empty() {
-        assert!(external_links("just [[wikilinks]] and plain text").is_empty());
+        assert!(external_links("just [[wikilinks]] and plain text", OTHER_SITE).is_empty());
     }
 }

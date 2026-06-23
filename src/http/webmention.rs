@@ -48,10 +48,12 @@ pub async fn webmention(
     // here — that happens in async verification, behind the SSRF guard.
     let source_url = validate_public_url(&source)
         .map_err(|err| AppError::BadRequest(format!("Invalid \"source\": {err}.")))?;
+    reject_url_userinfo(&source_url, "source")?;
 
     // `target` must be a valid http(s) URL on THIS site.
     let target_url = validate_public_url(&target)
         .map_err(|err| AppError::BadRequest(format!("Invalid \"target\": {err}.")))?;
+    reject_url_userinfo(&target_url, "target")?;
 
     if source_url == target_url {
         return Err(AppError::BadRequest(
@@ -122,6 +124,18 @@ pub async fn webmention(
     });
 
     Ok(StatusCode::ACCEPTED.into_response())
+}
+
+/// Reject a URL that carries userinfo (`user:pass@host`). Credentials in a
+/// `source`/`target` would be persisted and echoed back through the stored
+/// mention, leaking them; they are never legitimate on a public Webmention URL.
+fn reject_url_userinfo(url: &Url, field: &str) -> Result<(), AppError> {
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err(AppError::BadRequest(format!(
+            "Invalid \"{field}\": URL credentials are not allowed."
+        )));
+    }
+    Ok(())
 }
 
 /// Drop an unverifiable mention, logging (but never surfacing) a DB error.
@@ -251,6 +265,13 @@ mod tests {
         assert_eq!(target_slug(&url("https://blog.example.com")), None);
         // Nested paths are not top-level notes (e.g. /tags/foo, /page/2).
         assert_eq!(target_slug(&url("https://blog.example.com/tags/foo")), None);
+    }
+
+    #[test]
+    fn reject_url_userinfo_rejects_credentials() {
+        assert!(reject_url_userinfo(&url("https://user:pass@example.com/post"), "source").is_err());
+        assert!(reject_url_userinfo(&url("https://user@example.com/post"), "source").is_err());
+        assert!(reject_url_userinfo(&url("https://example.com/post"), "source").is_ok());
     }
 
     #[test]

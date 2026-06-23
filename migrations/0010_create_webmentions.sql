@@ -16,6 +16,10 @@ CREATE TABLE IF NOT EXISTS webmentions (
   CONSTRAINT webmentions_source_target_key UNIQUE (source_url, target_note_id)
 );
 
--- Surface a note's verified mentions (the "mentions" read path) by target.
-CREATE INDEX IF NOT EXISTS webmentions_target_note_id_idx
-    ON webmentions (target_note_id);
+-- Surface a note's verified mentions (the "mentions" read path) by target. The
+-- read path always filters status = 'verified' and orders by recency, so a
+-- partial composite index on (target_note_id, created_at DESC, id) WHERE verified
+-- serves both the filter and the sort directly as the table grows.
+CREATE INDEX IF NOT EXISTS webmentions_target_verified_created_idx
+    ON webmentions (target_note_id, created_at DESC, id)
+    WHERE status = 'verified';

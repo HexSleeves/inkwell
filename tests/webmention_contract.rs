@@ -197,7 +197,8 @@ async fn verified_mentions_surface_in_backlinks_and_respect_visibility() -> anyh
 
     // DB-level visibility contract: public sees the published note's mention,
     // not the draft's; the owner sees both.
-    let pub_public = webmentions::verified_mentions(&pool, published.id, Visibility::Public).await?;
+    let pub_public =
+        webmentions::verified_mentions(&pool, published.id, Visibility::Public).await?;
     assert_eq!(pub_public.len(), 1);
     assert_eq!(pub_public[0].source_url, "https://a.example/post");
 

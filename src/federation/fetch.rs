@@ -22,6 +22,7 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail};
 use reqwest::Url;
 use reqwest::redirect::Policy;
+use tokio::time::Instant;
 
 use super::ssrf::{is_blocked_ip, validate_public_url};
 
@@ -97,8 +98,19 @@ async fn guarded_request(
     form_body: Option<String>,
 ) -> Result<FetchedPage> {
     let mut current = validate_public_url(url).context("URL failed SSRF validation")?;
+    // One end-to-end deadline across ALL redirect hops. A fresh client is built
+    // per hop (to re-pin `resolve_to_addrs`), so without this a chain of
+    // redirects could each get a full `FETCH_TIMEOUT` and run far longer than
+    // intended; the remaining budget is applied as each hop's client timeout.
+    let deadline = Instant::now() + FETCH_TIMEOUT;
 
     for _hop in 0..=MAX_REDIRECTS {
+        let now = Instant::now();
+        if now >= deadline {
+            bail!("federation fetch timed out after {FETCH_TIMEOUT:?}");
+        }
+        let remaining = deadline.saturating_duration_since(now);
+
         // The host is guaranteed present by `validate_public_url`.
         let host = current
             .host_str()
@@ -110,10 +122,14 @@ async fn guarded_request(
 
         // Resolve + deny-list check, then pin reqwest to exactly these IPs so it
         // cannot re-resolve to a different (internal) address between our check
-        // and its connect (DNS-rebinding defense).
+        // and its connect (DNS-rebinding defense). `.no_proxy()` disables
+        // automatic env/system proxy detection — with a proxy active the proxy
+        // becomes the connection destination and `resolve_to_addrs` is no longer
+        // authoritative, which would defeat the IP-pinning SSRF defense.
         let addrs = resolve_allowed_addrs(&host, port).await?;
         let client = reqwest::Client::builder()
-            .timeout(FETCH_TIMEOUT)
+            .timeout(remaining)
+            .no_proxy()
             .redirect(Policy::none())
             .user_agent(USER_AGENT)
             .resolve_to_addrs(&host, &addrs)
