@@ -1,3 +1,4 @@
+pub mod audit;
 pub mod chunks;
 pub mod documents;
 pub mod links;

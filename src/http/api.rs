@@ -7,8 +7,10 @@ use serde::Serialize;
 use serde_json::Value;
 use tokio::time::{Duration, timeout};
 
+use crate::db::audit::{self, AuditAction};
 use crate::db::documents;
 use crate::db::links::{self, Backlink, Graph, GraphEdge, GraphNode, Visibility};
+use crate::domain::author::BOOTSTRAP_ADMIN_ID;
 use crate::domain::document::{
     DEFAULT_LIMIT, Document, DocumentPatch, DocumentStatus, GrowthStage, MAX_BODY_MARKDOWN_LENGTH,
     MAX_LIMIT, MAX_REQUEST_BODY_BYTES, MAX_TITLE_LENGTH, NewDocument, StatusFilter,
@@ -349,6 +351,13 @@ pub async fn publish_document(
     // links to. Fully inert unless INKWELL_WEBMENTION_SEND=true; always
     // best-effort and detached, so it never blocks or fails the publish.
     crate::http::webmention_send::maybe_send(&state, &document.slug, &document.body_markdown);
+    record_audit(
+        &state,
+        AuditAction::Publish,
+        Some(document.id),
+        &document.slug,
+    )
+    .await;
     Ok((StatusCode::OK, Json(DocumentEnvelope::from(document))).into_response())
 }
 
@@ -371,6 +380,13 @@ pub async fn unpublish_document(
     };
     // No longer publicly resolvable: downgrade links pointing at this slug to stubs.
     garden::backfill_after_change(&state.pool, document.id, &document.slug).await;
+    record_audit(
+        &state,
+        AuditAction::Unpublish,
+        Some(document.id),
+        &document.slug,
+    )
+    .await;
     Ok((StatusCode::OK, Json(DocumentEnvelope::from(document))).into_response())
 }
 
@@ -431,6 +447,13 @@ async fn create_document(
     }
     // Light up any existing stubs that pointed at this new slug.
     garden::backfill_after_change(&state.pool, document.id, &document.slug).await;
+    record_audit(
+        &state,
+        AuditAction::Create,
+        Some(document.id),
+        &document.slug,
+    )
+    .await;
     Ok((StatusCode::CREATED, Json(DocumentEnvelope::from(document))).into_response())
 }
 
@@ -653,6 +676,13 @@ async fn update_document(
     {
         tracing::warn!(document_id = %document.id, %error, "index_note failed; embeddings may be stale until next save");
     }
+    record_audit(
+        &state,
+        AuditAction::Update,
+        Some(document.id),
+        &document.slug,
+    )
+    .await;
     Ok((StatusCode::OK, Json(DocumentEnvelope::from(document))).into_response())
 }
 
@@ -679,6 +709,7 @@ async fn delete_document(
     }
     // Inbound edges now dangle; re-render those sources so they fall back to stubs.
     garden::rerender_sources(&state.pool, &affected).await;
+    record_audit(&state, AuditAction::Delete, Some(document.id), &slug).await;
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
@@ -793,6 +824,34 @@ fn request_visibility(headers: &HeaderMap, config: &crate::config::Config) -> Vi
         Visibility::All
     } else {
         Visibility::Public
+    }
+}
+
+/// Record a successful mutating action in the write-audit trail (ADR 0009, plan
+/// 023, slice 1). BEST-EFFORT, mirroring [`garden::persist_source_edges`]: a
+/// failed insert only logs a `warn!` and never changes the handler's response —
+/// the write already succeeded and the audit row is metadata.
+///
+/// Slice 1 has no per-request principal, so every write is attributed to the
+/// bootstrap admin author with `actor_label = "shared-key"`. Per-author
+/// attribution lands once token resolution exists (slice 2).
+async fn record_audit(
+    state: &AppState,
+    action: AuditAction,
+    document_id: Option<uuid::Uuid>,
+    slug: &str,
+) {
+    if let Err(error) = audit::record_write(
+        &state.pool,
+        Some(BOOTSTRAP_ADMIN_ID),
+        "shared-key",
+        action,
+        document_id,
+        Some(slug),
+    )
+    .await
+    {
+        tracing::warn!(action = action.as_str(), slug, %error, "write_audit insert failed; audit row dropped");
     }
 }
 
