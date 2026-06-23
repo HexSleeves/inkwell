@@ -74,7 +74,7 @@ pub fn render_tag_page(
         r#"<span class="spacer">Older &rarr;</span>"#.to_string()
     };
     let pager = if total_pages > 1 {
-        format!(r#"\n        <nav class="pager">{}{}</nav>"#, prev, next)
+        format!(r#"<nav class="pager">{}{}</nav>"#, prev, next)
     } else {
         String::new()
     };

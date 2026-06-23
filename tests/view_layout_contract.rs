@@ -1,5 +1,28 @@
+use inkwell::domain::document::{Document, DocumentStatus, GrowthStage};
+use inkwell::views::document::render_document_page;
+use inkwell::views::index::render_index_page;
 use inkwell::views::layout::{HeadMeta, derive_excerpt, render_page};
 use serde_json::json;
+
+/// A published note carrying tags and an excerpt-worthy body — exactly the
+/// shape that surfaces the raw-string `\n` regression (visible chips/excerpt
+/// separators) in the rendered HTML.
+fn tagged_document() -> Document {
+    let now = time::OffsetDateTime::now_utc();
+    Document {
+        id: uuid::Uuid::nil(),
+        slug: "hello-world".to_string(),
+        title: "Hello World".to_string(),
+        body_markdown: "A first note with enough prose to derive a non-empty excerpt.".to_string(),
+        rendered_html: "<p>A first note.</p>".to_string(),
+        status: DocumentStatus::Published,
+        growth: GrowthStage::Seedling,
+        tags: vec!["rust".to_string(), "garden".to_string()],
+        version: 1,
+        created_at: now,
+        updated_at: now,
+    }
+}
 
 #[test]
 fn derive_excerpt_truncates_on_char_boundary_without_panicking() {
@@ -98,4 +121,44 @@ fn render_page_allows_json_ld_with_csp_nonce_and_without_tailwind_runtime() {
     assert!(html.contains(r#"<script type="application/ld+json" nonce="nonce123">"#));
     assert!(!html.contains(&browser_runtime_src));
     assert!(!html.contains(&runtime_config_marker));
+}
+
+#[test]
+fn document_page_with_tags_has_no_literal_backslash_n() {
+    // Regression: several view helpers built HTML with a RAW string literal that
+    // started with `\n` (two literal chars: backslash + n), which the browser
+    // rendered as visible `\n` text between the meta line and the tag chips.
+    // The fixture carries tags so the tag-chip template is exercised; this
+    // assertion would have FAILED before the fix.
+    let document = tagged_document();
+    let html = render_document_page(&document, &[], Some("http://localhost"), "nonce123");
+    assert!(
+        html.contains(r#"<ul class="tags">"#),
+        "tag chips must render"
+    );
+    assert!(
+        !html.contains("\\n"),
+        "rendered HTML must not contain a literal backslash-n"
+    );
+}
+
+#[test]
+fn index_listing_with_tags_has_no_literal_backslash_n() {
+    // The shared document list renders excerpts and tag chips for each entry;
+    // both came from raw-string `\n` templates. Exercise the listing and assert
+    // no literal backslash-n leaks into the rendered output.
+    let documents = vec![tagged_document()];
+    let html = render_index_page(&documents, 1, 1, Some("http://localhost"));
+    assert!(
+        html.contains(r#"<p class="excerpt">"#),
+        "excerpt must render"
+    );
+    assert!(
+        html.contains(r#"<ul class="tags">"#),
+        "tag chips must render"
+    );
+    assert!(
+        !html.contains("\\n"),
+        "rendered HTML must not contain a literal backslash-n"
+    );
 }
