@@ -81,33 +81,12 @@ pub async fn document_related(
         )));
     };
 
-    // Embed the note's body and find its nearest neighbors. The "related" panel
-    // is a non-essential enhancement, so a provider error (e.g. a Voyage rate
-    // limit) degrades to "no related notes" rather than 500ing the request —
-    // the note itself already rendered. The mock embedder never errors.
-    let related = match state
-        .embedder
-        .embed(std::slice::from_ref(&document.body_markdown))
-        .await
-    {
-        Ok(embeddings) => match embeddings.first() {
-            Some(embedding) => {
-                chunks::related_notes(
-                    &state.pool,
-                    document.id,
-                    embedding,
-                    visibility,
-                    RELATED_LIMIT,
-                )
-                .await?
-            }
-            None => Vec::new(),
-        },
-        Err(error) => {
-            tracing::warn!(slug = %document.slug, %error, "related: embedding failed (provider error/rate limit); returning no related notes");
-            Vec::new()
-        }
-    };
+    // Use the stored chunk index to find nearest neighbors. No re-embedding is
+    // needed: note_chunks already holds per-note embeddings written by the
+    // indexer on every create/update. An origin note with no stored chunks
+    // (e.g. unindexed) returns an empty list rather than 500ing.
+    let related =
+        chunks::related_notes_for_note(&state.pool, document.id, visibility, RELATED_LIMIT).await?;
 
     let response = RelatedResponse {
         slug: document.slug,
