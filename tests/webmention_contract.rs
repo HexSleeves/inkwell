@@ -34,6 +34,7 @@ fn doc(slug: &str, status: DocumentStatus) -> NewDocument {
         status: Some(status),
         growth: None,
         tags: Vec::new(),
+        owner_id: None,
     }
 }
 

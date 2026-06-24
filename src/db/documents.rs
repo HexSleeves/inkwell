@@ -4,6 +4,7 @@ use crate::domain::document::{
     SearchOptions, StatusFilter, TagCount,
 };
 use sqlx::{PgPool, Postgres, QueryBuilder};
+use uuid::Uuid;
 
 const UNIQUE_VIOLATION: &str = "23505";
 
@@ -18,8 +19,13 @@ pub enum DbError {
 pub async fn create_document(pool: &PgPool, input: NewDocument) -> Result<Document, DbError> {
     let result = sqlx::query_as::<Postgres, Document>(
         r#"
-        INSERT INTO documents (slug, title, body_markdown, rendered_html, status, growth, tags)
-        VALUES ($1, $2, $3, $4, COALESCE($5, 'draft'), COALESCE($6, 'seedling'), $7)
+        INSERT INTO documents (slug, title, body_markdown, rendered_html, status, growth, tags, owner_id)
+        VALUES (
+            $1, $2, $3, $4, COALESCE($5, 'draft'), COALESCE($6, 'seedling'), $7,
+            -- Stamp the creating author; fall back to the bootstrap admin when no
+            -- principal id is supplied, matching the column default (ADR 0009).
+            COALESCE($8, '00000000-0000-0000-0000-000000000001'::uuid)
+        )
         RETURNING id, slug, title, body_markdown, rendered_html, status, growth, tags, version, created_at, updated_at
         "#,
     )
@@ -30,10 +36,24 @@ pub async fn create_document(pool: &PgPool, input: NewDocument) -> Result<Docume
     .bind(input.status.map(|status| status.as_str().to_string()))
     .bind(input.growth.map(|growth| growth.as_str().to_string()))
     .bind(&input.tags)
+    .bind(input.owner_id)
     .fetch_one(pool)
     .await;
 
     map_duplicate_slug(result, &input.slug)
+}
+
+/// The owner of a document by slug, for ownership enforcement (ADR 0009 slice 3).
+/// Outer `Option`: whether the document exists. Inner `Option<Uuid>`: its
+/// `owner_id`, which stays nullable until slice 4 tightens the column.
+pub async fn get_document_owner(
+    pool: &PgPool,
+    slug: &str,
+) -> Result<Option<Option<Uuid>>, sqlx::Error> {
+    sqlx::query_scalar::<Postgres, Option<Uuid>>("SELECT owner_id FROM documents WHERE slug = $1")
+        .bind(slug)
+        .fetch_optional(pool)
+        .await
 }
 
 pub async fn get_document_by_slug(

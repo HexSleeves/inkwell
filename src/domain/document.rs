@@ -118,6 +118,9 @@ pub struct NewDocument {
     /// Maturity stage; `None` lets the column default to `seedling`.
     pub growth: Option<GrowthStage>,
     pub tags: Vec<String>,
+    /// Owning author (ADR 0009 slice 3). `None` falls back to the bootstrap
+    /// admin via the column default, preserving pre-token behavior.
+    pub owner_id: Option<Uuid>,
 }
 
 #[derive(Clone, Debug, Default)]

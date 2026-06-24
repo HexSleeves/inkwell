@@ -10,7 +10,7 @@ use tokio::time::{Duration, timeout};
 use crate::db::audit::{self, AuditAction};
 use crate::db::documents;
 use crate::db::links::{self, Backlink, Graph, GraphEdge, GraphNode, Visibility};
-use crate::domain::author::Principal;
+use crate::domain::author::{Principal, Scope};
 use crate::domain::document::{
     DEFAULT_LIMIT, Document, DocumentPatch, DocumentStatus, GrowthStage, MAX_BODY_MARKDOWN_LENGTH,
     MAX_LIMIT, MAX_REQUEST_BODY_BYTES, MAX_TITLE_LENGTH, NewDocument, StatusFilter,
@@ -330,6 +330,7 @@ pub async fn publish_document(
         return Err(AppError::MethodNotAllowed(vec!["POST"]));
     }
     let principal = require_principal(&headers, &state.config, &state.pool).await?;
+    authorize_mutation(&state, &principal, Scope::Publish, &slug).await?;
     let Some(document) =
         documents::set_document_status(&state.pool, &slug, DocumentStatus::Published).await?
     else {
@@ -364,6 +365,7 @@ pub async fn unpublish_document(
         return Err(AppError::MethodNotAllowed(vec!["POST"]));
     }
     let principal = require_principal(&headers, &state.config, &state.pool).await?;
+    authorize_mutation(&state, &principal, Scope::Publish, &slug).await?;
     let Some(document) =
         documents::set_document_status(&state.pool, &slug, DocumentStatus::Draft).await?
     else {
@@ -390,6 +392,9 @@ async fn create_document(
     body: Bytes,
 ) -> Result<Response, AppError> {
     let principal = require_principal(&headers, &state.config, &state.pool).await?;
+    // Creating a note requires the `write` scope. Ownership is stamped from the
+    // principal below; there is no existing owner to check on a create.
+    require_scope(&principal, Scope::Write)?;
     enforce_body_limit(&body)?;
     let value = parse_json_body(body)?;
     let map = require_object(value)?;
@@ -413,6 +418,7 @@ async fn create_document(
             status: None,
             growth,
             tags,
+            owner_id: principal.author_id,
         },
     )
     .await?;
@@ -457,9 +463,7 @@ async fn list_documents(
     headers: HeaderMap,
     query: ListQuery,
 ) -> Result<Response, AppError> {
-    let authenticated = authenticate(&headers, &state.config, &state.pool)
-        .await
-        .is_some();
+    let authenticated = can_see_drafts(&headers, &state).await;
     let status = resolve_list_status(authenticated, query.status.as_deref())?;
     let mut limit =
         parse_non_negative_int(query.limit.as_deref(), "limit")?.unwrap_or(DEFAULT_LIMIT);
@@ -497,9 +501,7 @@ async fn get_document(
     headers: HeaderMap,
     slug: String,
 ) -> Result<Response, AppError> {
-    let authenticated = authenticate(&headers, &state.config, &state.pool)
-        .await
-        .is_some();
+    let authenticated = can_see_drafts(&headers, &state).await;
     let filter = if authenticated {
         StatusFilter { status: None }
     } else {
@@ -553,6 +555,7 @@ async fn update_document(
     body: Bytes,
 ) -> Result<Response, AppError> {
     let principal = require_principal(&headers, &state.config, &state.pool).await?;
+    authorize_mutation(&state, &principal, Scope::Write, &slug).await?;
     enforce_body_limit(&body)?;
     let value = parse_json_body(body)?;
     let map = require_object(value)?;
@@ -684,6 +687,7 @@ async fn delete_document(
     slug: String,
 ) -> Result<Response, AppError> {
     let principal = require_principal(&headers, &state.config, &state.pool).await?;
+    authorize_mutation(&state, &principal, Scope::Write, &slug).await?;
     // Resolve the note first so we can capture which sources link to it BEFORE
     // the row (and its inbound edges' target_note_id) are gone.
     let Some(document) =
@@ -816,13 +820,55 @@ fn resolve_list_status(
 /// is derived for the document/graph surfaces. Token-aware as of slice 2, so a
 /// public request (no `x-api-key`) still short-circuits without a DB lookup.
 async fn request_visibility(headers: &HeaderMap, state: &AppState) -> Visibility {
-    if authenticate(headers, &state.config, &state.pool)
-        .await
-        .is_some()
-    {
+    if can_see_drafts(headers, state).await {
         Visibility::All
     } else {
         Visibility::Public
+    }
+}
+
+/// Whether the request may see draft/unlisted content: it must resolve to a
+/// principal that holds the `read` scope (admin implies it). A token lacking
+/// `read` — e.g. a write-only agent token — is treated as a public reader. This
+/// is the slice-3 read gate; per-owner draft isolation (an author seeing only
+/// their OWN drafts) is deferred to slice 3b, which reworks `Visibility` into an
+/// owner-aware filter across the query layer.
+async fn can_see_drafts(headers: &HeaderMap, state: &AppState) -> bool {
+    authenticate(headers, &state.config, &state.pool)
+        .await
+        .is_some_and(|principal| principal.has(Scope::Read))
+}
+
+/// Require the principal to hold `scope` (admin implies all). 403 otherwise.
+fn require_scope(principal: &Principal, scope: Scope) -> Result<(), AppError> {
+    if principal.has(scope) {
+        Ok(())
+    } else {
+        Err(AppError::Forbidden(format!(
+            "This action requires the \"{scope}\" scope."
+        )))
+    }
+}
+
+/// Authorize a mutation on an EXISTING document (ADR 0009 slice 3): the principal
+/// must hold `scope` and, unless it is an admin, must own the target. Returns 403
+/// on a scope or ownership failure. A missing document yields `Ok(())` so the
+/// caller's own lookup returns the usual 404 (no special-casing here).
+async fn authorize_mutation(
+    state: &AppState,
+    principal: &Principal,
+    scope: Scope,
+    slug: &str,
+) -> Result<(), AppError> {
+    require_scope(principal, scope)?;
+    // Admin may act on any note; non-admins are confined to notes they own.
+    if principal.has(Scope::Admin) {
+        return Ok(());
+    }
+    match documents::get_document_owner(&state.pool, slug).await? {
+        None => Ok(()),
+        Some(owner) if owner == principal.author_id => Ok(()),
+        Some(_) => Err(AppError::Forbidden("You do not own this note.".to_string())),
     }
 }
 
