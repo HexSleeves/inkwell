@@ -26,17 +26,22 @@ cp .env.example .env
 
 Edit `.env`:
 
-- **`INKWELL_API_KEY`** — required. The shared write credential, sent as the
-  `X-API-Key` header on every write. The app refuses to start until it is set.
-  Use any sufficiently long random string, e.g. `openssl rand -hex 32`.
-- **`INKWELL_MCP_KEY`** — optional, but required for the AI walkthrough in
-  step 3. A *separate* credential the `inkwell mcp` server authenticates with,
-  so AI access can be granted and revoked independently of the human authoring
-  key. Generate it the same way.
+- **`INKWELL_API_KEY`** — required. The admin shared key (full access:
+  bootstrap + token management), sent as the `X-API-Key` header on writes. The
+  app refuses to start until it is set. Use a long random string, e.g.
+  `openssl rand -hex 32`.
+
+For the AI walkthrough (step 3) you grant the MCP server a **scoped token**
+rather than a second admin key (the old `INKWELL_MCP_KEY` was retired). Once the
+server is running, mint one:
+
+```bash
+inkwell author token create --name ai-agent --scopes read,write
+# prints `ink_<prefix>_<secret>` ONCE — copy it; it is unrecoverable
+```
 
 ```dotenv
 INKWELL_API_KEY=replace-with-a-long-random-string
-INKWELL_MCP_KEY=replace-with-a-different-long-random-string
 ```
 
 > Never commit real keys. `.env` is gitignored.
@@ -75,8 +80,9 @@ edit notes in your *live* garden. The server:
 
 - speaks the [Model Context Protocol](https://modelcontextprotocol.io) over
   **stdio** — start it with `inkwell mcp`;
-- authenticates against the running HTTP server with **`INKWELL_MCP_KEY`**
-  (set in step 1); and
+- authenticates against the running HTTP server with **`INKWELL_API_KEY`** set
+  to a **scoped token** (mint one above) — so AI access is least-privilege and
+  revocable independently of the admin key; and
 - exposes the tools `search_notes`, `read_note`, `list_notes`, `create_note`,
   and `update_note`. Updates carry the note `version` as an `If-Match` check,
   so an agent never clobbers a newer edit.
@@ -85,7 +91,7 @@ Make sure the stack from step 2 is running (the MCP server is a thin client of
 the HTTP API), then point your AI client at the `inkwell` binary's `mcp`
 subcommand. Most clients use a JSON config like the following — the example
 runs `inkwell mcp` inside the already-running compose container so it shares the
-network and `INKWELL_MCP_KEY`:
+network and environment:
 
 ```json
 {
@@ -109,7 +115,7 @@ If you have the `inkwell` binary on your host instead (e.g. `cargo build
       "args": ["mcp"],
       "env": {
         "INKWELL_API_URL": "http://localhost:3000",
-        "INKWELL_MCP_KEY": "the-same-value-as-in-your-.env"
+        "INKWELL_API_KEY": "ink_your-scoped-token-from-author-token-create"
       }
     }
   }
@@ -117,8 +123,8 @@ If you have the `inkwell` binary on your host instead (e.g. `cargo build
 ```
 
 `inkwell mcp` resolves the server URL from `INKWELL_API_URL` (falling back to
-`HOST`/`PORT`) and reads `INKWELL_MCP_KEY` from the environment; it logs to
-stderr so its stdout stays a clean JSON-RPC stream. Ask your agent to "list the
+`HOST`/`PORT`) and reads `INKWELL_API_KEY` (a scoped token) from the
+environment; it logs to stderr so its stdout stays a clean JSON-RPC stream. Ask your agent to "list the
 notes in the garden" or "search the garden for backlinks" to confirm the
 connection. A note an agent creates resolves its wikilinks and shows up in
 **Linked from** panels just like one you wrote by hand.

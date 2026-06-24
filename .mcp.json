@@ -5,7 +5,7 @@
       "args": ["mcp"],
       "env": {
         "INKWELL_API_URL": "https://inkwell-production-6396.up.railway.app",
-        "INKWELL_MCP_KEY": "dev-key-123"
+        "INKWELL_API_KEY": "replace-with-a-scoped-token-from-inkwell-author-token-create"
       }
     }
   }

@@ -37,7 +37,7 @@ Then read this file fully before doing anything else in this session.
 - MCP server (`inkwell mcp`) with 5 tools: `search_notes`, `read_note`, `list_notes`, `create_note`, `update_note`
 - HTML public site: index, paginated, document pages, tag index/pages, RSS feed, sitemap
 - Optimistic concurrency via `version` + `If-Match` (409 Conflict on stale writes)
-- Scoped author tokens (ADR 0009, plan 023): authors, `documents.owner_id`, durable write-audit trail (slice 1); token issuance via admin routes (`/admin/tokens` create/list/revoke), token resolution in `authenticate()` → `Principal`, per-author audit attribution, `inkwell author token` CLI (slice 2); **enforcement (slice 3)** — mutations require the right scope (`write` create/update/delete, `publish` publish/unpublish) and non-admins may only mutate notes they own (403 else); `create` stamps `owner_id`; draft READ requires the `read` scope (admin implies all). **Coarse read gate only** — a `read` token sees ALL drafts; per-owner draft read isolation is slice 3b.
+- Scoped author tokens (ADR 0009, plan 023): authors, `documents.owner_id`, durable write-audit trail (slice 1); token issuance via admin routes (`/admin/tokens` create/list/revoke), token resolution in `authenticate()` → `Principal`, per-author audit attribution, `inkwell author token` CLI (slice 2); **enforcement (slice 3)** — mutations require the right scope (`write` create/update/delete, `publish` publish/unpublish) and non-admins may only mutate notes they own (403 else); `create` stamps `owner_id`; draft READ requires the `read` scope (admin implies all). **Coarse read gate only** — a `read` token sees ALL drafts; per-owner draft read isolation is slice 3b. **Tightening (slice 4):** `documents.owner_id` is `NOT NULL` (migration 0017; DB default kept as a safety net); `INKWELL_MCP_KEY` **retired** — the MCP server authenticates with `INKWELL_API_KEY` set to a scoped token. Shared `INKWELL_API_KEY` is the admin/bootstrap key.
 - Webmention receiving (always on) + sending (opt-in via `INKWELL_WEBMENTION_SEND=true`)
 - Railway production deployment (auto-deploy on main push)
 - Docker Compose local stack (migrate → seed → serve)
@@ -48,7 +48,7 @@ Then read this file fully before doing anything else in this session.
 
 - Slug rename / redirect handling (slugs are currently immutable after creation)
 - Media/image upload (notes are Markdown text only)
-- Scoped-token **slice 3b**: per-owner draft READ isolation — rework the binary `Visibility` (Public/All) into an owner-aware filter across the query layer so a `read`-scoped author sees only their OWN drafts, not everyone's. Slice 4: downgrade the shared key to admin-only-everyday, `documents.owner_id NOT NULL`, retire `INKWELL_MCP_KEY` for a scoped token. (Issuance, resolution, and scope+ownership enforcement already shipped — see Working.)
+- Scoped-token **slice 3b** (only token work left): per-owner draft READ isolation — rework the binary `Visibility` (Public/All) into an owner-aware filter across the query layer so a `read`-scoped author sees only their OWN drafts, not everyone's. (Slices 1–4 shipped — see Working.)
 - Browser auth/login UI (ADR 0009 Option C, deferred)
 
 **Known issues:**

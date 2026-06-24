@@ -62,7 +62,7 @@ last_updated: 2026-06-23
 
 ### Two separate auth tokens (`INKWELL_API_KEY` + `INKWELL_MCP_KEY`)
 **Date:** 2026-01-01
-**Status:** Active
+**Status:** SUPERSEDED by scoped tokens — `INKWELL_MCP_KEY` was retired in slice 4 (2026-06-23). The MCP server now authenticates with `INKWELL_API_KEY` set to a scoped token; `INKWELL_API_KEY` alone is the admin/bootstrap key. Kept for history.
 **Decision:** Human authoring and MCP agent access use separate bearer tokens, both resolved to an admin `Principal` by `authenticate` for reads and `require_principal` for writes.
 **Reasoning:** Allows granting/revoking MCP access independently of the human authoring credential. In production you can rotate the MCP key after an agent breach without locking out the human author.
 **Alternatives considered:** Single shared key — simpler but no independent revocation. OAuth — rejected as over-engineering for a personal publishing tool.
@@ -84,13 +84,21 @@ last_updated: 2026-06-23
 **Alternatives considered:** Add `owner_id` to the `Document` struct + all SELECTs — rejected: broad churn for a check needed only on mutations. 404 (not 403) on ownership mismatch to hide existence — rejected: plan specifies 403; existence leak to an authenticated author is acceptable. Make `write` imply `read` — rejected: scopes stay orthogonal per ADR (request `read,write` for a read-write agent).
 **Consequences:** `NewDocument` gains `owner_id`; new `require_scope`/`authorize_mutation`/`can_see_drafts` helpers in `src/http/api.rs`; `src/http/ai.rs` read gate mirrors them. A `write`-only token can create a draft it cannot read back (no `read` scope) — grant `read,write` for read-write agents. Slice 3b will add owner-aware visibility; slice 4 still pending.
 
+### Tighten ownership; retire `INKWELL_MCP_KEY` (ADR 0009, plan 023, slice 4)
+**Date:** 2026-06-23
+**Status:** Active
+**Decision:** `documents.owner_id` is `NOT NULL` (migration 0017) — every note has an owner. The **DB default (bootstrap admin) is KEPT**, not dropped: the write API stamps `owner_id` explicitly, but other insert paths (seed, tests, maintenance) legitimately omit it, and the default makes those attribute to the admin rather than violating NOT NULL. The separate `INKWELL_MCP_KEY` credential is **removed** from `Config`/`AuthorConfig`/`auth`; the MCP server (`run_mcp`/`run_stdio`) authenticates with `INKWELL_API_KEY`, which operators set to a scoped token. Only the shared `INKWELL_API_KEY` remains a static admin credential.
+**Reasoning:** NOT NULL is the real goal (no orphan notes); dropping the default added fragility (any raw insert omitting `owner_id` would 500) for no correctness gain — deviation from the plan's "drop default", kept deliberately. Retiring the bespoke MCP key collapses two static admin keys into one and pushes MCP onto the scoped-token model (least-privilege, revocable) that slices 2–3 built.
+**Alternatives considered:** Drop the DB default per the plan — rejected: breaks seed/test/maintenance inserts; NOT NULL already guarantees ownership. Keep `INKWELL_MCP_KEY` as a deprecated fallback — rejected (user chose full retirement); the scoped-token path supersedes it. A dedicated `INKWELL_MCP_TOKEN` var — rejected: reusing `INKWELL_API_KEY` in the MCP's own environment is simpler and the client sends whatever key it's given.
+**Consequences:** **BREAKING for deploys** — Railway (and any MCP host) must set the MCP server's `INKWELL_API_KEY` to a scoped token (mint via `inkwell author token create --scopes read,write`) before the next deploy, or MCP auth fails. `.env.example`/`.mcp.json` updated; `TEST_MCP_KEY` removed (tests authenticate MCP with the shared key or a minted token). Slice 3b (owner-aware read visibility) is the only remaining token work.
+
 ### MCP server as a separate CLI process over stdio
 **Date:** 2026-01-01
 **Status:** Active
 **Decision:** `inkwell mcp` runs as a separate process over stdio (`rmcp::transport::io::stdio()`), delegates to `InkwellClient` (HTTP), and never opens a DB connection.
 **Reasoning:** The MCP server is a client of the HTTP API, not a peer. This keeps the server the single gatekeeper for auth, validation, and write ordering. The MCP process can be killed/restarted without affecting the running HTTP server.
 **Alternatives considered:** Embedding MCP in the HTTP server on a `/mcp` endpoint — rejected because it would require MCP clients to speak HTTP rather than the standard stdio transport.
-**Consequences:** `inkwell mcp` requires a running `inkwell serve` (or Railway deploy) to talk to. Set `INKWELL_API_URL` + `INKWELL_MCP_KEY` before running.
+**Consequences:** `inkwell mcp` requires a running `inkwell serve` (or Railway deploy) to talk to. Set `INKWELL_API_URL` + `INKWELL_API_KEY` (a scoped token) before running. (Pre-slice-4 this used `INKWELL_MCP_KEY`.)
 
 ### MockEmbedder + MockLlm for CI/tests
 **Date:** 2026-01-01
