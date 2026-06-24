@@ -357,6 +357,42 @@ async fn ask_empty_query_is_a_bad_request() -> anyhow::Result<()> {
     Ok(())
 }
 
+// MAX_ASK_QUERY_CHARS in src/http/ai.rs is 1_000 (not public). These assert the
+// guard rejects an over-cap question with a 400 BEFORE any provider work — so no
+// notes need to exist for retrieval/synthesis to run.
+#[tokio::test]
+async fn ask_rejects_overlong_get_query_before_provider_work() -> anyhow::Result<()> {
+    let _guard = db_guard().await;
+    let Some(router) = common::maybe_router_with_ai().await? else {
+        return Ok(());
+    };
+    let overlong = "a".repeat(1_001);
+    let (status, _json) = get_json(&router, &format!("/ask?q={overlong}")).await?;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    Ok(())
+}
+
+#[tokio::test]
+async fn ask_rejects_overlong_post_query_before_provider_work() -> anyhow::Result<()> {
+    let _guard = db_guard().await;
+    let Some(router) = common::maybe_router_with_ai().await? else {
+        return Ok(());
+    };
+    let payload = serde_json::json!({ "q": "a".repeat(1_001) });
+    let response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/ask")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&payload)?))?,
+        )
+        .await?;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    Ok(())
+}
+
 #[tokio::test]
 async fn ask_reports_not_configured_without_anthropic_key() -> anyhow::Result<()> {
     let _guard = db_guard().await;

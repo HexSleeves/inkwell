@@ -33,10 +33,10 @@ Removed stale TypeScript-era plan files: 002, 003, 005, 008, 009, 011, and 013.
 | 020 | `derive_excerpt` truncates on a char boundary (UTF-8 panic fix) | bug | P1 | S | none | new @c7b0a46 | DONE |
 | 021 | Consolidate the duplicated document-list rendering | tech-debt | P3 | S | none (coord. 020) | new @c7b0a46 | DONE |
 | 022 | Redact the API key in `Config`'s `Debug` impl | security | P3 | S | none | new @c7b0a46 | DONE |
-| 023 | Bound the public `/ask` cost surface | security/perf | P1 | S | none | new @fef38ad | TODO |
+| 023 | Bound the public `/ask` cost surface | security/perf | P1 | S | none | new @fef38ad | DONE |
 | 024 | Use stored chunks for related-note retrieval | bug/perf | P1 | M | none | new @fef38ad | TODO |
 | 025 | Track embedding provider provenance | bug/architecture | P2 | L | none | new @fef38ad | TODO |
-| 026 | Harden the RAG prompt boundary | security/AI correctness | P2 | M | 023 | new @fef38ad | TODO |
+| 026 | Harden the RAG prompt boundary | security/AI correctness | P2 | M | 023 | new @fef38ad | DONE |
 | 002 | Enforce coverage gate in GitHub Actions CI | dx | - | S | - | obsolete Node/Vitest coverage plan | REJECTED: remove |
 | 003 | Fix README export-surface + env-var drift | docs | - | S | - | obsolete package-export docs plan | REJECTED: remove |
 | 005 | Dedupe `escapeXml` + `normalizeSiteUrl` | tech-debt | - | S | - | fixed by Rust layout helpers | REJECTED: remove |
