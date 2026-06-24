@@ -241,7 +241,7 @@ pub async fn set_document_status(
     sqlx::query_as::<Postgres, Document>(
         r#"
         UPDATE documents
-        SET status = $2
+        SET status = $2, version = version + 1, updated_at = now()
         WHERE slug = $1 AND ($3::uuid IS NULL OR owner_id = $3)
         RETURNING id, slug, title, body_markdown, rendered_html, status, growth, tags, version, created_at, updated_at
         "#,
