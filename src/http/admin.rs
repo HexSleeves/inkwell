@@ -13,7 +13,7 @@
 
 use axum::Json;
 use axum::body::Bytes;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
 use serde::Serialize;
@@ -54,19 +54,56 @@ struct RevokeResponse {
     revoked: bool,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PruneResponse {
+    pruned: u64,
+}
+
+/// Query parameters for `GET /admin/tokens`.
+#[derive(Default, serde::Deserialize)]
+pub struct TokensQuery {
+    /// When `true`, include revoked tokens in the listing. Default: omit them.
+    all: Option<bool>,
+}
+
 /// `GET|POST /admin/tokens` — list tokens, or mint a new one. Admin only.
+///
+/// `GET /admin/tokens` hides revoked tokens by default; pass `?all=true` to
+/// include them.
 pub async fn tokens(
     State(state): State<AppState>,
     method: Method,
     headers: HeaderMap,
+    query: Query<TokensQuery>,
     body: Bytes,
 ) -> Result<Response, AppError> {
     require_admin(&headers, &state).await?;
     match method {
-        Method::GET => list_tokens(&state).await,
+        Method::GET => {
+            let include_revoked = query.all.unwrap_or(false);
+            list_tokens_handler(&state, include_revoked).await
+        }
         Method::POST => create_token(&state, body).await,
         _ => Err(AppError::MethodNotAllowed(vec!["GET", "POST"])),
     }
+}
+
+/// `POST /admin/tokens/prune` — hard-delete all revoked tokens. Admin only.
+///
+/// Only rows with `revoked_at IS NOT NULL` are removed; live tokens are
+/// untouched. Returns `{ "pruned": <count> }`.
+pub async fn prune_tokens(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+) -> Result<Response, AppError> {
+    if method != Method::POST {
+        return Err(AppError::MethodNotAllowed(vec!["POST"]));
+    }
+    require_admin(&headers, &state).await?;
+    let pruned = tokens::prune_revoked_tokens(&state.pool).await?;
+    Ok((StatusCode::OK, Json(PruneResponse { pruned })).into_response())
 }
 
 /// `POST /admin/tokens/{prefix}/revoke` — revoke a token by its prefix. Admin only.
@@ -138,8 +175,11 @@ async fn create_token(state: &AppState, body: Bytes) -> Result<Response, AppErro
         .into_response())
 }
 
-async fn list_tokens(state: &AppState) -> Result<Response, AppError> {
-    let tokens = tokens::list_tokens(&state.pool).await?;
+async fn list_tokens_handler(
+    state: &AppState,
+    include_revoked: bool,
+) -> Result<Response, AppError> {
+    let tokens = tokens::list_tokens(&state.pool, include_revoked).await?;
     Ok((StatusCode::OK, Json(TokenListResponse { tokens })).into_response())
 }
 

@@ -306,8 +306,9 @@ async fn run_token(command: TokenCommand) -> Result<()> {
             scopes,
             server,
         } => cmd_token_create(name, scopes, server).await,
-        TokenCommand::List { server } => cmd_token_list(server).await,
+        TokenCommand::List { all, server } => cmd_token_list(all, server).await,
         TokenCommand::Revoke { prefix, server } => cmd_token_revoke(prefix, server).await,
+        TokenCommand::Prune { server } => cmd_token_prune(server).await,
     }
 }
 
@@ -335,9 +336,9 @@ async fn cmd_token_create(name: String, scopes: Vec<String>, server: Option<Stri
     Ok(())
 }
 
-async fn cmd_token_list(server: Option<String>) -> Result<()> {
+async fn cmd_token_list(all: bool, server: Option<String>) -> Result<()> {
     let client = build_client(server.as_deref())?;
-    let tokens = client.list_tokens().await?;
+    let tokens = client.list_tokens(all).await?;
     if tokens.is_empty() {
         println!("No tokens.");
         return Ok(());
@@ -363,6 +364,13 @@ async fn cmd_token_revoke(prefix: String, server: Option<String>) -> Result<()> 
     let client = build_client(server.as_deref())?;
     client.revoke_token(&prefix).await?;
     println!("Revoked token {prefix}");
+    Ok(())
+}
+
+async fn cmd_token_prune(server: Option<String>) -> Result<()> {
+    let client = build_client(server.as_deref())?;
+    let pruned = client.prune_tokens().await?;
+    println!("Pruned {pruned} revoked token(s).");
     Ok(())
 }
 

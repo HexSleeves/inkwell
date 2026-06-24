@@ -52,6 +52,7 @@ pub fn build_router_with_providers(
         .route("/documents/{slug}/publish", any(api::publish_document))
         .route("/documents/{slug}/unpublish", any(api::unpublish_document))
         .route("/admin/tokens", any(admin::tokens))
+        .route("/admin/tokens/prune", any(admin::prune_tokens))
         .route("/admin/tokens/{prefix}/revoke", any(admin::revoke_token))
         .route("/feed.xml", get(feed::feed))
         .route("/sitemap.xml", get(sitemap::sitemap))

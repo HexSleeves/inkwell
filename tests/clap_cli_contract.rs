@@ -88,6 +88,61 @@ fn author_token_subcommands_parse() {
     assert!(
         Cli::try_parse_from(["inkwell", "author", "token", "create", "--scopes", "write"]).is_err()
     );
+
+    // list: --all flag is optional (default false), --server also optional.
+    let cli = Cli::parse_from(["inkwell", "author", "token", "list", "--all"]);
+    assert!(matches!(
+        cli.command,
+        Command::Author {
+            command: AuthorCommand::Token {
+                command: TokenCommand::List {
+                    all: true,
+                    server: None
+                },
+            }
+        }
+    ));
+
+    let cli = Cli::parse_from(["inkwell", "author", "token", "list"]);
+    assert!(matches!(
+        cli.command,
+        Command::Author {
+            command: AuthorCommand::Token {
+                command: TokenCommand::List {
+                    all: false,
+                    server: None
+                },
+            }
+        }
+    ));
+
+    // prune: no required args; optional --server.
+    let cli = Cli::parse_from(["inkwell", "author", "token", "prune"]);
+    assert!(matches!(
+        cli.command,
+        Command::Author {
+            command: AuthorCommand::Token {
+                command: TokenCommand::Prune { server: None },
+            }
+        }
+    ));
+
+    let cli = Cli::parse_from([
+        "inkwell",
+        "author",
+        "token",
+        "prune",
+        "--server",
+        "https://blog.example.com",
+    ]);
+    assert!(matches!(
+        cli.command,
+        Command::Author {
+            command: AuthorCommand::Token {
+                command: TokenCommand::Prune { ref server },
+            }
+        } if server.as_deref() == Some("https://blog.example.com")
+    ));
 }
 
 #[test]

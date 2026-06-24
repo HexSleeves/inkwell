@@ -130,8 +130,31 @@ pub async fn touch_last_used(pool: &PgPool, prefix: &str) -> Result<(), sqlx::Er
     Ok(())
 }
 
-/// List all tokens (newest first) with their owning author and bookkeeping.
-pub async fn list_tokens(pool: &PgPool) -> Result<Vec<TokenInfo>, sqlx::Error> {
+/// List tokens (newest first) with their owning author and bookkeeping.
+///
+/// When `include_revoked` is `false` (the default), only live tokens
+/// (`revoked_at IS NULL`) are returned. Pass `true` to include revoked rows
+/// as well (e.g. for admin audit or the `--all` flag).
+pub async fn list_tokens(
+    pool: &PgPool,
+    include_revoked: bool,
+) -> Result<Vec<TokenInfo>, sqlx::Error> {
+    let sql = if include_revoked {
+        r#"
+        SELECT t.prefix, a.name, t.scopes, t.created_at, t.last_used_at, t.revoked_at
+        FROM author_tokens t
+        JOIN authors a ON a.id = t.author_id
+        ORDER BY t.created_at DESC
+        "#
+    } else {
+        r#"
+        SELECT t.prefix, a.name, t.scopes, t.created_at, t.last_used_at, t.revoked_at
+        FROM author_tokens t
+        JOIN authors a ON a.id = t.author_id
+        WHERE t.revoked_at IS NULL
+        ORDER BY t.created_at DESC
+        "#
+    };
     let rows = sqlx::query_as::<
         Postgres,
         (
@@ -142,14 +165,7 @@ pub async fn list_tokens(pool: &PgPool) -> Result<Vec<TokenInfo>, sqlx::Error> {
             Option<OffsetDateTime>,
             Option<OffsetDateTime>,
         ),
-    >(
-        r#"
-        SELECT t.prefix, a.name, t.scopes, t.created_at, t.last_used_at, t.revoked_at
-        FROM author_tokens t
-        JOIN authors a ON a.id = t.author_id
-        ORDER BY t.created_at DESC
-        "#,
-    )
+    >(sql)
     .fetch_all(pool)
     .await?;
     Ok(rows
@@ -165,6 +181,19 @@ pub async fn list_tokens(pool: &PgPool) -> Result<Vec<TokenInfo>, sqlx::Error> {
             },
         )
         .collect())
+}
+
+/// Hard-delete all revoked tokens. Returns the number of rows deleted.
+///
+/// Only tokens with `revoked_at IS NOT NULL` are removed, so live tokens are
+/// never touched. Because `write_audit` rows reference `authors` (not tokens)
+/// this loses no audit history.
+pub async fn prune_revoked_tokens(pool: &PgPool) -> Result<u64, sqlx::Error> {
+    let affected = sqlx::query("DELETE FROM author_tokens WHERE revoked_at IS NOT NULL")
+        .execute(pool)
+        .await?
+        .rows_affected();
+    Ok(affected)
 }
 
 /// Revoke a token by `prefix`. Returns `true` when a still-live token was
