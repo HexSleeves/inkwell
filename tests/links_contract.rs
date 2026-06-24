@@ -42,6 +42,7 @@ fn new_doc(slug: &str) -> NewDocument {
         status: Some(DocumentStatus::Published),
         growth: None,
         tags: Vec::new(),
+        owner_id: None,
     }
 }
 
@@ -56,6 +57,7 @@ fn doc_with_body(slug: &str, body: &str) -> NewDocument {
         status: Some(DocumentStatus::Published),
         growth: None,
         tags: Vec::new(),
+        owner_id: None,
     }
 }
 
@@ -503,6 +505,7 @@ async fn updating_a_document_bumps_its_version() -> anyhow::Result<()> {
             title: Some("Bumped".to_string()),
             ..Default::default()
         },
+        None,
     )
     .await?
     .expect("document exists");
@@ -549,6 +552,7 @@ fn draft_with_body(slug: &str, body: &str) -> NewDocument {
         status: Some(DocumentStatus::Draft),
         growth: None,
         tags: Vec::new(),
+        owner_id: None,
     }
 }
 
@@ -733,6 +737,7 @@ async fn growth_defaults_to_seedling_and_round_trips_through_create_and_update()
             growth: Some(GrowthStage::Budding),
             ..Default::default()
         },
+        None,
     )
     .await?
     .expect("document exists");

@@ -56,6 +56,6 @@ The MCP server (`src/mcp/`) runs as a separate `inkwell mcp` CLI process over st
 ## What Does NOT Exist Here
 
 - No background job queue — all post-write fan-out (re-render, edge persist, embedding) runs inline in the request handler as best-effort; failures warn and never 500 a write that succeeded
-- No session management or user accounts — auth is a single static bearer token (`INKWELL_API_KEY`) or MCP token (`INKWELL_MCP_KEY`); no OAuth, no registration
+- No session management or browser login — auth is the static admin key (`INKWELL_API_KEY`) plus scoped author tokens (`ink_<prefix>_<secret>`, ADR 0009); no OAuth, no registration. (MCP authenticates with a scoped token via `INKWELL_API_KEY`; the old `INKWELL_MCP_KEY` was retired in slice 4.)
 - No file uploads or binary storage — notes are Markdown text only; `assets/` dir serves a single bundled font via `GET /assets/fonts/nunito.woff2`
 - No outbound Webmention sending by default — `INKWELL_WEBMENTION_SEND=true` required to enable; receiving is always on

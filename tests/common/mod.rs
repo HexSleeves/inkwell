@@ -37,17 +37,12 @@ pub async fn maybe_pool() -> Result<Option<PgPool>> {
     Ok(Some(pool))
 }
 
-/// The MCP credential the test server accepts, distinct from the authoring key
-/// so tests can exercise the "either key authenticates" rule.
-pub const TEST_MCP_KEY: &str = "test-mcp-key";
-
 pub fn test_config(database_url: String) -> Arc<Config> {
     Arc::new(Config {
         database_url,
         host: "127.0.0.1".to_string(),
         port: 3000,
         api_key: Some("test-secret-key".to_string()),
-        mcp_key: Some(TEST_MCP_KEY.to_string()),
         site_url: Some("https://blog.example.com".to_string()),
         // AI features unconfigured by default: the router falls back to the
         // deterministic mock embedder for retrieval and reports "AI features not

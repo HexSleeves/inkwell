@@ -46,9 +46,10 @@ async fn mcp_round_trip_create_read_search_and_stale_update() -> anyhow::Result<
     });
     let base = format!("http://{addr}");
 
-    // The MCP server authenticates with the MCP key (NOT the authoring key),
-    // proving the "either key authenticates" rule end-to-end.
-    let client = InkwellClient::new(base, common::TEST_MCP_KEY)?;
+    // The MCP server authenticates with `INKWELL_API_KEY` (slice 4 retired the
+    // separate MCP key). In production this is a scoped token; the test uses the
+    // shared admin key the test router is configured with.
+    let client = InkwellClient::new(base, "test-secret-key")?;
     let server = InkwellMcpServer::new(client);
 
     // create_note -> returns slug + version.

@@ -6,10 +6,12 @@
 //! which talks to a running inkwell HTTP server. The MCP server never touches
 //! the database directly.
 //!
-//! Authentication: the client is built with `INKWELL_MCP_KEY` — a credential
-//! separate from `INKWELL_API_KEY`, so MCP access is granted and revoked
-//! independently. Updates carry the note `version` as `If-Match`, so a stale
-//! write surfaces as a clear error instead of clobbering newer content.
+//! Authentication: the client is built with `INKWELL_API_KEY`, which operators
+//! set to a **scoped token** (`inkwell author token create`) so MCP access is
+//! granted and revoked independently of the admin shared key. Updates carry the
+//! note `version` as `If-Match`, so a stale write surfaces as a clear error
+//! instead of clobbering newer content. (The separate `INKWELL_MCP_KEY` was
+//! retired in slice 4, ADR 0009.)
 
 use std::sync::Arc;
 
@@ -225,10 +227,10 @@ fn to_mcp_error(error: anyhow::Error) -> ErrorData {
 }
 
 /// Build an [`InkwellMcpServer`] and serve it over stdio until the peer
-/// disconnects. Reads the API base URL and `INKWELL_MCP_KEY` from the
-/// environment via [`AuthorConfig`](crate::config::AuthorConfig).
-pub async fn run_stdio(base_url: String, mcp_key: String) -> Result<()> {
-    let client = InkwellClient::new(base_url, mcp_key)?;
+/// disconnects. Reads the API base URL and `INKWELL_API_KEY` (a scoped token)
+/// from the environment via [`AuthorConfig`](crate::config::AuthorConfig).
+pub async fn run_stdio(base_url: String, api_key: String) -> Result<()> {
+    let client = InkwellClient::new(base_url, api_key)?;
     let server = InkwellMcpServer::new(client);
     // `stdio()` yields `(Stdin, Stdout)`, which satisfies `IntoTransport` as an
     // `(AsyncRead, AsyncWrite)` pair.

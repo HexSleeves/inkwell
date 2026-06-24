@@ -3,10 +3,10 @@
 //! [`authenticate`] resolves the [`Principal`] behind a request from its single
 //! `x-api-key` header. Two credential families are accepted, in order:
 //!
-//! 1. **Static keys** — the shared `INKWELL_API_KEY` and the `INKWELL_MCP_KEY`.
-//!    Both map to the all-powerful bootstrap-admin principal (distinguished only
-//!    by audit `label`). Compared in constant time; the MCP key is retired for a
-//!    scoped token in slice 4.
+//! 1. **Static key** — the shared `INKWELL_API_KEY`, mapping to the all-powerful
+//!    bootstrap-admin principal (audit label `"shared-key"`). Compared in
+//!    constant time. (The separate `INKWELL_MCP_KEY` was retired in slice 4; the
+//!    MCP server now authenticates with a scoped token via `INKWELL_API_KEY`.)
 //! 2. **Scoped tokens** — `ink_<prefix>_<secret>` (see [`crate::domain::token`]).
 //!    Looked up by the public `prefix`, then a constant-time hash compare; a
 //!    revoked token never authenticates. Resolves to the owning author's
@@ -103,27 +103,15 @@ fn provided_key(headers: &HeaderMap) -> Option<&str> {
     value.to_str().ok()
 }
 
-/// Match a presented key against the configured static credentials. Both
-/// candidates are always hashed and compared so the cost does not reveal which
-/// (if any) key is configured; an empty configured key never matches. A match
-/// yields the bootstrap-admin principal labelled by which key matched.
+/// Match a presented key against the configured shared `INKWELL_API_KEY`,
+/// constant-time. A match yields the all-powerful bootstrap-admin principal; an
+/// unset or empty configured key never matches.
 fn match_static_key(provided: &str, config: &Config) -> Option<Principal> {
+    let candidate = config.api_key.as_deref().filter(|c| !c.is_empty())?;
     let provided_hash = Sha256::digest(provided.as_bytes());
-    let mut matched: Option<&'static str> = None;
-    for (candidate, label) in [
-        (config.api_key.as_deref(), "shared-key"),
-        (config.mcp_key.as_deref(), "mcp-key"),
-    ] {
-        let Some(candidate) = candidate.filter(|c| !c.is_empty()) else {
-            continue;
-        };
-        let expected = Sha256::digest(candidate.as_bytes());
-        let eq = bool::from(provided_hash.ct_eq(&expected));
-        if eq && matched.is_none() {
-            matched = Some(label);
-        }
-    }
-    matched.map(|label| Principal::admin(BOOTSTRAP_ADMIN_ID, label))
+    let expected = Sha256::digest(candidate.as_bytes());
+    bool::from(provided_hash.ct_eq(&expected))
+        .then(|| Principal::admin(BOOTSTRAP_ADMIN_ID, "shared-key"))
 }
 
 #[cfg(test)]
@@ -131,13 +119,12 @@ mod tests {
     use super::*;
     use axum::http::HeaderValue;
 
-    fn config_with(api_key: Option<&str>, mcp_key: Option<&str>) -> Config {
+    fn config_with(api_key: Option<&str>) -> Config {
         Config {
             database_url: "postgres://localhost/db".to_string(),
             host: "127.0.0.1".to_string(),
             port: 3000,
             api_key: api_key.map(str::to_string),
-            mcp_key: mcp_key.map(str::to_string),
             site_url: None,
             voyage_api_key: None,
             anthropic_api_key: None,
@@ -153,35 +140,31 @@ mod tests {
     }
 
     #[test]
-    fn static_match_accepts_api_key_or_mcp_key_with_distinct_labels() {
-        let config = config_with(Some("author-key"), Some("mcp-key"));
+    fn static_match_accepts_the_shared_key_as_admin() {
+        let config = config_with(Some("author-key"));
 
         let admin = match_static_key("author-key", &config).expect("api key authenticates");
         assert_eq!(admin.label, "shared-key");
         assert_eq!(admin.author_id, Some(BOOTSTRAP_ADMIN_ID));
         assert!(admin.has(Scope::Admin));
-
-        let mcp = match_static_key("mcp-key", &config).expect("mcp key authenticates");
-        assert_eq!(mcp.label, "mcp-key");
-        assert!(mcp.has(Scope::Write));
     }
 
     #[test]
     fn static_match_rejects_unknown_or_empty_keys() {
-        let config = config_with(Some("author-key"), Some("mcp-key"));
+        let config = config_with(Some("author-key"));
         assert!(match_static_key("wrong", &config).is_none());
 
-        let blank = config_with(Some(""), Some(""));
+        let blank = config_with(Some(""));
         assert!(match_static_key("", &blank).is_none());
 
-        let none = config_with(None, None);
+        let none = config_with(None);
         assert!(match_static_key("anything", &none).is_none());
     }
 
     #[test]
     fn static_match_ignores_token_shaped_keys() {
         // A token is not a static key; it must go through the DB path instead.
-        let config = config_with(Some("author-key"), None);
+        let config = config_with(Some("author-key"));
         assert!(match_static_key("ink_abc_def", &config).is_none());
     }
 

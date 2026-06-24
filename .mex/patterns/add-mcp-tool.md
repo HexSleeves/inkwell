@@ -23,7 +23,7 @@ last_updated: 2026-06-23
 
 The MCP server (`src/mcp/mod.rs`) is a thin client over `InkwellClient`. Every tool delegates to `self.client.*` — it never touches the DB. Tools are discovered via the `#[tool_router]` + `#[tool]` macros from `rmcp`. Argument types derive `JsonSchema` (for schema advertisement to the agent) and `Deserialize` (for call argument parsing).
 
-The MCP server runs as `inkwell mcp` over stdio and authenticates with `INKWELL_MCP_KEY`.
+The MCP server runs as `inkwell mcp` over stdio and authenticates with `INKWELL_API_KEY` set to a scoped token (the separate `INKWELL_MCP_KEY` was retired in slice 4, ADR 0009).
 
 ## Steps
 

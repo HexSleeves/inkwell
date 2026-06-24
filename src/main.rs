@@ -56,17 +56,20 @@ async fn main() -> Result<()> {
 }
 
 /// Run the MCP server over stdio. It is a thin HTTP client: it authenticates
-/// with `INKWELL_MCP_KEY` and talks to a running inkwell server at the resolved
-/// base URL (`INKWELL_API_URL`, else `HOST`/`PORT`). No database connection.
+/// with `INKWELL_API_KEY` — set this to a **scoped token** (`inkwell author token
+/// create`) so MCP access is independently grant/revocable — and talks to a
+/// running inkwell server at the resolved base URL (`INKWELL_API_URL`, else
+/// `HOST`/`PORT`). No database connection. (The separate `INKWELL_MCP_KEY` was
+/// retired in slice 4.)
 async fn run_mcp() -> Result<()> {
     let config = AuthorConfig::from_env()?;
     let base_url = config.resolve_base_url(None);
-    let mcp_key = config.mcp_key.clone().ok_or_else(|| {
+    let api_key = config.api_key.clone().ok_or_else(|| {
         anyhow::anyhow!(
-            "INKWELL_MCP_KEY is not set; the MCP server requires its own API key (separate from INKWELL_API_KEY)."
+            "INKWELL_API_KEY is not set; the MCP server requires an API key. Set it to a scoped token minted with `inkwell author token create`."
         )
     })?;
-    mcp::run_stdio(base_url, mcp_key).await
+    mcp::run_stdio(base_url, api_key).await
 }
 
 async fn serve() -> Result<()> {

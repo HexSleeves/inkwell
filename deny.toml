@@ -1,10 +1,27 @@
+# cargo-deny configuration (schema v2 — matches EmbarkStudios/cargo-deny-action@v2).
+# v2 removed the v1 lint-level keys `[advisories] vulnerability` and
+# `[licenses] unlicensed` (vulnerable/unlicensed crates are always denied; ignore
+# specific advisories via `ignore`/`exceptions`), and changed `unmaintained` to a
+# scope enum (all | workspace | transitive | none).
 [advisories]
-vulnerability = "deny"
-unmaintained = "warn"
+version = 2
+# Only flag unmaintained crates we own (workspace), not the long tail of
+# transitive deps we don't control — those are noise, not actionable here.
+unmaintained = "workspace"
 yanked = "warn"
+ignore = [
+  # rsa Marvin-attack timing sidechannel. `rsa` is pulled ONLY by `sqlx-mysql`,
+  # which we do not enable (sqlx features = postgres only), so it is present in
+  # Cargo.lock but never compiled into the binary. No fixed release exists.
+  "RUSTSEC-2023-0071",
+  # quinn-proto remote memory exhaustion. `quinn`/`quinn-proto` come from
+  # reqwest's optional HTTP/3 support, which we do not enable — lockfile-only,
+  # not compiled.
+  "RUSTSEC-2026-0185",
+]
 
 [licenses]
-unlicensed = "deny"
+version = 2
 allow = [
   "MIT",
   "Apache-2.0",
@@ -16,6 +33,11 @@ allow = [
   "Zlib",
   "OpenSSL",
   "MPL-2.0",
+  # Permissive licenses on transitive deps surfaced once the workflow started
+  # running: MITNFA (MIT + no-false-attribs) and CDLA-Permissive-2.0 (a
+  # permissive data-license) — both permissive and compatible.
+  "MITNFA",
+  "CDLA-Permissive-2.0",
 ]
 confidence-threshold = 0.8
 

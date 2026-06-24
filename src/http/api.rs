@@ -10,7 +10,7 @@ use tokio::time::{Duration, timeout};
 use crate::db::audit::{self, AuditAction};
 use crate::db::documents;
 use crate::db::links::{self, Backlink, Graph, GraphEdge, GraphNode, Visibility};
-use crate::domain::author::Principal;
+use crate::domain::author::{Principal, Scope};
 use crate::domain::document::{
     DEFAULT_LIMIT, Document, DocumentPatch, DocumentStatus, GrowthStage, MAX_BODY_MARKDOWN_LENGTH,
     MAX_LIMIT, MAX_REQUEST_BODY_BYTES, MAX_TITLE_LENGTH, NewDocument, StatusFilter,
@@ -330,8 +330,14 @@ pub async fn publish_document(
         return Err(AppError::MethodNotAllowed(vec!["POST"]));
     }
     let principal = require_principal(&headers, &state.config, &state.pool).await?;
-    let Some(document) =
-        documents::set_document_status(&state.pool, &slug, DocumentStatus::Published).await?
+    require_scope(&principal, Scope::Publish)?;
+    let Some(document) = documents::set_document_status(
+        &state.pool,
+        &slug,
+        DocumentStatus::Published,
+        owner_filter(&principal),
+    )
+    .await?
     else {
         return Err(AppError::NotFound(format!(
             "No document with slug \"{slug}\"."
@@ -364,8 +370,14 @@ pub async fn unpublish_document(
         return Err(AppError::MethodNotAllowed(vec!["POST"]));
     }
     let principal = require_principal(&headers, &state.config, &state.pool).await?;
-    let Some(document) =
-        documents::set_document_status(&state.pool, &slug, DocumentStatus::Draft).await?
+    require_scope(&principal, Scope::Publish)?;
+    let Some(document) = documents::set_document_status(
+        &state.pool,
+        &slug,
+        DocumentStatus::Draft,
+        owner_filter(&principal),
+    )
+    .await?
     else {
         return Err(AppError::NotFound(format!(
             "No document with slug \"{slug}\"."
@@ -390,6 +402,9 @@ async fn create_document(
     body: Bytes,
 ) -> Result<Response, AppError> {
     let principal = require_principal(&headers, &state.config, &state.pool).await?;
+    // Creating a note requires the `write` scope. Ownership is stamped from the
+    // principal below; there is no existing owner to check on a create.
+    require_scope(&principal, Scope::Write)?;
     enforce_body_limit(&body)?;
     let value = parse_json_body(body)?;
     let map = require_object(value)?;
@@ -413,6 +428,7 @@ async fn create_document(
             status: None,
             growth,
             tags,
+            owner_id: principal.author_id,
         },
     )
     .await?;
@@ -457,9 +473,7 @@ async fn list_documents(
     headers: HeaderMap,
     query: ListQuery,
 ) -> Result<Response, AppError> {
-    let authenticated = authenticate(&headers, &state.config, &state.pool)
-        .await
-        .is_some();
+    let authenticated = can_see_drafts(&headers, &state).await;
     let status = resolve_list_status(authenticated, query.status.as_deref())?;
     let mut limit =
         parse_non_negative_int(query.limit.as_deref(), "limit")?.unwrap_or(DEFAULT_LIMIT);
@@ -497,9 +511,7 @@ async fn get_document(
     headers: HeaderMap,
     slug: String,
 ) -> Result<Response, AppError> {
-    let authenticated = authenticate(&headers, &state.config, &state.pool)
-        .await
-        .is_some();
+    let authenticated = can_see_drafts(&headers, &state).await;
     let filter = if authenticated {
         StatusFilter { status: None }
     } else {
@@ -553,6 +565,8 @@ async fn update_document(
     body: Bytes,
 ) -> Result<Response, AppError> {
     let principal = require_principal(&headers, &state.config, &state.pool).await?;
+    require_scope(&principal, Scope::Write)?;
+    let owner = owner_filter(&principal);
     enforce_body_limit(&body)?;
     let value = parse_json_body(body)?;
     let map = require_object(value)?;
@@ -602,6 +616,7 @@ async fn update_document(
                 &slug,
                 expected_version,
                 patch,
+                owner,
             )
             .await?
             {
@@ -621,7 +636,7 @@ async fn update_document(
         }
         None => {
             let Some(document) =
-                documents::update_document_by_slug(&state.pool, &slug, patch).await?
+                documents::update_document_by_slug(&state.pool, &slug, patch, owner).await?
             else {
                 return Err(AppError::NotFound(format!(
                     "No document with slug \"{slug}\"."
@@ -684,6 +699,8 @@ async fn delete_document(
     slug: String,
 ) -> Result<Response, AppError> {
     let principal = require_principal(&headers, &state.config, &state.pool).await?;
+    require_scope(&principal, Scope::Write)?;
+    let owner = owner_filter(&principal);
     // Resolve the note first so we can capture which sources link to it BEFORE
     // the row (and its inbound edges' target_note_id) are gone.
     let Some(document) =
@@ -694,7 +711,9 @@ async fn delete_document(
         )));
     };
     let affected = garden::affected_sources(&state.pool, document.id, &document.slug).await;
-    if !documents::delete_document_by_slug(&state.pool, &slug).await? {
+    // Ownership is enforced atomically by the owner-scoped delete: a non-owner
+    // (or a slug that vanished) deletes nothing → 404, no TOCTOU window.
+    if !documents::delete_document_by_slug(&state.pool, &slug, owner).await? {
         return Err(AppError::NotFound(format!(
             "No document with slug \"{slug}\"."
         )));
@@ -816,13 +835,51 @@ fn resolve_list_status(
 /// is derived for the document/graph surfaces. Token-aware as of slice 2, so a
 /// public request (no `x-api-key`) still short-circuits without a DB lookup.
 async fn request_visibility(headers: &HeaderMap, state: &AppState) -> Visibility {
-    if authenticate(headers, &state.config, &state.pool)
-        .await
-        .is_some()
-    {
+    if can_see_drafts(headers, state).await {
         Visibility::All
     } else {
         Visibility::Public
+    }
+}
+
+/// Whether the request may see draft/unlisted content: it must resolve to a
+/// principal that holds the `read` scope (admin implies it). A token lacking
+/// `read` — e.g. a write-only agent token — is treated as a public reader. This
+/// is the slice-3 read gate; per-owner draft isolation (an author seeing only
+/// their OWN drafts) is deferred to slice 3b, which reworks `Visibility` into an
+/// owner-aware filter across the query layer.
+async fn can_see_drafts(headers: &HeaderMap, state: &AppState) -> bool {
+    authenticate(headers, &state.config, &state.pool)
+        .await
+        .is_some_and(|principal| principal.has(Scope::Read))
+}
+
+/// Require the principal to hold `scope` (admin implies all). 403 otherwise.
+fn require_scope(principal: &Principal, scope: Scope) -> Result<(), AppError> {
+    if principal.has(scope) {
+        Ok(())
+    } else {
+        Err(AppError::Forbidden(format!(
+            "This action requires the \"{scope}\" scope."
+        )))
+    }
+}
+
+/// The ownership constraint passed to a mutating DB query (ADR 0009 slice 3).
+/// `None` for an admin (the shared key) — no owner constraint. For a non-admin,
+/// the principal's author id, so the `UPDATE`/`DELETE` only matches a row that
+/// principal owns and authorization is enforced ATOMICALLY in the write itself —
+/// no separate check-then-write step, so no TOCTOU window where a slug is
+/// deleted and recreated between an ownership check and the mutation. A non-owner
+/// (or missing slug) matches no row → the handler's normal 404.
+///
+/// `author_id` is always `Some` for a real principal; the `nil` fallback fails
+/// closed (matches no note) rather than degrading to "no constraint".
+fn owner_filter(principal: &Principal) -> Option<uuid::Uuid> {
+    if principal.has(Scope::Admin) {
+        None
+    } else {
+        Some(principal.author_id.unwrap_or_else(uuid::Uuid::nil))
     }
 }
 

@@ -18,6 +18,7 @@ use serde::Serialize;
 use crate::ai::NO_ANSWER_MARKER;
 use crate::db::chunks;
 use crate::db::links::Visibility;
+use crate::domain::author::Scope;
 use crate::domain::document::StatusFilter;
 use crate::error::AppError;
 use crate::http::AppState;
@@ -288,10 +289,13 @@ fn dedup_citations(retrieved: &[chunks::RetrievedChunk]) -> Vec<Citation> {
 /// Map the request's credentials to a read [`Visibility`] — the same rule every
 /// content-exposing surface uses (authenticated ⇒ `All`, anonymous ⇒ `Public`).
 async fn request_visibility(headers: &HeaderMap, state: &AppState) -> Visibility {
-    if authenticate(headers, &state.config, &state.pool)
+    // Draft-grounded retrieval/citations require the `read` scope (admin implies
+    // it); a token without it is treated as a public reader. Mirrors
+    // `api::can_see_drafts` (ADR 0009 slice 3).
+    let can_see_drafts = authenticate(headers, &state.config, &state.pool)
         .await
-        .is_some()
-    {
+        .is_some_and(|principal| principal.has(Scope::Read));
+    if can_see_drafts {
         Visibility::All
     } else {
         Visibility::Public

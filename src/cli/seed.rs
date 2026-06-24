@@ -113,6 +113,8 @@ async fn plant(pool: &PgPool, doc: &ParsedDocument) -> Result<Seeded> {
             // Let the column default the maturity stage (seedling).
             growth: None,
             tags: doc.tags.clone(),
+            // Seeded notes are owned by the bootstrap admin (column default).
+            owner_id: None,
         },
     )
     .await

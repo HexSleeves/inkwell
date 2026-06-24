@@ -12,10 +12,6 @@ pub struct Config {
     pub host: String,
     pub port: u16,
     pub api_key: Option<String>,
-    /// Separate credential for the MCP server (`INKWELL_MCP_KEY`). Accepted by
-    /// the write API alongside `api_key`, so MCP access can be granted and
-    /// revoked independently of the human authoring key.
-    pub mcp_key: Option<String>,
     pub site_url: Option<String>,
     /// Voyage AI key (`VOYAGE_API_KEY`) for generating note embeddings. When
     /// `None`, embedding generation is a logged no-op and the site still works.
@@ -43,7 +39,6 @@ impl std::fmt::Debug for Config {
             .field("host", &self.host)
             .field("port", &self.port)
             .field("api_key", &self.api_key.as_ref().map(|_| "<redacted>"))
-            .field("mcp_key", &self.mcp_key.as_ref().map(|_| "<redacted>"))
             .field("site_url", &self.site_url)
             .field(
                 "voyage_api_key",
@@ -77,10 +72,6 @@ impl Config {
             .ok()
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty());
-        let mcp_key = std::env::var("INKWELL_MCP_KEY")
-            .ok()
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty());
         let site_url = std::env::var("INKWELL_SITE_URL")
             .ok()
             .map(|value| value.trim().to_string())
@@ -100,7 +91,6 @@ impl Config {
             host,
             port,
             api_key,
-            mcp_key,
             site_url,
             voyage_api_key,
             anthropic_api_key,
@@ -121,10 +111,6 @@ pub struct AuthorConfig {
     /// Explicit API base URL (`INKWELL_API_URL`), e.g. `https://blog.example.com`.
     pub api_url: Option<String>,
     pub api_key: Option<String>,
-    /// MCP credential (`INKWELL_MCP_KEY`). The `inkwell mcp` server authenticates
-    /// its [`InkwellClient`](crate::client::InkwellClient) with this key rather
-    /// than the human authoring `api_key`.
-    pub mcp_key: Option<String>,
     pub host: String,
     pub port: u16,
 }
@@ -134,7 +120,6 @@ impl std::fmt::Debug for AuthorConfig {
         f.debug_struct("AuthorConfig")
             .field("api_url", &self.api_url)
             .field("api_key", &self.api_key.as_ref().map(|_| "<redacted>"))
-            .field("mcp_key", &self.mcp_key.as_ref().map(|_| "<redacted>"))
             .field("host", &self.host)
             .field("port", &self.port)
             .finish()
@@ -148,7 +133,6 @@ impl AuthorConfig {
 
         let api_url = trimmed_env("INKWELL_API_URL");
         let api_key = trimmed_env("INKWELL_API_KEY");
-        let mcp_key = trimmed_env("INKWELL_MCP_KEY");
         let host = std::env::var("HOST").unwrap_or_else(|_| "0.0.0.0".to_string());
         let port = match std::env::var("PORT") {
             Ok(raw) if !raw.is_empty() => raw.parse::<u16>().map_err(|_| {
@@ -160,7 +144,6 @@ impl AuthorConfig {
         Ok(Self {
             api_url,
             api_key,
-            mcp_key,
             host,
             port,
         })
@@ -202,7 +185,6 @@ mod tests {
             host: "0.0.0.0".to_string(),
             port: 3000,
             api_key: Some("sentinel-key-value".to_string()),
-            mcp_key: Some("sentinel-mcp-value".to_string()),
             site_url: None,
             voyage_api_key: Some("sentinel-voyage-value".to_string()),
             anthropic_api_key: Some("sentinel-anthropic-value".to_string()),
@@ -211,7 +193,6 @@ mod tests {
         };
         let rendered = format!("{config:?}");
         assert!(!rendered.contains("sentinel-key-value"));
-        assert!(!rendered.contains("sentinel-mcp-value"));
         assert!(!rendered.contains("sentinel-voyage-value"));
         assert!(!rendered.contains("sentinel-anthropic-value"));
         assert!(!rendered.contains("supersecret"));
@@ -222,7 +203,6 @@ mod tests {
         AuthorConfig {
             api_url: api_url.map(str::to_string),
             api_key: Some("k".to_string()),
-            mcp_key: None,
             host: host.to_string(),
             port,
         }

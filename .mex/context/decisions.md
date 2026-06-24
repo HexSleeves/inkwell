@@ -62,7 +62,7 @@ last_updated: 2026-06-23
 
 ### Two separate auth tokens (`INKWELL_API_KEY` + `INKWELL_MCP_KEY`)
 **Date:** 2026-01-01
-**Status:** Active
+**Status:** SUPERSEDED by scoped tokens — `INKWELL_MCP_KEY` was retired in slice 4 (2026-06-23). The MCP server now authenticates with `INKWELL_API_KEY` set to a scoped token; `INKWELL_API_KEY` alone is the admin/bootstrap key. Kept for history.
 **Decision:** Human authoring and MCP agent access use separate bearer tokens, both resolved to an admin `Principal` by `authenticate` for reads and `require_principal` for writes.
 **Reasoning:** Allows granting/revoking MCP access independently of the human authoring credential. In production you can rotate the MCP key after an agent breach without locking out the human author.
 **Alternatives considered:** Single shared key — simpler but no independent revocation. OAuth — rejected as over-engineering for a personal publishing tool.
@@ -76,13 +76,29 @@ last_updated: 2026-06-23
 **Alternatives considered:** Direct-DB token CLI — rejected: operators manage prod (Railway) over HTTP and have no DB access. `Authorization: Bearer` transport — rejected: needless break from the existing `x-api-key`. Storing the raw token — rejected: only the hash is ever persisted. Keeping the detached audit insert — rejected: lost rows under load/shutdown defeat the audit.
 **Consequences:** New `src/domain/token.rs`, `src/db/tokens.rs`, `src/http/admin.rs`; `AppError::Forbidden` (403). Mutating handlers take `require_principal(...).await?`; reads/visibility use `authenticate(...).await` (anonymous requests short-circuit with no DB hit). Slice 3 turns on scope/ownership enforcement; slice 4 tightens `owner_id NOT NULL` and retires `INKWELL_MCP_KEY`.
 
+### Scope + ownership enforcement; coarse read gate (ADR 0009, plan 023, slice 3)
+**Date:** 2026-06-23
+**Status:** Active
+**Decision:** Mutations enforce a scope — `write` for create/update/delete, `publish` for publish/unpublish (`require_scope`; missing scope → 403). Ownership is enforced **atomically inside the mutating query**: handlers pass `owner_filter(&principal)` (admin → `None` = no constraint; non-admin → the author id) into `update_document_by_slug`/`update_document_by_slug_if_version`/`set_document_status`/`delete_document_by_slug`, whose `WHERE` carries `AND ($n::uuid IS NULL OR owner_id = $n)`. A non-owner matches no row → the handler's normal 404. `create` stamps `owner_id` from the principal. Draft READ visibility requires the `read` scope (`can_see_drafts`); admin implies all. Per-owner draft read ISOLATION is **deferred to slice 3b**.
+**Reasoning:** The write/publish ownership boundary is the real privilege win — a leaked `write` token cannot touch others' notes or escalate. Enforcing ownership in the write itself (not a separate read-then-write) closes the TOCTOU window where a slug is deleted+recreated between an ownership check and the mutation (raised by CodeRabbit on PR #21), and makes a non-owner mutation a 404 that doesn't even confirm the note exists. Read-isolation (an author seeing only their own drafts) needs the binary `Visibility` (Public/All) reworked into an owner-aware filter threaded through ~6 query modules — a disproportionate change for today's effectively single-author+admin garden, so it is its own slice (3b).
+**Alternatives considered:** Separate `get_document_owner` check-then-write (the first cut) — rejected: TOCTOU window + relies on the NOT-NULL invariant; the atomic owner-scoped write is strictly safer. Add `owner_id` to the `Document` struct + all SELECTs — rejected: broad churn. 403 (not 404) on ownership mismatch — rejected: 404 hides existence (no cross-author enumeration oracle) and falls out naturally from the owner-scoped write. Make `write` imply `read` — rejected: scopes stay orthogonal per ADR (request `read,write` for a read-write agent).
+**Consequences:** `NewDocument` gains `owner_id`; the four mutating DB fns take an `owner: Option<Uuid>`; new `require_scope`/`owner_filter`/`can_see_drafts` helpers in `src/http/api.rs`; `src/http/ai.rs` read gate mirrors them. A non-owner write returns 404 (not 403). A `write`-only token can create a draft it cannot read back (no `read` scope) — grant `read,write` for read-write agents. Slice 3b will add owner-aware read visibility.
+
+### Tighten ownership; retire `INKWELL_MCP_KEY` (ADR 0009, plan 023, slice 4)
+**Date:** 2026-06-23
+**Status:** Active
+**Decision:** `documents.owner_id` is `NOT NULL` (migration 0017) — every note has an owner. The **DB default (bootstrap admin) is KEPT**, not dropped: the write API stamps `owner_id` explicitly, but other insert paths (seed, tests, maintenance) legitimately omit it, and the default makes those attribute to the admin rather than violating NOT NULL. The separate `INKWELL_MCP_KEY` credential is **removed** from `Config`/`AuthorConfig`/`auth`; the MCP server (`run_mcp`/`run_stdio`) authenticates with `INKWELL_API_KEY`, which operators set to a scoped token. Only the shared `INKWELL_API_KEY` remains a static admin credential.
+**Reasoning:** NOT NULL is the real goal (no orphan notes); dropping the default added fragility (any raw insert omitting `owner_id` would 500) for no correctness gain — deviation from the plan's "drop default", kept deliberately. Retiring the bespoke MCP key collapses two static admin keys into one and pushes MCP onto the scoped-token model (least-privilege, revocable) that slices 2–3 built.
+**Alternatives considered:** Drop the DB default per the plan — rejected: breaks seed/test/maintenance inserts; NOT NULL already guarantees ownership. Keep `INKWELL_MCP_KEY` as a deprecated fallback — rejected (user chose full retirement); the scoped-token path supersedes it. A dedicated `INKWELL_MCP_TOKEN` var — rejected: reusing `INKWELL_API_KEY` in the MCP's own environment is simpler and the client sends whatever key it's given.
+**Consequences:** **BREAKING for deploys** — Railway (and any MCP host) must set the MCP server's `INKWELL_API_KEY` to a scoped token (mint via `inkwell author token create --scopes read,write`) before the next deploy, or MCP auth fails. `.env.example`/`.mcp.json` updated; `TEST_MCP_KEY` removed (tests authenticate MCP with the shared key or a minted token). Slice 3b (owner-aware read visibility) is the only remaining token work.
+
 ### MCP server as a separate CLI process over stdio
 **Date:** 2026-01-01
 **Status:** Active
 **Decision:** `inkwell mcp` runs as a separate process over stdio (`rmcp::transport::io::stdio()`), delegates to `InkwellClient` (HTTP), and never opens a DB connection.
 **Reasoning:** The MCP server is a client of the HTTP API, not a peer. This keeps the server the single gatekeeper for auth, validation, and write ordering. The MCP process can be killed/restarted without affecting the running HTTP server.
 **Alternatives considered:** Embedding MCP in the HTTP server on a `/mcp` endpoint — rejected because it would require MCP clients to speak HTTP rather than the standard stdio transport.
-**Consequences:** `inkwell mcp` requires a running `inkwell serve` (or Railway deploy) to talk to. Set `INKWELL_API_URL` + `INKWELL_MCP_KEY` before running.
+**Consequences:** `inkwell mcp` requires a running `inkwell serve` (or Railway deploy) to talk to. Set `INKWELL_API_URL` + `INKWELL_API_KEY` (a scoped token) before running. (Pre-slice-4 this used `INKWELL_MCP_KEY`.)
 
 ### MockEmbedder + MockLlm for CI/tests
 **Date:** 2026-01-01

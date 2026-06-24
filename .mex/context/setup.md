@@ -44,7 +44,7 @@ last_updated: 2026-06-23
 
 **Docker Compose shortcut** (fully seeded in one command):
 ```bash
-cp .env.example .env   # set INKWELL_API_KEY (and INKWELL_MCP_KEY for MCP)
+cp .env.example .env   # set INKWELL_API_KEY (admin key); for MCP, give the MCP process a scoped token via INKWELL_API_KEY
 docker compose up --build
 ```
 Compose runs migrate → seed → serve automatically once Postgres is healthy.
@@ -55,12 +55,12 @@ Compose runs migrate → seed → serve automatically once Postgres is healthy.
 - `DATABASE_URL` — PostgreSQL connection DSN (server only; not needed by `inkwell author`)
 
 **Required for writes to succeed:**
-- `INKWELL_API_KEY` — bearer token for authoring API; absent = all writes return 401
+- `INKWELL_API_KEY` — the admin shared key (full access; bootstrap + token management). Absent = all writes 401. The `inkwell mcp` server also reads `INKWELL_API_KEY` from its own environment — set that to a **scoped token** (`inkwell author token create`) so MCP access is least-privilege and revocable.
 
 **Optional:**
 - `PORT` — HTTP listen port (default `3000`)
 - `HOST` — HTTP listen host (default `0.0.0.0`)
-- `INKWELL_MCP_KEY` — separate bearer token for MCP access; can be granted/revoked independently
+- (`INKWELL_MCP_KEY` was retired in slice 4 — MCP uses a scoped token via `INKWELL_API_KEY`)
 - `INKWELL_SITE_URL` — absolute base URL for feed/sitemap/metadata (e.g. `https://myblog.com`)
 - `INKWELL_API_URL` — base URL the `inkwell author` CLI targets (default: derived from HOST:PORT)
 - `VOYAGE_API_KEY` — Voyage AI key for real embeddings; absent = `MockEmbedder` (index still populated)
@@ -103,6 +103,6 @@ GitHub Actions (`.github/workflows/`):
 
 **SQLx compile errors / `DATABASE_URL` missing at compile time:** Use `SQLX_OFFLINE=true cargo build` to use cached query metadata from `.sqlx/`. Or set `DATABASE_URL` before building.
 
-**MCP server can't connect:** `inkwell mcp` needs a running HTTP server. Check `INKWELL_API_URL` points to it and `INKWELL_MCP_KEY` matches what the server has as `INKWELL_MCP_KEY`.
+**MCP server can't connect:** `inkwell mcp` needs a running HTTP server. Check `INKWELL_API_URL` points to it and the MCP process's `INKWELL_API_KEY` is a live (non-revoked) scoped token the server accepts.
 
 **Tests skip DB coverage:** Export `DATABASE_URL` before running, or set `INKWELL_REQUIRE_DB_TESTS=1` to surface the skip as a failure.

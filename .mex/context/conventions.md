@@ -89,8 +89,8 @@ if let Err(error) = garden::persist_source_edges(&state.pool, document.id, &refs
 Before presenting any code:
 - [ ] DB access only in `src/db/`, never in handlers or `src/garden.rs` (except `sqlx::query` in garden's internal helpers)
 - [ ] New handlers return `Result<Response, AppError>`, not `Result<Json<T>, StatusCode>`
-- [ ] Write endpoints call `require_principal` before any DB mutation (resolves shared key or scoped token → `Principal`); audit the action with that principal
-- [ ] Read endpoints apply `Visibility` filter (Public vs All) based on `authenticate(...).await.is_some()` (token-aware; anonymous requests short-circuit without a DB hit)
+- [ ] Write endpoints call `require_principal`, then `require_scope` (create→`write`, publish→`publish`), then pass `owner_filter(&principal)` into the mutating query so ownership is enforced atomically (non-owner → 0 rows → 404; admin → `None` = no constraint) — no separate check-then-write; `create` stamps `owner_id`; audit with that principal
+- [ ] Read endpoints derive `Visibility` from `can_see_drafts` (requires the `read` scope; admin implies all; anonymous short-circuits without a DB hit) — not a bare `is_some()`
 - [ ] Admin-only surfaces (e.g. token management) additionally require `principal.has(Scope::Admin)` → 403 otherwise
 - [ ] Post-write side-effects (edges, embeddings, re-render) are best-effort: `if let Err(e) = ... { tracing::warn!(...) }`
 - [ ] New response types derive `Serialize` + use `#[serde(rename_all = "camelCase")]`

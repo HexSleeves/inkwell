@@ -33,10 +33,11 @@ const BOOTSTRAP_ADMIN: &str = "00000000-0000-0000-0000-000000000001";
 // ---------------------------------------------------------------------------
 
 /// The four foundation tables exist with the expected key columns, and
-/// `documents.owner_id` is present AND nullable (the `NOT NULL` tightening is
-/// deferred to slice 4).
+/// `documents.owner_id` is present. Nullability is governed by slice 4: the full
+/// migration chain (through 0017) makes the column `NOT NULL`, so this asserts
+/// `NOT NULL` rather than the slice-1-only nullable state.
 #[tokio::test]
-async fn foundation_schema_exists_with_nullable_owner() -> anyhow::Result<()> {
+async fn foundation_schema_exists() -> anyhow::Result<()> {
     let _guard = db_guard().await;
     let Some(pool) = common::maybe_pool().await? else {
         return Ok(());
@@ -53,7 +54,7 @@ async fn foundation_schema_exists_with_nullable_owner() -> anyhow::Result<()> {
         assert!(exists, "table {table} should exist after migrate");
     }
 
-    // documents.owner_id exists and is nullable.
+    // documents.owner_id exists and is NOT NULL after slice 4 (migration 0017).
     let is_nullable: String = sqlx::query_scalar(
         "SELECT is_nullable FROM information_schema.columns \
          WHERE table_schema = 'public' AND table_name = 'documents' AND column_name = 'owner_id'",
@@ -61,8 +62,8 @@ async fn foundation_schema_exists_with_nullable_owner() -> anyhow::Result<()> {
     .fetch_one(&pool)
     .await?;
     assert_eq!(
-        is_nullable, "YES",
-        "documents.owner_id must remain nullable in slice 1"
+        is_nullable, "NO",
+        "documents.owner_id is NOT NULL after slice 4 (migration 0017)"
     );
 
     Ok(())
