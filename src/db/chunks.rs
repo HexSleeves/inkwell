@@ -182,6 +182,76 @@ pub async fn related_notes(
         .collect())
 }
 
+/// Notes nearest the origin note by cosine distance over their stored chunk
+/// embeddings, WITHOUT re-embedding the document body. The origin note's stored
+/// chunks are joined against every other note's stored chunks; the minimum
+/// cosine distance over all (origin chunk, candidate chunk) pairs defines each
+/// candidate note's score. Visibility-filtered so a public caller never sees a
+/// draft (no-draft-leak invariant). Returns one row per candidate note ordered
+/// by best distance then slug, capped at `limit`. If the origin note has no
+/// stored chunks, the result is empty (rather than 500).
+pub async fn related_notes_for_note(
+    pool: &PgPool,
+    origin_note_id: Uuid,
+    visibility: Visibility,
+    limit: i64,
+) -> Result<Vec<RelatedNote>, sqlx::Error> {
+    // The JOIN condition `candidate.note_id <> origin.note_id` combined with
+    // `WHERE origin.note_id = $1` ensures the origin note is excluded from
+    // candidates without an extra predicate. GROUP BY collapses all chunk pairs
+    // for a given candidate note to a single row; min() picks its best match.
+    let rows: Vec<(String, String, f64)> = match visibility.status_filter() {
+        Some(status) => {
+            sqlx::query_as::<Postgres, (String, String, f64)>(
+                r#"
+                SELECT documents.slug, documents.title,
+                       min(candidate.embedding <=> origin.embedding) AS distance
+                FROM note_chunks AS origin
+                JOIN note_chunks AS candidate ON candidate.note_id <> origin.note_id
+                JOIN documents ON documents.id = candidate.note_id
+                WHERE origin.note_id = $1
+                  AND documents.status = $2
+                GROUP BY documents.id, documents.slug, documents.title
+                ORDER BY distance ASC, documents.slug ASC
+                LIMIT $3
+                "#,
+            )
+            .bind(origin_note_id)
+            .bind(status.as_str())
+            .bind(limit)
+            .fetch_all(pool)
+            .await?
+        }
+        None => {
+            sqlx::query_as::<Postgres, (String, String, f64)>(
+                r#"
+                SELECT documents.slug, documents.title,
+                       min(candidate.embedding <=> origin.embedding) AS distance
+                FROM note_chunks AS origin
+                JOIN note_chunks AS candidate ON candidate.note_id <> origin.note_id
+                JOIN documents ON documents.id = candidate.note_id
+                WHERE origin.note_id = $1
+                GROUP BY documents.id, documents.slug, documents.title
+                ORDER BY distance ASC, documents.slug ASC
+                LIMIT $2
+                "#,
+            )
+            .bind(origin_note_id)
+            .bind(limit)
+            .fetch_all(pool)
+            .await?
+        }
+    };
+    Ok(rows
+        .into_iter()
+        .map(|(slug, title, distance)| RelatedNote {
+            slug,
+            title,
+            distance,
+        })
+        .collect())
+}
+
 /// Top-`limit` chunks nearest `query_embedding` by cosine distance for
 /// ask-your-garden retrieval, visibility-filtered so a public caller's answer is
 /// never grounded in (nor cites) a draft note. Returns the chunk content plus its

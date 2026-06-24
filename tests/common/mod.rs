@@ -3,6 +3,7 @@
 #![allow(dead_code)]
 
 use anyhow::{Result, anyhow};
+use async_trait::async_trait;
 use inkwell::ai::{Embedder, Llm, MockEmbedder, MockLlm};
 use inkwell::config::Config;
 use inkwell::db::migrations;
@@ -10,6 +11,22 @@ use inkwell::db::pool::create_pool;
 use inkwell::http::router::{build_router, build_router_with_providers};
 use sqlx::PgPool;
 use std::sync::Arc;
+
+/// Test-only embedder that returns an error if `embed()` is called. Use to
+/// prove that a route does NOT invoke the embedder (e.g. `/documents/{slug}/related`
+/// after the stored-chunk refactor). With the old body-embedding implementation,
+/// this would cause `/related` to return `related: []`; with the new stored-chunk
+/// implementation it is never called and the route returns real results.
+struct FailingEmbedder;
+
+#[async_trait]
+impl Embedder for FailingEmbedder {
+    async fn embed(&self, _texts: &[String]) -> anyhow::Result<Vec<Vec<f32>>> {
+        Err(anyhow::anyhow!(
+            "FailingEmbedder: embed() must not be called on this route"
+        ))
+    }
+}
 
 pub async fn maybe_pool() -> Result<Option<PgPool>> {
     let Ok(database_url) = std::env::var("DATABASE_URL") else {
@@ -90,4 +107,24 @@ pub async fn maybe_router_with_ai() -> Result<Option<axum::Router>> {
         embedder,
         llm,
     )))
+}
+
+/// Build a router with the mock AI providers against an already-acquired pool.
+/// Lets tests seed documents through a normal mock-AI router, then hand the
+/// SAME pool to a second router (e.g. [`router_for_with_failing_embedder`]) to
+/// exercise a route's behavior over the populated database.
+pub fn router_for_with_ai(pool: PgPool) -> axum::Router {
+    let database_url = std::env::var("DATABASE_URL").unwrap_or_default();
+    let embedder: Arc<dyn Embedder> = Arc::new(MockEmbedder);
+    let llm: Option<Arc<dyn Llm>> = Some(Arc::new(MockLlm));
+    build_router_with_providers(test_config(database_url), pool, embedder, llm)
+}
+
+/// Build a router whose embedder returns an error on any call. Pass the SAME
+/// pool used by a seeding router (built with [`router_for_with_ai`]) so the
+/// route operates over real chunk data while the embedder is provably unused.
+pub fn router_for_with_failing_embedder(pool: PgPool) -> axum::Router {
+    let database_url = std::env::var("DATABASE_URL").unwrap_or_default();
+    let embedder: Arc<dyn Embedder> = Arc::new(FailingEmbedder);
+    build_router_with_providers(test_config(database_url), pool, embedder, None)
 }

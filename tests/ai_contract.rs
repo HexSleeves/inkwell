@@ -248,6 +248,53 @@ async fn related_404s_for_unknown_or_draft_slug() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Regression: `/related` must use stored `note_chunks` and NOT call the
+/// embedder. With the old body-embedding implementation a failing embedder would
+/// cause the route to return `related: []`; with the stored-chunk
+/// implementation the embedder is never invoked and the route returns real
+/// results derived from the already-indexed chunks.
+#[tokio::test]
+async fn related_does_not_call_embedder() -> anyhow::Result<()> {
+    let _guard = db_guard().await;
+    let Some(pool) = common::maybe_pool().await? else {
+        return Ok(());
+    };
+
+    // Seed notes through the mock-AI router so chunks are indexed in the DB.
+    let seeding_router = common::router_for_with_ai(pool.clone());
+    create_note(
+        &seeding_router,
+        "Rust Closures",
+        "Closures in rust capture their environment by reference or by value.",
+        true,
+    )
+    .await?;
+    create_note(
+        &seeding_router,
+        "Rust Iterators",
+        "Iterators in rust are lazy and composable, often used with closures.",
+        true,
+    )
+    .await?;
+
+    // Now issue the /related request through a router whose embedder errors if
+    // called. The route must succeed (200 OK) and return a non-empty result
+    // because it reads stored chunks rather than re-embedding the document body.
+    let query_router = common::router_for_with_failing_embedder(pool);
+    let (status, json) = get_json(&query_router, "/documents/rust-closures/related").await?;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "/related must return 200 without calling the embedder"
+    );
+    let related = json["related"].as_array().unwrap();
+    assert!(
+        !related.is_empty(),
+        "/related must return results from stored chunks (not an empty list from embedder error)"
+    );
+    Ok(())
+}
+
 // --- ask-your-garden eval suite (mock embedder + mock LLM) ------------------
 
 #[tokio::test]
