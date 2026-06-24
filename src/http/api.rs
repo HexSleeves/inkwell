@@ -866,8 +866,14 @@ async fn authorize_mutation(
         return Ok(());
     }
     match documents::get_document_owner(&state.pool, slug).await? {
+        // Missing note: let the handler's own lookup return the usual 404.
         None => Ok(()),
-        Some(owner) if owner == principal.author_id => Ok(()),
+        // Authorize only when BOTH the note's owner and the principal resolve to
+        // a concrete, equal author id. A NULL owner (`Some(None)`) or a
+        // principal without an author id never authorizes a non-admin — defense
+        // in depth so this never relies on the NOT-NULL constraint or on
+        // `author_id` always being `Some` to stay safe.
+        Some(Some(owner)) if Some(owner) == principal.author_id => Ok(()),
         Some(_) => Err(AppError::Forbidden("You do not own this note.".to_string())),
     }
 }
