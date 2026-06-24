@@ -1,10 +1,15 @@
+# cargo-deny configuration (schema v2 — matches EmbarkStudios/cargo-deny-action@v2).
+# v2 removed the v1 lint-level keys `[advisories] vulnerability` and
+# `[licenses] unlicensed` (vulnerable/unlicensed crates are always denied; ignore
+# specific advisories via `ignore`/`exceptions`), and changed `unmaintained` to a
+# scope enum (all | workspace | transitive | none).
 [advisories]
-vulnerability = "deny"
-unmaintained = "warn"
+version = 2
+unmaintained = "all"
 yanked = "warn"
 
 [licenses]
-unlicensed = "deny"
+version = 2
 allow = [
   "MIT",
   "Apache-2.0",
