@@ -43,19 +43,6 @@ pub async fn create_document(pool: &PgPool, input: NewDocument) -> Result<Docume
     map_duplicate_slug(result, &input.slug)
 }
 
-/// The owner of a document by slug, for ownership enforcement (ADR 0009 slice 3).
-/// Outer `Option`: whether the document exists. Inner `Option<Uuid>`: its
-/// `owner_id`, which stays nullable until slice 4 tightens the column.
-pub async fn get_document_owner(
-    pool: &PgPool,
-    slug: &str,
-) -> Result<Option<Option<Uuid>>, sqlx::Error> {
-    sqlx::query_scalar::<Postgres, Option<Uuid>>("SELECT owner_id FROM documents WHERE slug = $1")
-        .bind(slug)
-        .fetch_optional(pool)
-        .await
-}
-
 pub async fn get_document_by_slug(
     pool: &PgPool,
     slug: &str,
@@ -128,10 +115,15 @@ pub async fn count_documents(pool: &PgPool, filter: StatusFilter) -> Result<i64,
     }
 }
 
+/// Update a document by slug. `owner` enforces ownership ATOMICALLY (ADR 0009
+/// slice 3): `None` = admin (no constraint), `Some(id)` restricts the write to a
+/// row owned by `id`. A non-owner (or missing slug) matches no row → `None` →
+/// the handler's 404, with no separate check-then-write TOCTOU window.
 pub async fn update_document_by_slug(
     pool: &PgPool,
     slug: &str,
     patch: DocumentPatch,
+    owner: Option<Uuid>,
 ) -> Result<Option<Document>, DbError> {
     let result = sqlx::query_as::<Postgres, Document>(
         r#"
@@ -143,7 +135,7 @@ pub async fn update_document_by_slug(
             tags = COALESCE($6, tags),
             version = version + 1,
             updated_at = now()
-        WHERE slug = $1
+        WHERE slug = $1 AND ($7::uuid IS NULL OR owner_id = $7)
         RETURNING id, slug, title, body_markdown, rendered_html, status, growth, tags, version, created_at, updated_at
         "#,
     )
@@ -153,6 +145,7 @@ pub async fn update_document_by_slug(
     .bind(&patch.rendered_html)
     .bind(patch.growth.map(|growth| growth.as_str().to_string()))
     .bind(&patch.tags)
+    .bind(owner)
     .fetch_optional(pool)
     .await;
 
@@ -187,6 +180,7 @@ pub async fn update_document_by_slug_if_version(
     slug: &str,
     expected_version: i64,
     patch: DocumentPatch,
+    owner: Option<Uuid>,
 ) -> Result<ConditionalUpdate, DbError> {
     let result = sqlx::query_as::<Postgres, Document>(
         r#"
@@ -198,7 +192,7 @@ pub async fn update_document_by_slug_if_version(
             tags = COALESCE($7, tags),
             version = version + 1,
             updated_at = now()
-        WHERE slug = $1 AND version = $2
+        WHERE slug = $1 AND version = $2 AND ($8::uuid IS NULL OR owner_id = $8)
         RETURNING id, slug, title, body_markdown, rendered_html, status, growth, tags, version, created_at, updated_at
         "#,
     )
@@ -209,18 +203,22 @@ pub async fn update_document_by_slug_if_version(
     .bind(&patch.rendered_html)
     .bind(patch.growth.map(|growth| growth.as_str().to_string()))
     .bind(&patch.tags)
+    .bind(owner)
     .fetch_optional(pool)
     .await;
 
     match map_optional_duplicate_slug(result, slug)? {
         Some(document) => Ok(ConditionalUpdate::Updated(Box::new(document))),
         None => {
-            // The guarded UPDATE matched no row: either the slug is gone, or the
-            // version moved. Probe the current version to disambiguate.
+            // The guarded UPDATE matched no row: the slug is gone, the version
+            // moved, OR the caller doesn't own it. Probe at the SAME ownership
+            // scope so a non-owner gets NotFound (404) rather than a
+            // VersionMismatch (409) that would leak the row's existence.
             match sqlx::query_scalar::<Postgres, i64>(
-                "SELECT version FROM documents WHERE slug = $1",
+                "SELECT version FROM documents WHERE slug = $1 AND ($2::uuid IS NULL OR owner_id = $2)",
             )
             .bind(slug)
+            .bind(owner)
             .fetch_optional(pool)
             .await?
             {
@@ -231,21 +229,26 @@ pub async fn update_document_by_slug_if_version(
     }
 }
 
+/// Set a document's status by slug. `owner` enforces ownership atomically (see
+/// [`update_document_by_slug`]): `None` = admin, `Some(id)` restricts to a row
+/// owned by `id`; a non-owner matches no row → `None` → 404.
 pub async fn set_document_status(
     pool: &PgPool,
     slug: &str,
     status: DocumentStatus,
+    owner: Option<Uuid>,
 ) -> Result<Option<Document>, sqlx::Error> {
     sqlx::query_as::<Postgres, Document>(
         r#"
         UPDATE documents
         SET status = $2
-        WHERE slug = $1
+        WHERE slug = $1 AND ($3::uuid IS NULL OR owner_id = $3)
         RETURNING id, slug, title, body_markdown, rendered_html, status, growth, tags, version, created_at, updated_at
         "#,
     )
     .bind(slug)
     .bind(status.as_str())
+    .bind(owner)
     .fetch_optional(pool)
     .await
 }
@@ -267,11 +270,21 @@ pub async fn set_rendered_html(
     Ok(())
 }
 
-pub async fn delete_document_by_slug(pool: &PgPool, slug: &str) -> Result<bool, sqlx::Error> {
-    let result = sqlx::query("DELETE FROM documents WHERE slug = $1")
-        .bind(slug)
-        .execute(pool)
-        .await?;
+/// Delete a document by slug. `owner` enforces ownership atomically (see
+/// [`update_document_by_slug`]): `None` = admin, `Some(id)` restricts to a row
+/// owned by `id`; a non-owner deletes nothing → `false` → 404.
+pub async fn delete_document_by_slug(
+    pool: &PgPool,
+    slug: &str,
+    owner: Option<Uuid>,
+) -> Result<bool, sqlx::Error> {
+    let result = sqlx::query(
+        "DELETE FROM documents WHERE slug = $1 AND ($2::uuid IS NULL OR owner_id = $2)",
+    )
+    .bind(slug)
+    .bind(owner)
+    .execute(pool)
+    .await?;
     Ok(result.rows_affected() > 0)
 }
 

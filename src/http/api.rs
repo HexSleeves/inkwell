@@ -330,9 +330,14 @@ pub async fn publish_document(
         return Err(AppError::MethodNotAllowed(vec!["POST"]));
     }
     let principal = require_principal(&headers, &state.config, &state.pool).await?;
-    authorize_mutation(&state, &principal, Scope::Publish, &slug).await?;
-    let Some(document) =
-        documents::set_document_status(&state.pool, &slug, DocumentStatus::Published).await?
+    require_scope(&principal, Scope::Publish)?;
+    let Some(document) = documents::set_document_status(
+        &state.pool,
+        &slug,
+        DocumentStatus::Published,
+        owner_filter(&principal),
+    )
+    .await?
     else {
         return Err(AppError::NotFound(format!(
             "No document with slug \"{slug}\"."
@@ -365,9 +370,14 @@ pub async fn unpublish_document(
         return Err(AppError::MethodNotAllowed(vec!["POST"]));
     }
     let principal = require_principal(&headers, &state.config, &state.pool).await?;
-    authorize_mutation(&state, &principal, Scope::Publish, &slug).await?;
-    let Some(document) =
-        documents::set_document_status(&state.pool, &slug, DocumentStatus::Draft).await?
+    require_scope(&principal, Scope::Publish)?;
+    let Some(document) = documents::set_document_status(
+        &state.pool,
+        &slug,
+        DocumentStatus::Draft,
+        owner_filter(&principal),
+    )
+    .await?
     else {
         return Err(AppError::NotFound(format!(
             "No document with slug \"{slug}\"."
@@ -555,7 +565,8 @@ async fn update_document(
     body: Bytes,
 ) -> Result<Response, AppError> {
     let principal = require_principal(&headers, &state.config, &state.pool).await?;
-    authorize_mutation(&state, &principal, Scope::Write, &slug).await?;
+    require_scope(&principal, Scope::Write)?;
+    let owner = owner_filter(&principal);
     enforce_body_limit(&body)?;
     let value = parse_json_body(body)?;
     let map = require_object(value)?;
@@ -605,6 +616,7 @@ async fn update_document(
                 &slug,
                 expected_version,
                 patch,
+                owner,
             )
             .await?
             {
@@ -624,7 +636,7 @@ async fn update_document(
         }
         None => {
             let Some(document) =
-                documents::update_document_by_slug(&state.pool, &slug, patch).await?
+                documents::update_document_by_slug(&state.pool, &slug, patch, owner).await?
             else {
                 return Err(AppError::NotFound(format!(
                     "No document with slug \"{slug}\"."
@@ -687,7 +699,8 @@ async fn delete_document(
     slug: String,
 ) -> Result<Response, AppError> {
     let principal = require_principal(&headers, &state.config, &state.pool).await?;
-    authorize_mutation(&state, &principal, Scope::Write, &slug).await?;
+    require_scope(&principal, Scope::Write)?;
+    let owner = owner_filter(&principal);
     // Resolve the note first so we can capture which sources link to it BEFORE
     // the row (and its inbound edges' target_note_id) are gone.
     let Some(document) =
@@ -698,7 +711,9 @@ async fn delete_document(
         )));
     };
     let affected = garden::affected_sources(&state.pool, document.id, &document.slug).await;
-    if !documents::delete_document_by_slug(&state.pool, &slug).await? {
+    // Ownership is enforced atomically by the owner-scoped delete: a non-owner
+    // (or a slug that vanished) deletes nothing → 404, no TOCTOU window.
+    if !documents::delete_document_by_slug(&state.pool, &slug, owner).await? {
         return Err(AppError::NotFound(format!(
             "No document with slug \"{slug}\"."
         )));
@@ -850,31 +865,21 @@ fn require_scope(principal: &Principal, scope: Scope) -> Result<(), AppError> {
     }
 }
 
-/// Authorize a mutation on an EXISTING document (ADR 0009 slice 3): the principal
-/// must hold `scope` and, unless it is an admin, must own the target. Returns 403
-/// on a scope or ownership failure. A missing document yields `Ok(())` so the
-/// caller's own lookup returns the usual 404 (no special-casing here).
-async fn authorize_mutation(
-    state: &AppState,
-    principal: &Principal,
-    scope: Scope,
-    slug: &str,
-) -> Result<(), AppError> {
-    require_scope(principal, scope)?;
-    // Admin may act on any note; non-admins are confined to notes they own.
+/// The ownership constraint passed to a mutating DB query (ADR 0009 slice 3).
+/// `None` for an admin (the shared key) — no owner constraint. For a non-admin,
+/// the principal's author id, so the `UPDATE`/`DELETE` only matches a row that
+/// principal owns and authorization is enforced ATOMICALLY in the write itself —
+/// no separate check-then-write step, so no TOCTOU window where a slug is
+/// deleted and recreated between an ownership check and the mutation. A non-owner
+/// (or missing slug) matches no row → the handler's normal 404.
+///
+/// `author_id` is always `Some` for a real principal; the `nil` fallback fails
+/// closed (matches no note) rather than degrading to "no constraint".
+fn owner_filter(principal: &Principal) -> Option<uuid::Uuid> {
     if principal.has(Scope::Admin) {
-        return Ok(());
-    }
-    match documents::get_document_owner(&state.pool, slug).await? {
-        // Missing note: let the handler's own lookup return the usual 404.
-        None => Ok(()),
-        // Authorize only when BOTH the note's owner and the principal resolve to
-        // a concrete, equal author id. A NULL owner (`Some(None)`) or a
-        // principal without an author id never authorizes a non-admin — defense
-        // in depth so this never relies on the NOT-NULL constraint or on
-        // `author_id` always being `Some` to stay safe.
-        Some(Some(owner)) if Some(owner) == principal.author_id => Ok(()),
-        Some(_) => Err(AppError::Forbidden("You do not own this note.".to_string())),
+        None
+    } else {
+        Some(principal.author_id.unwrap_or_else(uuid::Uuid::nil))
     }
 }
 

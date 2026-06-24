@@ -14,7 +14,7 @@ An open, API-first Markdown publishing platform (digital garden) implemented as 
 
 - Never write raw SQLx queries outside of `src/db/` — no DB access in handlers or garden
 - Every read endpoint must apply `Visibility` (Public vs All) from `authenticate(...).await.is_some()` — never hardcode `status = 'published'` in a handler
-- Every write endpoint must call `require_principal`, then enforce scope + ownership before any mutation: `require_scope` (create→`write`, publish→`publish`) and `authorize_mutation` (non-admin may only touch notes they own; admin bypasses); `create` stamps `owner_id`; then audit the action with the resolved `Principal`. Admin-only surfaces also require `principal.has(Scope::Admin)`
+- Every write endpoint must call `require_principal`, then `require_scope` (create→`write`, publish→`publish`), then enforce ownership ATOMICALLY by passing `owner_filter(&principal)` into the mutating query (`WHERE … AND ($n IS NULL OR owner_id = $n)`; admin → `None` = no constraint). A non-owner matches no row → 404 — never a separate check-then-write. `create` stamps `owner_id`; audit the action with the resolved `Principal`. Admin-only surfaces also require `principal.has(Scope::Admin)`
 - Post-write side-effects (edge persist, embedding index, re-render) are always best-effort — `if let Err(e) = ... { tracing::warn!(...) }`, never 500 a write that succeeded
 - Never print secrets in logs — `Config::Debug` redacts all keys; don't add `%config.api_key` to tracing spans
 

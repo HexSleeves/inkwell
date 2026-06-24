@@ -505,6 +505,7 @@ async fn updating_a_document_bumps_its_version() -> anyhow::Result<()> {
             title: Some("Bumped".to_string()),
             ..Default::default()
         },
+        None,
     )
     .await?
     .expect("document exists");
@@ -736,6 +737,7 @@ async fn growth_defaults_to_seedling_and_round_trips_through_create_and_update()
             growth: Some(GrowthStage::Budding),
             ..Default::default()
         },
+        None,
     )
     .await?
     .expect("document exists");

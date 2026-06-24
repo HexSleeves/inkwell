@@ -148,14 +148,22 @@ async fn write_scope_and_ownership_are_enforced() -> anyhow::Result<()> {
     // Ada owns it → can update.
     assert_eq!(update_doc(&router, "ada-note", &ada).await?, StatusCode::OK);
 
-    // Bob does NOT own it → 403 on update and delete.
+    // Bob has `write` scope but does NOT own ada-note. Ownership is enforced
+    // atomically in the UPDATE/DELETE (owner-scoped WHERE), so the write matches
+    // no row and surfaces as 404 — which also hides the note's existence from a
+    // non-owner rather than confirming it with a 403.
     assert_eq!(
         update_doc(&router, "ada-note", &bob).await?,
-        StatusCode::FORBIDDEN
+        StatusCode::NOT_FOUND
     );
     assert_eq!(
         act(&router, Method::DELETE, "/documents/ada-note", &bob).await?,
-        StatusCode::FORBIDDEN
+        StatusCode::NOT_FOUND
+    );
+    // ...and ada-note is untouched (still present, owned by Ada).
+    assert_eq!(
+        act(&router, Method::GET, "/documents/ada-note", &ada).await?,
+        StatusCode::OK
     );
 
     Ok(())
@@ -200,7 +208,9 @@ async fn publish_scope_and_ownership_are_enforced() -> anyhow::Result<()> {
         StatusCode::OK
     );
 
-    // The publisher has the scope but NOT ownership of the writer's note → 403.
+    // The publisher has the scope but NOT ownership of the writer's note.
+    // Ownership is enforced atomically (owner-scoped UPDATE matches no row), so a
+    // non-owner publish surfaces as 404 (also hiding existence), not 403.
     assert_eq!(
         act(
             &router,
@@ -209,7 +219,43 @@ async fn publish_scope_and_ownership_are_enforced() -> anyhow::Result<()> {
             &publisher
         )
         .await?,
+        StatusCode::NOT_FOUND
+    );
+
+    // --- /unpublish carries the SAME scope+ownership boundary as /publish ---
+
+    // Owner + publish scope → can unpublish their own (now-published) note.
+    assert_eq!(
+        act(
+            &router,
+            Method::POST,
+            "/documents/p-note/unpublish",
+            &publisher
+        )
+        .await?,
+        StatusCode::OK
+    );
+    // Missing publish scope → 403 (capability check runs before any DB write).
+    assert_eq!(
+        act(
+            &router,
+            Method::POST,
+            "/documents/p-note/unpublish",
+            &writer
+        )
+        .await?,
         StatusCode::FORBIDDEN
+    );
+    // Has publish scope but not owner → 404 (atomic owner-scoped write, no leak).
+    assert_eq!(
+        act(
+            &router,
+            Method::POST,
+            "/documents/w-note/unpublish",
+            &publisher
+        )
+        .await?,
+        StatusCode::NOT_FOUND
     );
 
     Ok(())
