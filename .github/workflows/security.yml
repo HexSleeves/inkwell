@@ -18,19 +18,19 @@ jobs:
       contents: read
       pull-requests: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         # Requires GitHub's Dependency Graph (repo Settings → Code security).
         # Until that's enabled the action errors ("not supported on this
         # repository"); keep it non-blocking so it doesn't gate merges, and it
         # starts doing real work automatically once the setting is on. cargo-audit
         # + cargo-deny already cover advisories/licenses in the meantime.
-      - uses: actions/dependency-review-action@v4
+      - uses: actions/dependency-review-action@v5.0.0
         continue-on-error: true
 
   cargo-audit:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/setup-rust
       - uses: taiki-e/install-action@cargo-audit
         # Ignore advisories on lockfile-only crates we never compile (rationale in
@@ -41,7 +41,7 @@ jobs:
   cargo-deny:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/setup-rust
       - uses: EmbarkStudios/cargo-deny-action@v2
         with:
