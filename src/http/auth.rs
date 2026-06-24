@@ -1,49 +1,150 @@
+//! Request authentication (ADR 0009, plan 023, slice 2).
+//!
+//! [`authenticate`] resolves the [`Principal`] behind a request from its single
+//! `x-api-key` header. Two credential families are accepted, in order:
+//!
+//! 1. **Static keys** — the shared `INKWELL_API_KEY` and the `INKWELL_MCP_KEY`.
+//!    Both map to the all-powerful bootstrap-admin principal (distinguished only
+//!    by audit `label`). Compared in constant time; the MCP key is retired for a
+//!    scoped token in slice 4.
+//! 2. **Scoped tokens** — `ink_<prefix>_<secret>` (see [`crate::domain::token`]).
+//!    Looked up by the public `prefix`, then a constant-time hash compare; a
+//!    revoked token never authenticates. Resolves to the owning author's
+//!    principal with the token's scopes.
+//!
+//! The token path is the **only** branch that touches the database, and it runs
+//! only when the presented key both fails the static compare and looks like a
+//! token — so anonymous and shared-key requests never pay a token lookup.
+//!
+//! Slice 2 resolves and audits principals but does not yet enforce scope or
+//! ownership on document routes (slice 3). The admin token-management surface is
+//! the exception: it is admin-gated from creation (see [`crate::http::admin`]).
+
 use axum::http::HeaderMap;
 use sha2::{Digest, Sha256};
+use sqlx::PgPool;
 use subtle::ConstantTimeEq;
 
-/// Authenticate a write request against the configured credentials.
-///
-/// A request is authenticated when its single `x-api-key` header matches
-/// **either** the configured `api_key` (the human authoring key) **or** the
-/// configured `mcp_key` (the MCP server's separate, independently
-/// grant/revocable credential). Comparison is constant-time against each
-/// configured key. The single-header and non-empty-key rules are preserved:
-/// missing, duplicated, or non-ASCII headers fail, as does an empty configured
-/// key (a blank key never authenticates).
-pub fn is_authenticated(headers: &HeaderMap, api_key: Option<&str>, mcp_key: Option<&str>) -> bool {
-    // Reject anything but exactly one `x-api-key` header.
-    let values = headers.get_all("x-api-key");
-    let mut iter = values.iter();
-    let Some(value) = iter.next() else {
-        return false;
-    };
-    if iter.next().is_some() {
-        return false;
-    }
-    let Ok(provided) = value.to_str() else {
-        return false;
-    };
-    let provided = Sha256::digest(provided.as_bytes());
+use crate::config::Config;
+use crate::db::tokens;
+use crate::domain::author::{BOOTSTRAP_ADMIN_ID, Principal, Scope};
+use crate::domain::token;
+use crate::error::AppError;
 
-    // Accept the request if the provided key matches any configured credential.
-    // Both candidates are checked so the comparison cost doesn't reveal which
-    // (if any) key was configured.
-    let mut matched = false;
-    for candidate in [api_key, mcp_key].into_iter().flatten() {
-        if candidate.is_empty() {
-            continue;
-        }
-        let expected = Sha256::digest(candidate.as_bytes());
-        matched |= bool::from(provided.ct_eq(&expected));
+/// Resolve the [`Principal`] behind a request, or `None` for an unauthenticated
+/// (public) caller. See the module docs for the resolution order.
+pub async fn authenticate(
+    headers: &HeaderMap,
+    config: &Config,
+    pool: &PgPool,
+) -> Option<Principal> {
+    let provided = provided_key(headers)?;
+
+    // 1. Static keys (no DB).
+    if let Some(principal) = match_static_key(provided, config) {
+        return Some(principal);
     }
-    matched
+
+    // 2. Scoped token. Only reached for a well-formed `ink_…` value, so public
+    //    and shared-key requests never hit the database.
+    let prefix = token::parse_prefix(provided)?;
+    let resolved = tokens::find_token_by_prefix(pool, prefix).await.ok()??;
+    if resolved.revoked {
+        return None;
+    }
+    // Constant-time compare of the (fixed 64-char) hex digests.
+    let provided_hash = token::sha256_hex(provided);
+    if !bool::from(
+        provided_hash
+            .as_bytes()
+            .ct_eq(resolved.token_hash.as_bytes()),
+    ) {
+        return None;
+    }
+    // Best-effort usage stamp: a stale `last_used_at` never affects auth.
+    if let Err(error) = tokens::touch_last_used(pool, prefix).await {
+        tracing::warn!(prefix = prefix, %error, "touch_last_used failed; token still authenticated");
+    }
+    let scopes = resolved
+        .scopes
+        .iter()
+        .filter_map(|s| Scope::parse(s))
+        .collect();
+    Some(Principal {
+        author_id: Some(resolved.author_id),
+        label: resolved.author_name,
+        scopes,
+    })
+}
+
+/// Require an authenticated principal, mapping the anonymous case to `401`. Used
+/// by every mutating endpoint and by the admin surface (which then also checks
+/// for [`Scope::Admin`]).
+pub async fn require_principal(
+    headers: &HeaderMap,
+    config: &Config,
+    pool: &PgPool,
+) -> Result<Principal, AppError> {
+    authenticate(headers, config, pool)
+        .await
+        .ok_or(AppError::Unauthorized)
+}
+
+/// Extract the single ASCII `x-api-key` header value. Returns `None` when the
+/// header is missing, duplicated, or non-ASCII — preserving the rejection rules
+/// the pre-token implementation enforced.
+fn provided_key(headers: &HeaderMap) -> Option<&str> {
+    let mut values = headers.get_all("x-api-key").iter();
+    let value = values.next()?;
+    if values.next().is_some() {
+        // More than one `x-api-key` header: reject rather than guess.
+        return None;
+    }
+    value.to_str().ok()
+}
+
+/// Match a presented key against the configured static credentials. Both
+/// candidates are always hashed and compared so the cost does not reveal which
+/// (if any) key is configured; an empty configured key never matches. A match
+/// yields the bootstrap-admin principal labelled by which key matched.
+fn match_static_key(provided: &str, config: &Config) -> Option<Principal> {
+    let provided_hash = Sha256::digest(provided.as_bytes());
+    let mut matched: Option<&'static str> = None;
+    for (candidate, label) in [
+        (config.api_key.as_deref(), "shared-key"),
+        (config.mcp_key.as_deref(), "mcp-key"),
+    ] {
+        let Some(candidate) = candidate.filter(|c| !c.is_empty()) else {
+            continue;
+        };
+        let expected = Sha256::digest(candidate.as_bytes());
+        let eq = bool::from(provided_hash.ct_eq(&expected));
+        if eq && matched.is_none() {
+            matched = Some(label);
+        }
+    }
+    matched.map(|label| Principal::admin(BOOTSTRAP_ADMIN_ID, label))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use axum::http::HeaderValue;
+
+    fn config_with(api_key: Option<&str>, mcp_key: Option<&str>) -> Config {
+        Config {
+            database_url: "postgres://localhost/db".to_string(),
+            host: "127.0.0.1".to_string(),
+            port: 3000,
+            api_key: api_key.map(str::to_string),
+            mcp_key: mcp_key.map(str::to_string),
+            site_url: None,
+            voyage_api_key: None,
+            anthropic_api_key: None,
+            llm_model: crate::config::DEFAULT_LLM_MODEL.to_string(),
+            webmention_send: false,
+        }
+    }
 
     fn headers_with_key(key: &str) -> HeaderMap {
         let mut headers = HeaderMap::new();
@@ -52,53 +153,46 @@ mod tests {
     }
 
     #[test]
-    fn accepts_either_the_api_key_or_the_mcp_key() {
-        let headers = headers_with_key("author-key");
-        assert!(is_authenticated(
-            &headers,
-            Some("author-key"),
-            Some("mcp-key")
-        ));
+    fn static_match_accepts_api_key_or_mcp_key_with_distinct_labels() {
+        let config = config_with(Some("author-key"), Some("mcp-key"));
 
-        let headers = headers_with_key("mcp-key");
-        assert!(is_authenticated(
-            &headers,
-            Some("author-key"),
-            Some("mcp-key")
-        ));
+        let admin = match_static_key("author-key", &config).expect("api key authenticates");
+        assert_eq!(admin.label, "shared-key");
+        assert_eq!(admin.author_id, Some(BOOTSTRAP_ADMIN_ID));
+        assert!(admin.has(Scope::Admin));
+
+        let mcp = match_static_key("mcp-key", &config).expect("mcp key authenticates");
+        assert_eq!(mcp.label, "mcp-key");
+        assert!(mcp.has(Scope::Write));
     }
 
     #[test]
-    fn rejects_a_key_matching_neither_credential() {
-        let headers = headers_with_key("wrong");
-        assert!(!is_authenticated(
-            &headers,
-            Some("author-key"),
-            Some("mcp-key")
-        ));
+    fn static_match_rejects_unknown_or_empty_keys() {
+        let config = config_with(Some("author-key"), Some("mcp-key"));
+        assert!(match_static_key("wrong", &config).is_none());
+
+        let blank = config_with(Some(""), Some(""));
+        assert!(match_static_key("", &blank).is_none());
+
+        let none = config_with(None, None);
+        assert!(match_static_key("anything", &none).is_none());
     }
 
     #[test]
-    fn mcp_key_works_even_when_no_api_key_is_configured() {
-        let headers = headers_with_key("mcp-key");
-        assert!(is_authenticated(&headers, None, Some("mcp-key")));
+    fn static_match_ignores_token_shaped_keys() {
+        // A token is not a static key; it must go through the DB path instead.
+        let config = config_with(Some("author-key"), None);
+        assert!(match_static_key("ink_abc_def", &config).is_none());
     }
 
     #[test]
-    fn empty_configured_keys_never_authenticate() {
-        let headers = headers_with_key("");
-        assert!(!is_authenticated(&headers, Some(""), Some("")));
-        assert!(!is_authenticated(&headers, None, None));
-    }
-
-    #[test]
-    fn rejects_missing_or_duplicated_header() {
-        let empty = HeaderMap::new();
-        assert!(!is_authenticated(&empty, Some("k"), None));
+    fn provided_key_requires_exactly_one_ascii_header() {
+        assert_eq!(provided_key(&headers_with_key("k")), Some("k"));
+        assert_eq!(provided_key(&HeaderMap::new()), None);
 
         let mut dup = HeaderMap::new();
         dup.append("x-api-key", HeaderValue::from_static("k"));
         dup.append("x-api-key", HeaderValue::from_static("k"));
-        assert!(!is_authenticated(&dup, Some("k"), None));
+        assert_eq!(provided_key(&dup), None);
     }
 }

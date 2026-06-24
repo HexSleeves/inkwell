@@ -10,7 +10,7 @@ use tokio::time::{Duration, timeout};
 use crate::db::audit::{self, AuditAction};
 use crate::db::documents;
 use crate::db::links::{self, Backlink, Graph, GraphEdge, GraphNode, Visibility};
-use crate::domain::author::BOOTSTRAP_ADMIN_ID;
+use crate::domain::author::Principal;
 use crate::domain::document::{
     DEFAULT_LIMIT, Document, DocumentPatch, DocumentStatus, GrowthStage, MAX_BODY_MARKDOWN_LENGTH,
     MAX_LIMIT, MAX_REQUEST_BODY_BYTES, MAX_TITLE_LENGTH, NewDocument, StatusFilter,
@@ -20,7 +20,7 @@ use crate::domain::tags::normalize_tags;
 use crate::error::AppError;
 use crate::garden;
 use crate::http::AppState;
-use crate::http::auth::is_authenticated;
+use crate::http::auth::{authenticate, require_principal};
 use crate::http::extractors::{parse_json_body, parse_non_negative_int, require_object};
 
 #[derive(Serialize)]
@@ -250,15 +250,7 @@ pub async fn document_backlinks(
     if method != Method::GET {
         return Err(AppError::MethodNotAllowed(vec!["GET"]));
     }
-    let visibility = if is_authenticated(
-        &headers,
-        state.config.api_key.as_deref(),
-        state.config.mcp_key.as_deref(),
-    ) {
-        Visibility::All
-    } else {
-        Visibility::Public
-    };
+    let visibility = request_visibility(&headers, &state).await;
     let filter = StatusFilter {
         status: visibility.status_filter(),
     };
@@ -292,7 +284,7 @@ pub async fn graph(
     if method != Method::GET {
         return Err(AppError::MethodNotAllowed(vec!["GET"]));
     }
-    let visibility = request_visibility(&headers, &state.config);
+    let visibility = request_visibility(&headers, &state).await;
     let graph = links::garden_graph(&state.pool, visibility).await?;
     Ok((StatusCode::OK, Json(GraphEnvelope::from(graph))).into_response())
 }
@@ -312,7 +304,7 @@ pub async fn document_graph(
     if method != Method::GET {
         return Err(AppError::MethodNotAllowed(vec!["GET"]));
     }
-    let visibility = request_visibility(&headers, &state.config);
+    let visibility = request_visibility(&headers, &state).await;
     let filter = StatusFilter {
         status: visibility.status_filter(),
     };
@@ -337,7 +329,7 @@ pub async fn publish_document(
     if method != Method::POST {
         return Err(AppError::MethodNotAllowed(vec!["POST"]));
     }
-    require_api_key(&headers, &state.config)?;
+    let principal = require_principal(&headers, &state.config, &state.pool).await?;
     let Some(document) =
         documents::set_document_status(&state.pool, &slug, DocumentStatus::Published).await?
     else {
@@ -353,10 +345,12 @@ pub async fn publish_document(
     crate::http::webmention_send::maybe_send(&state, &document.slug, &document.body_markdown);
     record_audit(
         &state,
+        &principal,
         AuditAction::Publish,
         Some(document.id),
         &document.slug,
-    );
+    )
+    .await;
     Ok((StatusCode::OK, Json(DocumentEnvelope::from(document))).into_response())
 }
 
@@ -369,7 +363,7 @@ pub async fn unpublish_document(
     if method != Method::POST {
         return Err(AppError::MethodNotAllowed(vec!["POST"]));
     }
-    require_api_key(&headers, &state.config)?;
+    let principal = require_principal(&headers, &state.config, &state.pool).await?;
     let Some(document) =
         documents::set_document_status(&state.pool, &slug, DocumentStatus::Draft).await?
     else {
@@ -381,10 +375,12 @@ pub async fn unpublish_document(
     garden::backfill_after_change(&state.pool, document.id, &document.slug).await;
     record_audit(
         &state,
+        &principal,
         AuditAction::Unpublish,
         Some(document.id),
         &document.slug,
-    );
+    )
+    .await;
     Ok((StatusCode::OK, Json(DocumentEnvelope::from(document))).into_response())
 }
 
@@ -393,7 +389,7 @@ async fn create_document(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Response, AppError> {
-    require_api_key(&headers, &state.config)?;
+    let principal = require_principal(&headers, &state.config, &state.pool).await?;
     enforce_body_limit(&body)?;
     let value = parse_json_body(body)?;
     let map = require_object(value)?;
@@ -447,10 +443,12 @@ async fn create_document(
     garden::backfill_after_change(&state.pool, document.id, &document.slug).await;
     record_audit(
         &state,
+        &principal,
         AuditAction::Create,
         Some(document.id),
         &document.slug,
-    );
+    )
+    .await;
     Ok((StatusCode::CREATED, Json(DocumentEnvelope::from(document))).into_response())
 }
 
@@ -459,11 +457,9 @@ async fn list_documents(
     headers: HeaderMap,
     query: ListQuery,
 ) -> Result<Response, AppError> {
-    let authenticated = is_authenticated(
-        &headers,
-        state.config.api_key.as_deref(),
-        state.config.mcp_key.as_deref(),
-    );
+    let authenticated = authenticate(&headers, &state.config, &state.pool)
+        .await
+        .is_some();
     let status = resolve_list_status(authenticated, query.status.as_deref())?;
     let mut limit =
         parse_non_negative_int(query.limit.as_deref(), "limit")?.unwrap_or(DEFAULT_LIMIT);
@@ -501,11 +497,9 @@ async fn get_document(
     headers: HeaderMap,
     slug: String,
 ) -> Result<Response, AppError> {
-    let authenticated = is_authenticated(
-        &headers,
-        state.config.api_key.as_deref(),
-        state.config.mcp_key.as_deref(),
-    );
+    let authenticated = authenticate(&headers, &state.config, &state.pool)
+        .await
+        .is_some();
     let filter = if authenticated {
         StatusFilter { status: None }
     } else {
@@ -558,7 +552,7 @@ async fn update_document(
     slug: String,
     body: Bytes,
 ) -> Result<Response, AppError> {
-    require_api_key(&headers, &state.config)?;
+    let principal = require_principal(&headers, &state.config, &state.pool).await?;
     enforce_body_limit(&body)?;
     let value = parse_json_body(body)?;
     let map = require_object(value)?;
@@ -675,10 +669,12 @@ async fn update_document(
     }
     record_audit(
         &state,
+        &principal,
         AuditAction::Update,
         Some(document.id),
         &document.slug,
-    );
+    )
+    .await;
     Ok((StatusCode::OK, Json(DocumentEnvelope::from(document))).into_response())
 }
 
@@ -687,7 +683,7 @@ async fn delete_document(
     headers: HeaderMap,
     slug: String,
 ) -> Result<Response, AppError> {
-    require_api_key(&headers, &state.config)?;
+    let principal = require_principal(&headers, &state.config, &state.pool).await?;
     // Resolve the note first so we can capture which sources link to it BEFORE
     // the row (and its inbound edges' target_note_id) are gone.
     let Some(document) =
@@ -705,7 +701,14 @@ async fn delete_document(
     }
     // Inbound edges now dangle; re-render those sources so they fall back to stubs.
     garden::rerender_sources(&state.pool, &affected).await;
-    record_audit(&state, AuditAction::Delete, Some(document.id), &slug);
+    record_audit(
+        &state,
+        &principal,
+        AuditAction::Delete,
+        Some(document.id),
+        &slug,
+    )
+    .await;
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
@@ -808,15 +811,15 @@ fn resolve_list_status(
 }
 
 /// Map the request's credentials to a read [`Visibility`]: an authenticated
-/// caller sees everything (`All`), an anonymous one only published content
-/// (`Public`). The single place read-scope is derived for the graph surfaces,
-/// mirroring the inline rule in [`document_backlinks`]/[`get_document`].
-fn request_visibility(headers: &HeaderMap, config: &crate::config::Config) -> Visibility {
-    if is_authenticated(
-        headers,
-        config.api_key.as_deref(),
-        config.mcp_key.as_deref(),
-    ) {
+/// caller (shared key or any live scoped token) sees everything (`All`), an
+/// anonymous one only published content (`Public`). The single place read-scope
+/// is derived for the document/graph surfaces. Token-aware as of slice 2, so a
+/// public request (no `x-api-key`) still short-circuits without a DB lookup.
+async fn request_visibility(headers: &HeaderMap, state: &AppState) -> Visibility {
+    if authenticate(headers, &state.config, &state.pool)
+        .await
+        .is_some()
+    {
         Visibility::All
     } else {
         Visibility::Public
@@ -824,60 +827,45 @@ fn request_visibility(headers: &HeaderMap, config: &crate::config::Config) -> Vi
 }
 
 /// Record a successful mutating action in the write-audit trail (ADR 0009, plan
-/// 023, slice 1). Fully detached via `tokio::spawn` — mirrors the webmention
-/// `maybe_send` pattern: the handler's response is returned immediately and the
-/// audit insert races ahead on a separate task. A failed or timed-out insert
-/// only logs a `warn!` and drops the row; it never affects the response.
+/// 023). Awaited inline (bounded by [`AUDIT_INSERT_TIMEOUT`]) so the row is
+/// durable before the handler responds — an audit trail that silently dropped
+/// rows under load or graceful shutdown would defeat its purpose. The insert is
+/// still *non-fatal*: a DB error or timeout only logs a `warn!` and the
+/// successful write's response is returned regardless (a failed audit must never
+/// turn a 201/200 into a 500).
 ///
-/// Slice 1 has no per-request principal, so every write is attributed to the
-/// bootstrap admin author with `actor_label = "shared-key"`. Per-author
-/// attribution lands once token resolution exists (slice 2).
-fn record_audit(
+/// As of slice 2 the write is attributed to the resolved [`Principal`]: the
+/// owning author's id and label for a scoped token, or the bootstrap admin with
+/// `actor_label = "shared-key"`/`"mcp-key"` for a static key.
+async fn record_audit(
     state: &AppState,
+    principal: &Principal,
     action: AuditAction,
     document_id: Option<uuid::Uuid>,
     slug: &str,
 ) {
     const AUDIT_INSERT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
-    let pool = state.pool.clone();
-    let slug = slug.to_string();
-    tokio::spawn(async move {
-        let insert = audit::record_write(
-            &pool,
-            Some(BOOTSTRAP_ADMIN_ID),
-            "shared-key",
-            action,
-            document_id,
-            Some(&slug),
-        );
-        match tokio::time::timeout(AUDIT_INSERT_TIMEOUT, insert).await {
-            Ok(Ok(())) => {}
-            Ok(Err(error)) => {
-                tracing::warn!(action = action.as_str(), slug = slug.as_str(), %error, "write_audit insert failed; audit row dropped");
-            }
-            Err(_elapsed) => {
-                tracing::warn!(
-                    action = action.as_str(),
-                    slug = slug.as_str(),
-                    timeout_secs = AUDIT_INSERT_TIMEOUT.as_secs(),
-                    "write_audit insert timed out; audit row dropped"
-                );
-            }
+    let insert = audit::record_write(
+        &state.pool,
+        principal.author_id,
+        &principal.label,
+        action,
+        document_id,
+        Some(slug),
+    );
+    match tokio::time::timeout(AUDIT_INSERT_TIMEOUT, insert).await {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => {
+            tracing::warn!(action = action.as_str(), slug, %error, "write_audit insert failed; audit row dropped");
         }
-    });
-}
-
-/// Require a write credential: the request must carry either the configured
-/// authoring key or the MCP key. Used by every mutating endpoint.
-fn require_api_key(headers: &HeaderMap, config: &crate::config::Config) -> Result<(), AppError> {
-    if is_authenticated(
-        headers,
-        config.api_key.as_deref(),
-        config.mcp_key.as_deref(),
-    ) {
-        Ok(())
-    } else {
-        Err(AppError::Unauthorized)
+        Err(_elapsed) => {
+            tracing::warn!(
+                action = action.as_str(),
+                slug,
+                timeout_secs = AUDIT_INSERT_TIMEOUT.as_secs(),
+                "write_audit insert timed out; audit row dropped"
+            );
+        }
     }
 }
 

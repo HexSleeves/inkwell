@@ -89,6 +89,35 @@ struct ListEnvelope {
     total: i64,
 }
 
+/// A freshly minted scoped token as returned by `POST /admin/tokens`. `token`
+/// is the full secret, shown once.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreatedToken {
+    pub token: String,
+    pub prefix: String,
+    pub author: String,
+    pub scopes: Vec<String>,
+}
+
+/// Token metadata for `token list`. Timestamps are the server's RFC3339 strings
+/// (the CLI prints them verbatim), and the secret is never present.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TokenInfo {
+    pub prefix: String,
+    pub author_name: String,
+    pub scopes: Vec<String>,
+    pub created_at: String,
+    pub last_used_at: Option<String>,
+    pub revoked_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct TokenListEnvelope {
+    tokens: Vec<TokenInfo>,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct CreatePayload<'a> {
@@ -395,6 +424,65 @@ impl InkwellClient {
             growth: None,
         };
         self.update(slug, &payload, Some(expected_version)).await
+    }
+
+    // -- Admin: scoped-token management ------------------------------------
+    //
+    // These ride the admin surface (`/admin/tokens`), which requires the
+    // configured key to carry the `admin` scope — i.e. the shared
+    // `INKWELL_API_KEY`. A non-admin key gets a clear 403.
+
+    /// Mint a scoped token for `name` (created on first use) with `scopes`.
+    /// Returns the full secret, shown to the operator exactly once.
+    pub async fn create_token(&self, name: &str, scopes: &[String]) -> Result<CreatedToken> {
+        let payload = serde_json::json!({ "name": name, "scopes": scopes });
+        let resp = self
+            .http
+            .post(self.url("/admin/tokens"))
+            .header("x-api-key", &self.api_key)
+            .json(&payload)
+            .send()
+            .await
+            .with_context(|| format!("creating token at {}", self.base_url))?;
+        match resp.status() {
+            StatusCode::CREATED => Ok(resp.json().await.context("decoding created token")?),
+            status => Err(error_for(status, resp).await),
+        }
+    }
+
+    /// List token metadata (never the secret — it is unrecoverable).
+    pub async fn list_tokens(&self) -> Result<Vec<TokenInfo>> {
+        let resp = self
+            .http
+            .get(self.url("/admin/tokens"))
+            .header("x-api-key", &self.api_key)
+            .send()
+            .await
+            .with_context(|| format!("listing tokens at {}", self.base_url))?;
+        match resp.status() {
+            StatusCode::OK => {
+                let envelope: TokenListEnvelope =
+                    resp.json().await.context("decoding token list")?;
+                Ok(envelope.tokens)
+            }
+            status => Err(error_for(status, resp).await),
+        }
+    }
+
+    /// Revoke a token by its public `prefix`. A missing/already-revoked token
+    /// surfaces as a clear not-found error.
+    pub async fn revoke_token(&self, prefix: &str) -> Result<()> {
+        let resp = self
+            .http
+            .post(self.url(&format!("/admin/tokens/{prefix}/revoke")))
+            .header("x-api-key", &self.api_key)
+            .send()
+            .await
+            .with_context(|| format!("revoking token {prefix:?} at {}", self.base_url))?;
+        match resp.status() {
+            StatusCode::OK => Ok(()),
+            status => Err(error_for(status, resp).await),
+        }
     }
 }
 

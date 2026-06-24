@@ -4,4 +4,5 @@ pub mod documents;
 pub mod links;
 pub mod migrations;
 pub mod pool;
+pub mod tokens;
 pub mod webmentions;

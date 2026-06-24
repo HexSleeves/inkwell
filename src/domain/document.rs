@@ -197,4 +197,39 @@ pub mod timestamp {
             base
         }
     }
+
+    /// `Option<OffsetDateTime>` flavour for nullable timestamps (e.g. a token's
+    /// `last_used_at` / `revoked_at`): `null` when absent, else the same RFC3339
+    /// string this module's scalar form emits.
+    pub mod option {
+        use serde::{Deserialize, Deserializer, Serializer};
+        use time::OffsetDateTime;
+        use time::format_description::well_known::Rfc3339;
+
+        pub fn serialize<S>(
+            value: &Option<OffsetDateTime>,
+            serializer: S,
+        ) -> Result<S::Ok, S::Error>
+        where
+            S: Serializer,
+        {
+            match value {
+                Some(value) => serializer.serialize_some(&super::serialize_to_string(value)),
+                None => serializer.serialize_none(),
+            }
+        }
+
+        pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<OffsetDateTime>, D::Error>
+        where
+            D: Deserializer<'de>,
+        {
+            let value = Option::<String>::deserialize(deserializer)?;
+            match value {
+                Some(text) => OffsetDateTime::parse(&text, &Rfc3339)
+                    .map(Some)
+                    .map_err(serde::de::Error::custom),
+                None => Ok(None),
+            }
+        }
+    }
 }

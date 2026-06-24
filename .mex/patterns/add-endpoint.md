@@ -41,8 +41,10 @@ All routes live in `src/http/router.rs`. Handlers live in `src/http/<surface>.rs
        if method != Method::GET {
            return Err(AppError::MethodNotAllowed(vec!["GET"]));
        }
-       // Derive visibility before any DB call
-       let visibility = if is_authenticated(&headers, state.config.api_key.as_deref(), state.config.mcp_key.as_deref()) {
+       // Derive visibility before any DB call (token-aware as of scoped-tokens
+       // slice 2). `authenticate` resolves the shared key OR a live scoped token;
+       // an anonymous request returns None without a DB hit.
+       let visibility = if authenticate(&headers, &state.config, &state.pool).await.is_some() {
            Visibility::All
        } else {
            Visibility::Public
@@ -51,9 +53,17 @@ All routes live in `src/http/router.rs`. Handlers live in `src/http/<surface>.rs
    }
    ```
 
-3. **For write endpoints**, call `require_api_key` first:
+3. **For write endpoints**, resolve the principal first (and audit with it):
    ```rust
-   require_api_key(&headers, &state.config)?;
+   let principal = require_principal(&headers, &state.config, &state.pool).await?;
+   // ... after a successful mutation:
+   record_audit(&state, &principal, AuditAction::Create, Some(document.id), &slug).await;
+   ```
+   For **admin-only** surfaces, also gate on the scope:
+   ```rust
+   if !principal.has(Scope::Admin) {
+       return Err(AppError::Forbidden("This action requires an admin token.".into()));
+   }
    ```
 
 4. **Add the response type** (private to the handler file):
@@ -87,8 +97,9 @@ All routes live in `src/http/router.rs`. Handlers live in `src/http/<surface>.rs
 ## Verify
 
 - [ ] Method guard returns `AppError::MethodNotAllowed` for unsupported methods
-- [ ] Write endpoint calls `require_api_key` before any mutation
-- [ ] Read endpoint derives `Visibility` from `is_authenticated`
+- [ ] Write endpoint calls `require_principal` before any mutation (and audits with the resolved `Principal`)
+- [ ] Read endpoint derives `Visibility` from `authenticate(...).await.is_some()`
+- [ ] Admin-only surface additionally checks `principal.has(Scope::Admin)`
 - [ ] Response struct has `#[serde(rename_all = "camelCase")]`
 - [ ] Route registered in `build_router_with_providers`
 - [ ] Module declared in `src/http/mod.rs` (if new file)

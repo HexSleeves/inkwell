@@ -21,7 +21,7 @@ use crate::db::links::Visibility;
 use crate::domain::document::StatusFilter;
 use crate::error::AppError;
 use crate::http::AppState;
-use crate::http::auth::is_authenticated;
+use crate::http::auth::authenticate;
 
 /// How many related notes a `/documents/{slug}/related` response returns.
 const RELATED_LIMIT: i64 = 5;
@@ -68,7 +68,7 @@ pub async fn document_related(
     if method != Method::GET {
         return Err(AppError::MethodNotAllowed(vec!["GET"]));
     }
-    let visibility = request_visibility(&headers, &state);
+    let visibility = request_visibility(&headers, &state).await;
     let filter = StatusFilter {
         status: visibility.status_filter(),
     };
@@ -187,7 +187,7 @@ pub async fn ask(
         return Ok((StatusCode::OK, Json(response)).into_response());
     };
 
-    let visibility = request_visibility(&headers, &state);
+    let visibility = request_visibility(&headers, &state).await;
 
     // Vector retrieval over the question embedding; fall back to FTS when the
     // garden has no embeddings yet (e.g. a fresh import that hasn't been
@@ -287,12 +287,11 @@ fn dedup_citations(retrieved: &[chunks::RetrievedChunk]) -> Vec<Citation> {
 
 /// Map the request's credentials to a read [`Visibility`] — the same rule every
 /// content-exposing surface uses (authenticated ⇒ `All`, anonymous ⇒ `Public`).
-fn request_visibility(headers: &HeaderMap, state: &AppState) -> Visibility {
-    if is_authenticated(
-        headers,
-        state.config.api_key.as_deref(),
-        state.config.mcp_key.as_deref(),
-    ) {
+async fn request_visibility(headers: &HeaderMap, state: &AppState) -> Visibility {
+    if authenticate(headers, &state.config, &state.pool)
+        .await
+        .is_some()
+    {
         Visibility::All
     } else {
         Visibility::Public

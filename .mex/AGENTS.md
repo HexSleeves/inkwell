@@ -13,8 +13,8 @@ An open, API-first Markdown publishing platform (digital garden) implemented as 
 ## Non-Negotiables
 
 - Never write raw SQLx queries outside of `src/db/` — no DB access in handlers or garden
-- Every read endpoint must apply `Visibility` (Public vs All) from `is_authenticated` — never hardcode `status = 'published'` in a handler
-- Every write endpoint must call `require_api_key` before any mutation
+- Every read endpoint must apply `Visibility` (Public vs All) from `authenticate(...).await.is_some()` — never hardcode `status = 'published'` in a handler
+- Every write endpoint must call `require_principal` before any mutation, then audit the action with the resolved `Principal`; admin-only surfaces also require `principal.has(Scope::Admin)`
 - Post-write side-effects (edge persist, embedding index, re-render) are always best-effort — `if let Err(e) = ... { tracing::warn!(...) }`, never 500 a write that succeeded
 - Never print secrets in logs — `Config::Debug` redacts all keys; don't add `%config.api_key` to tracing spans
 

@@ -74,6 +74,37 @@ pub enum AuthorCommand {
         #[arg(long)]
         server: Option<String>,
     },
+    /// Manage scoped author tokens (admin only; uses INKWELL_API_KEY).
+    Token {
+        #[command(subcommand)]
+        command: TokenCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum TokenCommand {
+    /// Mint a scoped token for an author (created on first use). The token is
+    /// printed ONCE and cannot be recovered afterwards.
+    Create {
+        #[arg(long)]
+        name: String,
+        /// Comma-separated scopes: read, write, publish, admin.
+        #[arg(long, value_delimiter = ',', required = true)]
+        scopes: Vec<String>,
+        #[arg(long)]
+        server: Option<String>,
+    },
+    /// List existing tokens (metadata only; secrets are never shown).
+    List {
+        #[arg(long)]
+        server: Option<String>,
+    },
+    /// Revoke a token by its public prefix. Effective immediately.
+    Revoke {
+        prefix: String,
+        #[arg(long)]
+        server: Option<String>,
+    },
 }
 
 #[derive(Debug, Args)]

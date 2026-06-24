@@ -63,10 +63,18 @@ last_updated: 2026-06-23
 ### Two separate auth tokens (`INKWELL_API_KEY` + `INKWELL_MCP_KEY`)
 **Date:** 2026-01-01
 **Status:** Active
-**Decision:** Human authoring and MCP agent access use separate bearer tokens, both accepted by `is_authenticated` for reads and `require_api_key` for writes.
+**Decision:** Human authoring and MCP agent access use separate bearer tokens, both resolved to an admin `Principal` by `authenticate` for reads and `require_principal` for writes.
 **Reasoning:** Allows granting/revoking MCP access independently of the human authoring credential. In production you can rotate the MCP key after an agent breach without locking out the human author.
 **Alternatives considered:** Single shared key — simpler but no independent revocation. OAuth — rejected as over-engineering for a personal publishing tool.
-**Consequences:** Both keys must be set in Railway env vars. `Config` holds both. `is_authenticated` accepts either.
+**Consequences:** Both keys must be set in Railway env vars. `Config` holds both. `authenticate` accepts either as the bootstrap-admin principal. Superseded-in-part by scoped tokens (below): `INKWELL_MCP_KEY` is retired for a scoped token in slice 4.
+
+### Scoped author tokens, per-author audit, admin token surface (ADR 0009, plan 023, slice 2)
+**Date:** 2026-06-23
+**Status:** Active
+**Decision:** Request auth resolves a `Principal` (`author_id`, `label`, `scopes`) via `authenticate(headers, &Config, &PgPool)`. The shared/MCP keys map to the bootstrap-admin principal; a scoped token `ink_<prefix>_<secret>` is looked up by its public `prefix` then verified by a constant-time SHA-256 hash compare (only the hash is stored). Tokens are minted/listed/revoked over HTTP at `/admin/tokens` (admin-gated), kept on the existing `x-api-key` header, and managed by `inkwell author token …`. Writes are audited against the resolving principal. The audit insert is awaited inline (bounded, non-fatal) so the trail is durable on success.
+**Reasoning:** Per-author identity + revocable tokens without sessions/OAuth. Admin-gating the token surface from day one prevents a `write` token minting an `admin` token even though document-route scope/ownership enforcement is deferred to slice 3. Reusing `x-api-key` avoids a transport break for existing clients. A security audit trail must not silently drop rows, so the slice-1 detached `tokio::spawn` insert was changed to an awaited insert.
+**Alternatives considered:** Direct-DB token CLI — rejected: operators manage prod (Railway) over HTTP and have no DB access. `Authorization: Bearer` transport — rejected: needless break from the existing `x-api-key`. Storing the raw token — rejected: only the hash is ever persisted. Keeping the detached audit insert — rejected: lost rows under load/shutdown defeat the audit.
+**Consequences:** New `src/domain/token.rs`, `src/db/tokens.rs`, `src/http/admin.rs`; `AppError::Forbidden` (403). Mutating handlers take `require_principal(...).await?`; reads/visibility use `authenticate(...).await` (anonymous requests short-circuit with no DB hit). Slice 3 turns on scope/ownership enforcement; slice 4 tightens `owner_id NOT NULL` and retires `INKWELL_MCP_KEY`.
 
 ### MCP server as a separate CLI process over stdio
 **Date:** 2026-01-01

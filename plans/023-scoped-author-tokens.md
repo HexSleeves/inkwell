@@ -61,10 +61,10 @@ Keep the single-header / non-empty / non-ASCII rejection rules from the current 
 
 ## Rollout — 4 ship-card slices (each CI-green, no lockout)
 
-1. **Schema + audit + ownership backfill, no enforcement.** Migrations for `authors`, `author_tokens`, `documents.owner_id` (nullable), `write_audit`. Seed a bootstrap admin author; backfill existing docs' `owner_id`. Emit audit rows on writes. Shared key still all-powerful; behavior otherwise unchanged.
-2. **Token issuance + resolution.** `authenticate()` + `Principal`; token CLI; middleware accepts tokens **alongside** the shared key. Refactor author CLI + MCP to a token. No ownership/scope enforcement yet.
-3. **Enforcement.** Turn on scope + ownership checks on every mutating route and owner-visibility read.
-4. **Downgrade shared key + tighten.** Shared key = admin-only everyday; `documents.owner_id` → `NOT NULL`; retire `INKWELL_MCP_KEY` in favor of a scoped token.
+1. **[DONE — commit 0208156]** **Schema + audit + ownership backfill, no enforcement.** Migrations for `authors`, `author_tokens`, `documents.owner_id` (nullable), `write_audit`. Seed a bootstrap admin author; backfill existing docs' `owner_id`. Emit audit rows on writes. Shared key still all-powerful; behavior otherwise unchanged.
+2. **[DONE — 2026-06-23]** **Token issuance + resolution.** `authenticate()` + `Principal`; token CLI (`inkwell author token create/list/revoke`); writes accept tokens **alongside** the shared key. Per-author audit attribution. Token management exposed over HTTP at `/admin/tokens` (admin-gated). No ownership/scope enforcement on document routes yet. *Notes vs plan:* token management is HTTP admin routes (operators manage prod over HTTP), admin-gated from day one to block privilege escalation; the MCP server keeps using `INKWELL_MCP_KEY` (still admin) — its move to a scoped token is folded into slice 4's retirement; the slice-1 detached audit insert was changed to an awaited (durable) insert.
+3. **[TODO]** **Enforcement.** Turn on scope + ownership checks on every mutating route and owner-visibility read.
+4. **[TODO]** **Downgrade shared key + tighten.** Shared key = admin-only everyday; `documents.owner_id` → `NOT NULL`; retire `INKWELL_MCP_KEY` in favor of a scoped token.
 
 ## Testing (per slice)
 

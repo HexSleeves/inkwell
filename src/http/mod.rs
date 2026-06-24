@@ -5,6 +5,7 @@ use sqlx::PgPool;
 use crate::ai::{Embedder, Llm};
 use crate::config::Config;
 
+pub mod admin;
 pub mod ai;
 pub mod api;
 pub mod assets;

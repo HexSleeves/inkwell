@@ -9,7 +9,7 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result, anyhow, bail};
 
-use crate::cli::args::AuthorCommand;
+use crate::cli::args::{AuthorCommand, TokenCommand};
 use crate::client::{DocumentInput, InkwellClient};
 use crate::config::AuthorConfig;
 use crate::domain::slug::{is_valid_slug, slugify};
@@ -294,7 +294,76 @@ pub async fn run(command: AuthorCommand) -> Result<()> {
         AuthorCommand::Push { file, server } => cmd_push(file, server).await,
         AuthorCommand::Publish { slug, server } => cmd_publish(slug, server).await,
         AuthorCommand::Unpublish { slug, server } => cmd_unpublish(slug, server).await,
+        AuthorCommand::Token { command } => run_token(command).await,
     }
+}
+
+/// Dispatch `inkwell author token <subcommand>`.
+async fn run_token(command: TokenCommand) -> Result<()> {
+    match command {
+        TokenCommand::Create {
+            name,
+            scopes,
+            server,
+        } => cmd_token_create(name, scopes, server).await,
+        TokenCommand::List { server } => cmd_token_list(server).await,
+        TokenCommand::Revoke { prefix, server } => cmd_token_revoke(prefix, server).await,
+    }
+}
+
+async fn cmd_token_create(name: String, scopes: Vec<String>, server: Option<String>) -> Result<()> {
+    // Normalize the comma-split scopes (trim, drop blanks); the server validates
+    // the vocabulary and rejects unknown scopes.
+    let scopes: Vec<String> = scopes
+        .into_iter()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    if scopes.is_empty() {
+        bail!("Provide at least one --scopes value: read, write, publish, admin.");
+    }
+    let client = build_client(server.as_deref())?;
+    let created = client.create_token(&name, &scopes).await?;
+    println!(
+        "Created token for {} [{}]",
+        created.author,
+        created.scopes.join(", ")
+    );
+    println!("  prefix: {}", created.prefix);
+    println!("  token:  {}", created.token);
+    println!("Store the token now — it is not recoverable.");
+    Ok(())
+}
+
+async fn cmd_token_list(server: Option<String>) -> Result<()> {
+    let client = build_client(server.as_deref())?;
+    let tokens = client.list_tokens().await?;
+    if tokens.is_empty() {
+        println!("No tokens.");
+        return Ok(());
+    }
+    for token in tokens {
+        let state = match (token.revoked_at.as_deref(), token.last_used_at.as_deref()) {
+            (Some(at), _) => format!("revoked {at}"),
+            (None, Some(at)) => format!("last used {at}"),
+            (None, None) => "never used".to_string(),
+        };
+        println!(
+            "{}  {}  [{}]  created {}  ({state})",
+            token.prefix,
+            token.author_name,
+            token.scopes.join(", "),
+            token.created_at,
+        );
+    }
+    Ok(())
+}
+
+async fn cmd_token_revoke(prefix: String, server: Option<String>) -> Result<()> {
+    let client = build_client(server.as_deref())?;
+    client.revoke_token(&prefix).await?;
+    println!("Revoked token {prefix}");
+    Ok(())
 }
 
 fn cmd_new(

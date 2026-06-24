@@ -1,5 +1,5 @@
 use clap::{CommandFactory, Parser};
-use inkwell::cli::args::{AuthorCommand, Cli, Command, DbCommand, ImportCommand};
+use inkwell::cli::args::{AuthorCommand, Cli, Command, DbCommand, ImportCommand, TokenCommand};
 
 #[test]
 fn top_level_cli_parses_nested_subcommands() {
@@ -42,6 +42,52 @@ fn help_lists_the_real_command_tree() {
     assert!(help.contains("author"));
     assert!(help.contains("import"));
     assert!(help.contains("mcp"));
+}
+
+#[test]
+fn author_token_subcommands_parse() {
+    // create: comma-split scopes, --name, optional --server.
+    let cli = Cli::parse_from([
+        "inkwell",
+        "author",
+        "token",
+        "create",
+        "--name",
+        "Ada",
+        "--scopes",
+        "write,publish",
+        "--server",
+        "https://blog.example.com",
+    ]);
+    assert!(matches!(
+        cli.command,
+        Command::Author {
+            command: AuthorCommand::Token {
+                command: TokenCommand::Create { ref name, ref scopes, ref server },
+            }
+        } if name == "Ada"
+            && scopes == &vec!["write".to_string(), "publish".to_string()]
+            && server.as_deref() == Some("https://blog.example.com")
+    ));
+
+    // revoke: positional prefix.
+    let cli = Cli::parse_from(["inkwell", "author", "token", "revoke", "abc123"]);
+    assert!(matches!(
+        cli.command,
+        Command::Author {
+            command: AuthorCommand::Token {
+                command: TokenCommand::Revoke { ref prefix, server: None },
+            }
+        } if prefix == "abc123"
+    ));
+
+    // create requires --name and at least one --scopes value.
+    assert!(
+        Cli::try_parse_from(["inkwell", "author", "token", "create", "--name", "Ada"]).is_err()
+    );
+    assert!(
+        Cli::try_parse_from(["inkwell", "author", "token", "create", "--scopes", "write"]).is_err()
+    );
 }
 
 #[test]

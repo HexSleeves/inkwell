@@ -52,11 +52,11 @@ HTTP (Axum routing) → Auth (bearer token check) → Validation (body/params) �
 
 **Check:**
 1. `INKWELL_API_KEY` set in env/`.env`?
-2. Request sends `Authorization: Bearer <key>` header?
-3. Using `INKWELL_MCP_KEY` for a write endpoint — both keys are accepted by `require_api_key` via `is_authenticated`.
+2. Request sends the `x-api-key: <key>` header (single, ASCII)?
+3. Using `INKWELL_MCP_KEY` or a scoped `ink_<prefix>_<secret>` token — both are accepted via `authenticate`/`require_principal`. A revoked or unknown token is 401; a non-admin token on an `/admin/*` route is 403.
 4. Key has leading/trailing whitespace — `Config::from_env` trims and rejects blank keys.
 
-**Code path:** `src/http/auth.rs` → `is_authenticated` → constant-time compare via `subtle`.
+**Code path:** `src/http/auth.rs` → `authenticate` (static-key constant-time compare via `subtle`, else scoped-token lookup by prefix in `src/db/tokens.rs` + constant-time hash compare).
 
 ---
 

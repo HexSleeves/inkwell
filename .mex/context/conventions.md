@@ -63,8 +63,13 @@ pub async fn render_and_resolve(pool: &PgPool, markdown: &str) -> Result<(String
 
 **Visibility guard**: every read that could expose draft content must filter through `Visibility`:
 ```rust
-// Correct: derive visibility from auth, pass to db query
-let visibility = if is_authenticated(&headers, ...) { Visibility::All } else { Visibility::Public };
+// Correct: derive visibility from auth, pass to db query (token-aware as of
+// scoped-tokens slice 2; resolves the shared key OR a live scoped token).
+let visibility = if authenticate(&headers, &state.config, &state.pool).await.is_some() {
+    Visibility::All
+} else {
+    Visibility::Public
+};
 let filter = StatusFilter { status: visibility.status_filter() };
 
 // Wrong: hardcode status=Published or skip the filter
@@ -84,8 +89,9 @@ if let Err(error) = garden::persist_source_edges(&state.pool, document.id, &refs
 Before presenting any code:
 - [ ] DB access only in `src/db/`, never in handlers or `src/garden.rs` (except `sqlx::query` in garden's internal helpers)
 - [ ] New handlers return `Result<Response, AppError>`, not `Result<Json<T>, StatusCode>`
-- [ ] Write endpoints call `require_api_key` before any DB mutation
-- [ ] Read endpoints apply `Visibility` filter (Public vs All) based on `is_authenticated`
+- [ ] Write endpoints call `require_principal` before any DB mutation (resolves shared key or scoped token → `Principal`); audit the action with that principal
+- [ ] Read endpoints apply `Visibility` filter (Public vs All) based on `authenticate(...).await.is_some()` (token-aware; anonymous requests short-circuit without a DB hit)
+- [ ] Admin-only surfaces (e.g. token management) additionally require `principal.has(Scope::Admin)` → 403 otherwise
 - [ ] Post-write side-effects (edges, embeddings, re-render) are best-effort: `if let Err(e) = ... { tracing::warn!(...) }`
 - [ ] New response types derive `Serialize` + use `#[serde(rename_all = "camelCase")]`
 - [ ] New domain enums have `#[sqlx(type_name = "text", rename_all = "lowercase")]` and `as_str()` method
