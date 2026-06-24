@@ -91,9 +91,17 @@ pub async fn document_related(
     // Use the stored chunk index to find nearest neighbors. No re-embedding is
     // needed: note_chunks already holds per-note embeddings written by the
     // indexer on every create/update. An origin note with no stored chunks
-    // (e.g. unindexed) returns an empty list rather than 500ing.
-    let related =
-        chunks::related_notes_for_note(&state.pool, document.id, visibility, RELATED_LIMIT).await?;
+    // that match the active provider/model (e.g. unindexed or stored under a
+    // different provider) returns an empty list rather than 500ing.
+    let related = chunks::related_notes_for_note(
+        &state.pool,
+        document.id,
+        visibility,
+        RELATED_LIMIT,
+        state.embedder.provider(),
+        state.embedder.model(),
+    )
+    .await?;
 
     let response = RelatedResponse {
         slug: document.slug,
@@ -222,7 +230,15 @@ async fn retrieve_context(
         }
     };
     if let Some(embedding) = embeddings.first() {
-        let hits = chunks::search_chunks(&state.pool, embedding, visibility, ASK_TOP_K).await?;
+        let hits = chunks::search_chunks(
+            &state.pool,
+            embedding,
+            visibility,
+            ASK_TOP_K,
+            state.embedder.provider(),
+            state.embedder.model(),
+        )
+        .await?;
         if !hits.is_empty() {
             return Ok(hits);
         }

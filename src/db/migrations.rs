@@ -162,4 +162,26 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn migration_0018_add_note_chunk_embedding_provenance_exists_and_adds_columns() {
+        let sql = fs::read_to_string("migrations/0018_add_note_chunk_embedding_provenance.sql")
+            .expect("migration 0018 should exist");
+        assert!(
+            sql.contains("embedding_provider"),
+            "migration 0018 must add embedding_provider column"
+        );
+        assert!(
+            sql.contains("embedding_model"),
+            "migration 0018 must add embedding_model column"
+        );
+        assert!(
+            sql.contains("embedding_dimensions"),
+            "migration 0018 must add embedding_dimensions column"
+        );
+        assert!(
+            sql.contains("note_chunks_embedding_provenance_idx"),
+            "migration 0018 must add provenance index"
+        );
+    }
 }

@@ -404,6 +404,155 @@ async fn ask_empty_query_is_a_bad_request() -> anyhow::Result<()> {
     Ok(())
 }
 
+// --- Provenance filtering (migration 0018) -----------------------------------
+
+/// Chunks stored with `provider="unknown"` (the pre-migration default) must
+/// never be returned by vector retrieval, even when they exist in the DB. This
+/// simulates the state before a note is re-saved after enabling a real provider.
+#[tokio::test]
+async fn search_and_related_ignore_unknown_provenance_rows() -> anyhow::Result<()> {
+    use inkwell::db::chunks::{EmbeddingSource, NewChunk, count_note_chunks, replace_note_chunks};
+    let _guard = db_guard().await;
+    let Some(pool) = common::maybe_pool().await? else {
+        return Ok(());
+    };
+
+    // Build a router with the real mock AI so notes can be created normally.
+    let ai_router = common::router_for_with_ai(pool.clone());
+
+    // Create two published notes through the normal AI router (chunks get
+    // proper mock provenance).
+    let note_a = create_note(
+        &ai_router,
+        "Provenance Alpha",
+        "The quick brown fox jumps over the lazy dog.",
+        true,
+    )
+    .await?;
+    let note_b = create_note(
+        &ai_router,
+        "Provenance Beta",
+        "The quick brown fox and the lazy dog are friends.",
+        true,
+    )
+    .await?;
+
+    let note_a_id: uuid::Uuid = note_a["id"].as_str().unwrap().parse()?;
+    let note_b_id: uuid::Uuid = note_b["id"].as_str().unwrap().parse()?;
+
+    // Overwrite Note A's chunks with the `unknown` provenance to simulate
+    // pre-migration rows (i.e. rows that existed before 0018 was applied).
+    let unknown_source = EmbeddingSource {
+        provider: "unknown",
+        model: "unknown",
+        dimensions: 1024,
+    };
+    // Use the embedding vector from the mock embedder (not the point — we just
+    // need a plausible vector so the row is syntactically valid).
+    let fake_embedding = inkwell::ai::mock_embedding("The quick brown fox");
+    // Read Note A's CURRENT version — publishing bumps version (set_document_status
+    // bumps version/updated_at), so the create-time version would fail
+    // replace_note_chunks' optimistic-concurrency guard and silently no-op.
+    let note_a_version: i64 = sqlx::query_scalar("SELECT version FROM documents WHERE id = $1")
+        .bind(note_a_id)
+        .fetch_one(&pool)
+        .await?;
+    replace_note_chunks(
+        &pool,
+        note_a_id,
+        note_a_version,
+        &unknown_source,
+        &[NewChunk {
+            chunk_index: 0,
+            content: "The quick brown fox jumps over the lazy dog.".into(),
+            embedding: fake_embedding,
+        }],
+    )
+    .await?;
+
+    // Verify chunks are present in the DB for Note A.
+    assert!(
+        count_note_chunks(&pool, note_a_id).await? > 0,
+        "note A must have chunks for the test to be meaningful"
+    );
+
+    // /related for Note B must NOT return Note A (unknown chunks → excluded).
+    let (status, json) = get_json(&ai_router, "/documents/provenance-beta/related").await?;
+    assert_eq!(status, StatusCode::OK);
+    let related = json["related"].as_array().unwrap();
+    assert!(
+        related.iter().all(|n| n["slug"] != "provenance-alpha"),
+        "note with unknown-provenance chunks must never appear in /related (incompatible vectors)"
+    );
+
+    // /ask with a query similar to Note A's content must fall back to FTS
+    // (zero compatible vector hits) and NOT use Note A's unknown chunks.
+    let (status, _json) = get_json(
+        &ai_router,
+        "/ask?q=quick%20brown%20fox%20jumps%20over%20the%20lazy%20dog",
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK);
+    // The note IS published so FTS will find it. What we're checking is that
+    // the vector path didn't erroneously compare the unknown-provenance vector.
+    // We can't distinguish "fell back to FTS" vs "found by vector" here, but
+    // the important invariant is that the route responds 200 and does not panic.
+    let _ = note_b_id; // silence unused-variable warning; only note_a_id is manipulated
+    Ok(())
+}
+
+/// Chunks stored with the active mock provenance must still be returned
+/// normally — provenance filtering must not break the normal happy path.
+#[tokio::test]
+async fn search_and_related_return_compatible_provenance_rows() -> anyhow::Result<()> {
+    let _guard = db_guard().await;
+    let Some(router) = common::maybe_router_with_ai().await? else {
+        return Ok(());
+    };
+
+    create_note(
+        &router,
+        "Compatible Alpha",
+        "Rust memory safety prevents data races and dangling pointers.",
+        true,
+    )
+    .await?;
+    create_note(
+        &router,
+        "Compatible Beta",
+        "Rust ownership and borrowing rules ensure memory safety at compile time.",
+        true,
+    )
+    .await?;
+
+    // /related should surface Beta as a neighbor of Alpha.
+    let (status, json) = get_json(&router, "/documents/compatible-alpha/related").await?;
+    assert_eq!(status, StatusCode::OK);
+    let related = json["related"].as_array().unwrap();
+    assert!(
+        !related.is_empty(),
+        "/related must return results when chunks share the active provider/model"
+    );
+    assert_eq!(
+        related[0]["slug"], "compatible-beta",
+        "the thematically closest note should be first"
+    );
+
+    // /ask should ground its answer in compatible chunks.
+    let (status, json) = get_json(
+        &router,
+        "/ask?q=how%20does%20rust%20ensure%20memory%20safety",
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK);
+    let citations = json["citations"].as_array().unwrap();
+    assert!(
+        !citations.is_empty(),
+        "compatible chunks must be found and cited"
+    );
+    Ok(())
+}
+
 // MAX_ASK_QUERY_CHARS in src/http/ai.rs is 1_000 (not public). These assert the
 // guard rejects an over-cap question with a 400 BEFORE any provider work — so no
 // notes need to exist for retrieval/synthesis to run.
