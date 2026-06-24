@@ -451,10 +451,18 @@ impl InkwellClient {
     }
 
     /// List token metadata (never the secret — it is unrecoverable).
-    pub async fn list_tokens(&self) -> Result<Vec<TokenInfo>> {
+    ///
+    /// When `include_revoked` is `true`, the `?all=true` query param is sent
+    /// so the server includes revoked tokens. Default (false) hides them.
+    pub async fn list_tokens(&self, include_revoked: bool) -> Result<Vec<TokenInfo>> {
+        let path = if include_revoked {
+            "/admin/tokens?all=true".to_string()
+        } else {
+            "/admin/tokens".to_string()
+        };
         let resp = self
             .http
-            .get(self.url("/admin/tokens"))
+            .get(self.url(&path))
             .header("x-api-key", &self.api_key)
             .send()
             .await
@@ -464,6 +472,30 @@ impl InkwellClient {
                 let envelope: TokenListEnvelope =
                     resp.json().await.context("decoding token list")?;
                 Ok(envelope.tokens)
+            }
+            status => Err(error_for(status, resp).await),
+        }
+    }
+
+    /// Hard-delete all already-revoked tokens. Returns the number of rows deleted.
+    ///
+    /// Only tokens with `revoked_at IS NOT NULL` are removed; live tokens are
+    /// untouched. Safe to call repeatedly — a second prune returns 0.
+    pub async fn prune_tokens(&self) -> Result<u64> {
+        let resp = self
+            .http
+            .post(self.url("/admin/tokens/prune"))
+            .header("x-api-key", &self.api_key)
+            .send()
+            .await
+            .with_context(|| format!("pruning tokens at {}", self.base_url))?;
+        match resp.status() {
+            StatusCode::OK => {
+                let json: serde_json::Value =
+                    resp.json().await.context("decoding prune response")?;
+                json["pruned"]
+                    .as_u64()
+                    .ok_or_else(|| anyhow!("prune response missing \"pruned\" field"))
             }
             status => Err(error_for(status, resp).await),
         }

@@ -99,13 +99,23 @@ pub enum TokenCommand {
         server: Option<String>,
     },
     /// List existing tokens (metadata only; secrets are never shown).
+    /// Revoked tokens are hidden by default; pass --all to show them.
     List {
+        /// Include already-revoked tokens in the listing.
+        #[arg(long)]
+        all: bool,
         #[arg(long)]
         server: Option<String>,
     },
     /// Revoke a token by its public prefix. Effective immediately.
     Revoke {
         prefix: String,
+        #[arg(long)]
+        server: Option<String>,
+    },
+    /// Hard-delete all already-revoked tokens (audit-safe: write_audit rows
+    /// reference authors, not tokens). Safe to run repeatedly.
+    Prune {
         #[arg(long)]
         server: Option<String>,
     },
