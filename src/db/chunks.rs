@@ -24,6 +24,20 @@ pub struct NewChunk {
     pub embedding: Vec<f32>,
 }
 
+/// Identifies which embedding provider/model produced the vectors being stored
+/// or queried. Stored with every chunk row (migration 0018) so retrieval can
+/// filter to only compare compatible vectors — different providers use
+/// different vector spaces and must never be cross-compared.
+pub struct EmbeddingSource<'a> {
+    /// Short, stable provider identifier, e.g. `"mock"` or `"voyage"`.
+    pub provider: &'a str,
+    /// Model identifier, e.g. `"mock-hash-v1"` or `"voyage-3"`.
+    pub model: &'a str,
+    /// Vector dimensions, e.g. `1024`. Stored for auditing; the `vector(1024)`
+    /// column type already enforces the dimension at the DB level.
+    pub dimensions: i32,
+}
+
 /// A related note surfaced by vector search: the published (or, for owners,
 /// draft) note nearest the query note plus its best chunk distance.
 #[derive(Clone, Debug, PartialEq)]
@@ -62,6 +76,7 @@ pub async fn replace_note_chunks(
     pool: &PgPool,
     note_id: Uuid,
     expected_version: i64,
+    source: &EmbeddingSource<'_>,
     chunks: &[NewChunk],
 ) -> Result<bool, sqlx::Error> {
     let mut tx = pool.begin().await?;
@@ -83,13 +98,18 @@ pub async fn replace_note_chunks(
     for chunk in chunks {
         let embedding = vector_to_pg_text(&chunk.embedding);
         sqlx::query(
-            "INSERT INTO note_chunks (note_id, chunk_index, content, embedding) \
-             VALUES ($1, $2, $3, $4::vector)",
+            "INSERT INTO note_chunks \
+               (note_id, chunk_index, content, embedding, \
+                embedding_provider, embedding_model, embedding_dimensions) \
+             VALUES ($1, $2, $3, $4::vector, $5, $6, $7)",
         )
         .bind(note_id)
         .bind(chunk.chunk_index)
         .bind(&chunk.content)
         .bind(&embedding)
+        .bind(source.provider)
+        .bind(source.model)
+        .bind(source.dimensions)
         .execute(&mut *tx)
         .await?;
     }
@@ -111,12 +131,20 @@ pub async fn count_note_chunks(pool: &PgPool, note_id: Uuid) -> Result<i64, sqlx
 /// embeddings, EXCLUDING the origin note and visibility-filtered so a public
 /// caller never sees a draft (the no-draft-leak invariant). One row per note
 /// (its closest chunk), ordered by ascending distance, capped at `limit`.
+///
+/// Only compares chunks whose provenance (`embedding_provider` / `embedding_model`)
+/// matches `provider` / `model`; incompatible rows (e.g. rows stored under the
+/// old `unknown` default before migration 0018, or rows from a different
+/// provider) are silently excluded so query and stored vectors are always from
+/// the same space.
 pub async fn related_notes(
     pool: &PgPool,
     exclude_note_id: Uuid,
     query_embedding: &[f32],
     visibility: Visibility,
     limit: i64,
+    provider: &str,
+    model: &str,
 ) -> Result<Vec<RelatedNote>, sqlx::Error> {
     let embedding = vector_to_pg_text(query_embedding);
     // DISTINCT ON (note) keeps each note's single nearest chunk; the outer order
@@ -135,15 +163,19 @@ pub async fn related_notes(
                     JOIN documents ON documents.id = note_chunks.note_id
                     WHERE documents.id <> $2
                       AND documents.status = $3
+                      AND note_chunks.embedding_provider = $4
+                      AND note_chunks.embedding_model = $5
                     ORDER BY documents.id, distance
                 ) AS nearest
                 ORDER BY distance ASC, slug ASC
-                LIMIT $4
+                LIMIT $6
                 "#,
             )
             .bind(&embedding)
             .bind(exclude_note_id)
             .bind(status.as_str())
+            .bind(provider)
+            .bind(model)
             .bind(limit)
             .fetch_all(pool)
             .await?
@@ -159,14 +191,18 @@ pub async fn related_notes(
                     FROM note_chunks
                     JOIN documents ON documents.id = note_chunks.note_id
                     WHERE documents.id <> $2
+                      AND note_chunks.embedding_provider = $3
+                      AND note_chunks.embedding_model = $4
                     ORDER BY documents.id, distance
                 ) AS nearest
                 ORDER BY distance ASC, slug ASC
-                LIMIT $3
+                LIMIT $5
                 "#,
             )
             .bind(&embedding)
             .bind(exclude_note_id)
+            .bind(provider)
+            .bind(model)
             .bind(limit)
             .fetch_all(pool)
             .await?
@@ -189,17 +225,25 @@ pub async fn related_notes(
 /// candidate note's score. Visibility-filtered so a public caller never sees a
 /// draft (no-draft-leak invariant). Returns one row per candidate note ordered
 /// by best distance then slug, capped at `limit`. If the origin note has no
-/// stored chunks, the result is empty (rather than 500).
+/// stored chunks that match `provider`/`model`, the result is empty (rather
+/// than 500 or returning incompatible-provider results).
+///
+/// Both origin and candidate chunks must match `provider`/`model` so that only
+/// vectors from the same embedding space are ever compared.
 pub async fn related_notes_for_note(
     pool: &PgPool,
     origin_note_id: Uuid,
     visibility: Visibility,
     limit: i64,
+    provider: &str,
+    model: &str,
 ) -> Result<Vec<RelatedNote>, sqlx::Error> {
     // The JOIN condition `candidate.note_id <> origin.note_id` combined with
     // `WHERE origin.note_id = $1` ensures the origin note is excluded from
     // candidates without an extra predicate. GROUP BY collapses all chunk pairs
     // for a given candidate note to a single row; min() picks its best match.
+    // Both origin and candidate are filtered by provenance so vectors from
+    // different embedding spaces are never cross-compared.
     let rows: Vec<(String, String, f64)> = match visibility.status_filter() {
         Some(status) => {
             sqlx::query_as::<Postgres, (String, String, f64)>(
@@ -211,13 +255,19 @@ pub async fn related_notes_for_note(
                 JOIN documents ON documents.id = candidate.note_id
                 WHERE origin.note_id = $1
                   AND documents.status = $2
+                  AND origin.embedding_provider = $3
+                  AND origin.embedding_model = $4
+                  AND candidate.embedding_provider = $3
+                  AND candidate.embedding_model = $4
                 GROUP BY documents.id, documents.slug, documents.title
                 ORDER BY distance ASC, documents.slug ASC
-                LIMIT $3
+                LIMIT $5
                 "#,
             )
             .bind(origin_note_id)
             .bind(status.as_str())
+            .bind(provider)
+            .bind(model)
             .bind(limit)
             .fetch_all(pool)
             .await?
@@ -231,12 +281,18 @@ pub async fn related_notes_for_note(
                 JOIN note_chunks AS candidate ON candidate.note_id <> origin.note_id
                 JOIN documents ON documents.id = candidate.note_id
                 WHERE origin.note_id = $1
+                  AND origin.embedding_provider = $2
+                  AND origin.embedding_model = $3
+                  AND candidate.embedding_provider = $2
+                  AND candidate.embedding_model = $3
                 GROUP BY documents.id, documents.slug, documents.title
                 ORDER BY distance ASC, documents.slug ASC
-                LIMIT $2
+                LIMIT $4
                 "#,
             )
             .bind(origin_note_id)
+            .bind(provider)
+            .bind(model)
             .bind(limit)
             .fetch_all(pool)
             .await?
@@ -256,11 +312,18 @@ pub async fn related_notes_for_note(
 /// ask-your-garden retrieval, visibility-filtered so a public caller's answer is
 /// never grounded in (nor cites) a draft note. Returns the chunk content plus its
 /// source note, ordered by ascending distance.
+///
+/// Only compares chunks whose provenance matches `provider`/`model`; rows stored
+/// under a different provider or model (including pre-migration `unknown` rows)
+/// are excluded so the query vector is never compared against an incompatible
+/// vector space.
 pub async fn search_chunks(
     pool: &PgPool,
     query_embedding: &[f32],
     visibility: Visibility,
     limit: i64,
+    provider: &str,
+    model: &str,
 ) -> Result<Vec<RetrievedChunk>, sqlx::Error> {
     let embedding = vector_to_pg_text(query_embedding);
     let rows: Vec<(String, String, String, f64)> = match visibility.status_filter() {
@@ -272,12 +335,16 @@ pub async fn search_chunks(
                 FROM note_chunks
                 JOIN documents ON documents.id = note_chunks.note_id
                 WHERE documents.status = $2
+                  AND note_chunks.embedding_provider = $3
+                  AND note_chunks.embedding_model = $4
                 ORDER BY distance ASC, documents.slug ASC, note_chunks.chunk_index ASC
-                LIMIT $3
+                LIMIT $5
                 "#,
             )
             .bind(&embedding)
             .bind(status.as_str())
+            .bind(provider)
+            .bind(model)
             .bind(limit)
             .fetch_all(pool)
             .await?
@@ -289,11 +356,15 @@ pub async fn search_chunks(
                        (note_chunks.embedding <=> $1::vector) AS distance
                 FROM note_chunks
                 JOIN documents ON documents.id = note_chunks.note_id
+                WHERE note_chunks.embedding_provider = $2
+                  AND note_chunks.embedding_model = $3
                 ORDER BY distance ASC, documents.slug ASC, note_chunks.chunk_index ASC
-                LIMIT $2
+                LIMIT $4
                 "#,
             )
             .bind(&embedding)
+            .bind(provider)
+            .bind(model)
             .bind(limit)
             .fetch_all(pool)
             .await?

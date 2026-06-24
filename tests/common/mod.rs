@@ -17,10 +17,23 @@ use std::sync::Arc;
 /// after the stored-chunk refactor). With the old body-embedding implementation,
 /// this would cause `/related` to return `related: []`; with the new stored-chunk
 /// implementation it is never called and the route returns real results.
+///
+/// Reports the same provider/model as [`MockEmbedder`] so that chunks seeded by
+/// a mock-AI router (via [`router_for_with_ai`]) match the provenance filter in
+/// retrieval functions — this lets the test verify that stored chunks ARE
+/// returned without ever calling the embedder.
 struct FailingEmbedder;
 
 #[async_trait]
 impl Embedder for FailingEmbedder {
+    fn provider(&self) -> &'static str {
+        "mock"
+    }
+
+    fn model(&self) -> &str {
+        "mock-hash-v1"
+    }
+
     async fn embed(&self, _texts: &[String]) -> anyhow::Result<Vec<Vec<f32>>> {
         Err(anyhow::anyhow!(
             "FailingEmbedder: embed() must not be called on this route"

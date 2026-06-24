@@ -59,6 +59,14 @@ impl VoyageEmbedder {
 
 #[async_trait]
 impl Embedder for VoyageEmbedder {
+    fn provider(&self) -> &'static str {
+        "voyage"
+    }
+
+    fn model(&self) -> &str {
+        &self.model
+    }
+
     async fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
         if texts.is_empty() {
             return Ok(Vec::new());

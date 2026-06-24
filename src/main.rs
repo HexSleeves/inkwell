@@ -9,7 +9,7 @@ use clap::Parser;
 use inkwell::cli::args::{Cli, Command, DbCommand};
 use inkwell::cli::author;
 use inkwell::cli::import;
-use inkwell::cli::migrate::{db_migrate, db_rollback, db_status};
+use inkwell::cli::migrate::{db_migrate, db_reindex_embeddings, db_rollback, db_status};
 use inkwell::cli::seed;
 use inkwell::config::{AuthorConfig, Config};
 use inkwell::db::pool::create_pool;
@@ -43,6 +43,14 @@ async fn main() -> Result<()> {
                 let config = Config::from_env()?;
                 let pool = create_pool(&config.database_url)?;
                 db_status(&pool).await
+            }
+            DbCommand::ReindexEmbeddings => {
+                let config = Arc::new(Config::from_env()?);
+                let pool = create_pool(&config.database_url)?;
+                // Run migrations first so the schema is current.
+                db_migrate(&pool).await?;
+                let embedder = inkwell::ai::build_embedder(&config);
+                db_reindex_embeddings(&pool, embedder.as_ref()).await
             }
         },
         Command::Seed(command) => {

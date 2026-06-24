@@ -41,6 +41,16 @@ pub trait Embedder: Send + Sync {
     /// Embed each input string, returning one `EMBEDDING_DIMENSIONS`-length
     /// vector per input, in order. An empty input slice yields an empty result.
     async fn embed(&self, texts: &[String]) -> anyhow::Result<Vec<Vec<f32>>>;
+
+    /// Short, stable provider identifier stored with every chunk row
+    /// (e.g. `"mock"`, `"voyage"`). Used to filter retrieval so incompatible
+    /// vectors from different providers are never compared.
+    fn provider(&self) -> &'static str;
+
+    /// Model identifier stored with every chunk row (e.g. `"mock-hash-v1"`,
+    /// `"voyage-3"`). Used together with [`provider`](Self::provider) to
+    /// match stored chunks against the active embedder at retrieval time.
+    fn model(&self) -> &str;
 }
 
 /// Synthesizes a natural-language answer from a question and retrieved context.
@@ -63,6 +73,14 @@ pub struct MockEmbedder;
 impl Embedder for MockEmbedder {
     async fn embed(&self, texts: &[String]) -> anyhow::Result<Vec<Vec<f32>>> {
         Ok(texts.iter().map(|t| mock_embedding(t)).collect())
+    }
+
+    fn provider(&self) -> &'static str {
+        "mock"
+    }
+
+    fn model(&self) -> &str {
+        "mock-hash-v1"
     }
 }
 
@@ -201,11 +219,16 @@ pub async fn index_note(
     expected_version: i64,
     body: &str,
 ) -> anyhow::Result<()> {
-    use crate::db::chunks::{NewChunk, replace_note_chunks};
+    use crate::db::chunks::{EmbeddingSource, NewChunk, replace_note_chunks};
 
+    let source = EmbeddingSource {
+        provider: embedder.provider(),
+        model: embedder.model(),
+        dimensions: EMBEDDING_DIMENSIONS as i32,
+    };
     let chunks = chunk_text(body);
     if chunks.is_empty() {
-        replace_note_chunks(pool, note_id, expected_version, &[]).await?;
+        replace_note_chunks(pool, note_id, expected_version, &source, &[]).await?;
         return Ok(());
     }
     let embeddings = embedder.embed(&chunks).await?;
@@ -228,7 +251,7 @@ pub async fn index_note(
             embedding,
         })
         .collect();
-    replace_note_chunks(pool, note_id, expected_version, &rows).await?;
+    replace_note_chunks(pool, note_id, expected_version, &source, &rows).await?;
     Ok(())
 }
 

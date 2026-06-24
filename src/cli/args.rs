@@ -37,6 +37,11 @@ pub enum DbCommand {
         steps: usize,
     },
     Status,
+    /// Re-embed all notes using the active embedder and replace stored chunks.
+    /// Use this after switching embedding providers or models to ensure stored
+    /// vectors are compatible with the current query embedder. Processes notes
+    /// in pages; prints a summary (indexed / skipped / failed) on exit.
+    ReindexEmbeddings,
 }
 
 #[derive(Debug, Args)]
