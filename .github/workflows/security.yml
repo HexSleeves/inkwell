@@ -24,6 +24,7 @@ jobs:
   cargo-audit:
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-rust
       - uses: taiki-e/install-action@cargo-audit
       - run: cargo audit --locked
@@ -31,6 +32,7 @@ jobs:
   cargo-deny:
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-rust
       - uses: EmbarkStudios/cargo-deny-action@v2
         with:
