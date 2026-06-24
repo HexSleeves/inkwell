@@ -30,6 +30,13 @@ const RELATED_LIMIT: i64 = 5;
 /// How many chunks `/ask` retrieves to ground the answer.
 const ASK_TOP_K: i64 = 6;
 
+/// Max characters accepted for an `/ask` question. `/ask` is public and one
+/// request can drive both Voyage (embedding) and Anthropic (synthesis), so this
+/// is a deterministic, endpoint-level guard against accidental long-query cost or
+/// latency BEFORE any provider work runs. Counted in characters, not bytes, so
+/// non-ASCII questions are treated fairly. Not a rate limiter — that's separate.
+const MAX_ASK_QUERY_CHARS: usize = 1_000;
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct RelatedNoteEnvelope {
@@ -171,12 +178,8 @@ pub async fn ask(
         }
         _ => return Err(AppError::MethodNotAllowed(vec!["GET", "POST"])),
     };
-    let trimmed = raw_query.trim().to_string();
-    if trimmed.is_empty() {
-        return Err(AppError::BadRequest(
-            "Query param \"q\" is required and must be non-empty.".into(),
-        ));
-    }
+    // Validate length BEFORE any provider work (embedding/synthesis) can run.
+    let trimmed = validate_ask_query(raw_query)?;
 
     // Not configured → a clear, non-500 response. The site still works.
     let Some(llm) = state.llm.clone() else {
@@ -288,6 +291,24 @@ fn dedup_citations(retrieved: &[chunks::RetrievedChunk]) -> Vec<Citation> {
 
 /// Map the request's credentials to a read [`Visibility`] — the same rule every
 /// content-exposing surface uses (authenticated ⇒ `All`, anonymous ⇒ `Public`).
+/// Trim and validate an `/ask` question: non-empty and at most
+/// [`MAX_ASK_QUERY_CHARS`] characters. Runs before any provider call, so an
+/// oversized question is a cheap `400` rather than wasted embedding/synthesis.
+fn validate_ask_query(raw_query: String) -> Result<String, AppError> {
+    let trimmed = raw_query.trim().to_string();
+    if trimmed.is_empty() {
+        return Err(AppError::BadRequest(
+            "Query param \"q\" is required and must be non-empty.".into(),
+        ));
+    }
+    if trimmed.chars().count() > MAX_ASK_QUERY_CHARS {
+        return Err(AppError::BadRequest(format!(
+            "Query param \"q\" must be at most {MAX_ASK_QUERY_CHARS} characters."
+        )));
+    }
+    Ok(trimmed)
+}
+
 async fn request_visibility(headers: &HeaderMap, state: &AppState) -> Visibility {
     // Draft-grounded retrieval/citations require the `read` scope (admin implies
     // it); a token without it is treated as a public reader. Mirrors
