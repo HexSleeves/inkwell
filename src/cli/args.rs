@@ -52,7 +52,11 @@ pub enum AuthorCommand {
         slug: Option<String>,
         #[arg(long, default_value = "draft")]
         status: String,
-        #[arg(long = "tag")]
+        // Accept both repeated `--tag a --tag b` and a single comma-separated
+        // `--tag a,b`. A comma is never valid inside a tag (server requires
+        // lowercase alphanumerics + single hyphens), so splitting is harmless and
+        // matches the inline front-matter `tags: a, b` and `--scopes` behavior.
+        #[arg(long = "tag", value_delimiter = ',')]
         tags: Vec<String>,
         #[arg(short = 'o', long = "output")]
         output: Option<PathBuf>,
