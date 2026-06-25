@@ -360,6 +360,63 @@ async fn flag_on_read_only_session_cannot_write() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// An `admin`-scoped token is downscoped on login: its session can write (admin
+/// implies write) but must NOT be able to hit the admin surface — a browser
+/// session can never hold `Admin` (ADR 0010).
+#[tokio::test]
+async fn flag_on_admin_token_session_is_downscoped() -> anyhow::Result<()> {
+    let _guard = db_guard().await;
+    let Some(pool) = common::maybe_pool().await? else {
+        return Ok(());
+    };
+    let router = browser_login_router(pool);
+
+    let (token, _prefix) = mint_token(&router, "admin-author", &["admin"]).await?;
+    let session_token = parse_session_token(
+        &get_set_cookie(&do_login(&router, &token).await?).expect("Set-Cookie"),
+    )
+    .expect("token");
+    let cookie_header = format!("inkwell_session={session_token}");
+
+    // The downscoped session retains write (admin implies it) → can create a doc.
+    let payload = serde_json::json!({ "title": "admin via cookie", "bodyMarkdown": "# x" });
+    let response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/documents")
+                .header("content-type", "application/json")
+                .header("cookie", &cookie_header)
+                .body(Body::from(serde_json::to_vec(&payload)?))?,
+        )
+        .await?;
+    assert_eq!(
+        response.status(),
+        StatusCode::CREATED,
+        "an admin token's session keeps write (admin implies write)"
+    );
+
+    // ...but it is NOT admin: the admin-only token surface must reject it.
+    let payload = serde_json::json!({ "name": "nope", "scopes": ["read"] });
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/admin/tokens")
+                .header("content-type", "application/json")
+                .header("cookie", &cookie_header)
+                .body(Body::from(serde_json::to_vec(&payload)?))?,
+        )
+        .await?;
+    assert_eq!(
+        response.status(),
+        StatusCode::FORBIDDEN,
+        "a browser session must never hold admin scope"
+    );
+    Ok(())
+}
+
 /// A present-but-malformed `x-api-key` (duplicated) must NOT fall through to the
 /// session cookie — the key path takes full precedence.
 #[tokio::test]

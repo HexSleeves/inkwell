@@ -24,26 +24,38 @@ pub struct SessionRow {
     pub expires_at: OffsetDateTime,
 }
 
-/// Insert a new session row. Only the `session_token_hash` is stored; the raw
-/// token is set in the `Set-Cookie` response and never persisted. `scopes` are
-/// the originating token's scopes — the session never grants more.
+/// Insert a new session row, but ONLY while the minting token (`token_prefix`)
+/// is still non-revoked. Only the `session_token_hash` is stored; the raw token
+/// is set in the `Set-Cookie` response and never persisted. `scopes` are the
+/// originating token's scopes (already capped to read/write/publish) — the
+/// session never grants more.
+///
+/// The non-revoked guard lives in the same statement as the INSERT (a
+/// `WHERE EXISTS` on `author_tokens`) so a concurrent `revoke_token` cannot
+/// slip between a separate check and the insert (TOCTOU): if the token is
+/// revoked by the time this runs, zero rows are inserted. Returns `true` when a
+/// session row was created, `false` when the token was already revoked.
 pub async fn create_session(
     pool: &PgPool,
     author_id: Uuid,
+    token_prefix: &str,
     session_token_hash: &str,
     scopes: &[String],
     expires_at: OffsetDateTime,
-) -> Result<(), sqlx::Error> {
-    sqlx::query(
-        "INSERT INTO sessions (session_token_hash, author_id, scopes, expires_at) VALUES ($1, $2, $3, $4)",
+) -> Result<bool, sqlx::Error> {
+    let result = sqlx::query(
+        "INSERT INTO sessions (session_token_hash, author_id, scopes, expires_at) \
+         SELECT $1, $2, $3, $4 \
+         WHERE EXISTS (SELECT 1 FROM author_tokens WHERE prefix = $5 AND revoked_at IS NULL)",
     )
     .bind(session_token_hash)
     .bind(author_id)
     .bind(scopes)
     .bind(expires_at)
+    .bind(token_prefix)
     .execute(pool)
     .await?;
-    Ok(())
+    Ok(result.rows_affected() > 0)
 }
 
 /// Look up a session by its token hash, joining the author name so the caller

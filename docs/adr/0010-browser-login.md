@@ -48,8 +48,9 @@ Implement a minimal, flag-gated browser session layer that:
    SameSite=Strict`.
 4. Extends `auth::authenticate` to resolve, when the flag is on and no
    `x-api-key` is present, a valid `inkwell_session` cookie to the owning
-   author's `Principal` (with `Read + Write + Publish` scopes). The existing
-   `x-api-key` path is unchanged and always evaluated first.
+   author's `Principal` carrying the scopes the session inherited from its
+   minting token (capped to read/write/publish at login — see "Admin sessions").
+   The existing `x-api-key` path is unchanged and always evaluated first.
 5. Exposes `POST /auth/logout` to delete the session row and clear the cookie.
 
 ## Why reuse scoped tokens instead of adding passwords?
@@ -107,16 +108,24 @@ Sessions expire after 7 days (`expires_at`). The expiry is checked in
 purged; a maintenance sweep can delete rows where `expires_at < now()`.
 
 ### Token-to-session coupling
-A revoked scoped token cannot be used to create new sessions (the `revoked`
-check in `POST /auth/login` rejects it). Existing sessions created before
-revocation remain valid until they expire or the user logs out. This is
-intentional: strong coupling (auto-expiring sessions on token revocation) is
-deferred; if required, a session.token_id FK can be added later.
+A revoked scoped token cannot be used to create new sessions. The guard is
+atomic: the session `INSERT` carries a `WHERE EXISTS (… author_tokens … NOT
+revoked)` predicate, so a `revoke_token` that commits between the login lookup
+and the insert results in zero rows inserted and a `401` — there is no
+check-then-insert TOCTOU window. Existing sessions created before revocation
+remain valid until they expire or the user logs out. This is intentional:
+strong coupling (auto-expiring sessions on token revocation) is deferred; if
+required, a session.token_id FK can be added later.
 
 ### Admin sessions
-Sessions are granted `Read + Write + Publish` scopes, not `Admin`. Admin
-operations (token management, etc.) still require the shared `INKWELL_API_KEY`
-or an `admin`-scoped API token. This preserves the principle of least privilege
+A session inherits EXACTLY the scopes of the token it was minted from, stored in
+`sessions.scopes` and applied verbatim on resolution — a `read`-only token never
+becomes a write/publish session (no upward privilege escalation). Those scopes
+are additionally capped to `read`/`write`/`publish` at login: an `admin`-scoped
+token is downscoped (admin is filtered out before the row is written, and a DB
+CHECK enforces it as defense in depth), so a browser session can never hold
+`Admin`. Admin operations (token management, etc.) still require the shared
+`INKWELL_API_KEY` or an `admin`-scoped API token. This preserves least privilege
 for browser sessions.
 
 ### Flag-off safety
@@ -132,12 +141,16 @@ See `migrations/0020_create_sessions.sql`.
 
 ```
 sessions
-  id                uuid        PK  DEFAULT gen_random_uuid()
+  id                 uuid        PK  DEFAULT gen_random_uuid()
   session_token_hash text        NOT NULL  UNIQUE
-  author_id         uuid        NOT NULL  REFERENCES authors(id) ON DELETE CASCADE
-  created_at        timestamptz NOT NULL  DEFAULT now()
-  expires_at        timestamptz NOT NULL
+  author_id          uuid        NOT NULL  REFERENCES authors(id) ON DELETE CASCADE
+  scopes             text[]      NOT NULL  CHECK (scopes <@ ARRAY['read','write','publish'])
+  created_at         timestamptz NOT NULL  DEFAULT now()
+  expires_at         timestamptz NOT NULL
 ```
+
+`scopes` carries the (downscoped) capabilities the session inherited from its
+minting token; the CHECK guarantees no browser session can hold `admin`.
 
 Only the SHA-256 hex of the raw session token is stored. The raw token is
 transmitted once in the `Set-Cookie` response and never persisted.

@@ -77,22 +77,55 @@ pub async fn login(
         return Err(AppError::Unauthorized);
     }
 
+    // Best-effort usage stamp: exchanging a token for a session is a use of that
+    // token, so reflect it in the admin token list. A stale `last_used_at` never
+    // affects auth, so a failure here is logged, not fatal.
+    if let Err(error) = tokens::touch_last_used(&state.pool, prefix).await {
+        tracing::warn!(prefix = prefix, %error, "touch_last_used failed on login; session still created");
+    }
+
     // Mint a session token: 64 hex chars from two independent v4 UUIDs
     // (≈ 244 bits of entropy). Only its SHA-256 hash is stored.
     let raw_session_token = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
     let session_hash = sha256_hex(raw_session_token.as_bytes());
     let expires_at = OffsetDateTime::now_utc() + time::Duration::seconds(SESSION_TTL_SECS);
 
-    // The session inherits EXACTLY the token's scopes — a read-only token must
-    // never become a write/publish session (no privilege escalation).
-    sessions::create_session(
+    // The session inherits the token's scopes, capped to read/write/publish
+    // (ADR 0010): a read-only token must never become a write/publish session
+    // (no upward escalation), and an admin token must not yield an *admin*
+    // browser session. An admin token already implies read/write/publish
+    // (`Principal::has`), so we downscope it to exactly that set rather than
+    // emptying it; any other token inherits its own scopes verbatim.
+    let session_scopes: Vec<String> = if resolved.scopes.iter().any(|s| s == "admin") {
+        vec![
+            "read".to_string(),
+            "write".to_string(),
+            "publish".to_string(),
+        ]
+    } else {
+        resolved
+            .scopes
+            .iter()
+            .filter(|s| matches!(s.as_str(), "read" | "write" | "publish"))
+            .cloned()
+            .collect()
+    };
+
+    // Atomic create: the insert only lands while the token is still non-revoked,
+    // closing the revoke/login race. Zero rows → the token was revoked between
+    // the lookup above and the insert → reject.
+    let created = sessions::create_session(
         &state.pool,
         resolved.author_id,
+        prefix,
         &session_hash,
-        &resolved.scopes,
+        &session_scopes,
         expires_at,
     )
     .await?;
+    if !created {
+        return Err(AppError::Unauthorized);
+    }
 
     let cookie = format!(
         "{SESSION_COOKIE_NAME}={raw_session_token}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age={SESSION_TTL_SECS}"
@@ -126,20 +159,27 @@ pub async fn logout(
     Ok((StatusCode::OK, [(header::SET_COOKIE, clear)]).into_response())
 }
 
-/// Extract the `inkwell_session` cookie value from the `Cookie` request header.
+/// Extract the `inkwell_session` cookie value from the request's `Cookie`
+/// header(s).
 ///
-/// Handles multi-cookie headers: `Cookie: a=1; inkwell_session=<token>; b=2`.
-/// Returns `None` when the header is absent or the cookie is not present.
+/// Handles multi-cookie headers (`Cookie: a=1; inkwell_session=<token>; b=2`)
+/// AND multiple `Cookie` header lines — HTTP/2 (RFC 9113 §8.2.3) permits a
+/// client to split cookies across several `Cookie` headers, so we scan every
+/// value, not just the first. Returns `None` when no header carries the cookie.
 pub(crate) fn extract_session_cookie(headers: &HeaderMap) -> Option<String> {
-    let cookie_header = headers.get(header::COOKIE)?.to_str().ok()?;
-    for pair in cookie_header.split(';') {
-        let pair = pair.trim();
-        if let Some(value) = pair.strip_prefix(SESSION_COOKIE_NAME)
-            && let Some(value) = value.strip_prefix('=')
-        {
-            let value = value.trim();
-            if !value.is_empty() {
-                return Some(value.to_string());
+    for header_value in headers.get_all(header::COOKIE) {
+        let Ok(cookie_header) = header_value.to_str() else {
+            continue;
+        };
+        for pair in cookie_header.split(';') {
+            let pair = pair.trim();
+            if let Some(value) = pair.strip_prefix(SESSION_COOKIE_NAME)
+                && let Some(value) = value.strip_prefix('=')
+            {
+                let value = value.trim();
+                if !value.is_empty() {
+                    return Some(value.to_string());
+                }
             }
         }
     }

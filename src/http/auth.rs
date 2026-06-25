@@ -13,9 +13,11 @@
 //!    principal with the token's scopes.
 //! 3. **Browser session cookie** (`inkwell_session`) — **only when
 //!    `INKWELL_BROWSER_LOGIN=true`** and no `x-api-key` header is present.
-//!    Resolves to the owning author's principal with `Read + Write + Publish`
-//!    scopes. When the flag is off, the `Cookie` header is never consulted
-//!    and the existing auth paths are byte-for-byte unchanged.
+//!    Resolves to the owning author's principal carrying EXACTLY the scopes the
+//!    session inherited from its minting token (capped to read/write/publish at
+//!    login — never admin). A read-only token's session stays read-only. When
+//!    the flag is off, the `Cookie` header is never consulted and the existing
+//!    auth paths are byte-for-byte unchanged.
 //!
 //! The token path is the **only** branch that touches the database, and it runs
 //! only when the presented key both fails the static compare and looks like a
