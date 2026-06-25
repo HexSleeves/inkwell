@@ -46,11 +46,18 @@ Then read this file fully before doing anything else in this session.
 
 **Not yet built:**
 
-- Slug rename / redirect handling — in progress (PR open; mutable slug + 301 alias)
 - Media upload UI — file-picker / drag-drop page that POSTs to `/media` and inserts
   the returned URL (API shipped in #28; UI deferred — see `plans/027-media-upload-ui.md`)
 - Browser auth/login UI — the session backend shipped flag-gated (#29, ADR 0010,
   `INKWELL_BROWSER_LOGIN` default off); the actual login HTML page is still deferred
+
+**Recently shipped (this run):**
+
+- Slug rename + 301 alias redirect — mutable slug, owner-enforced, no draft leak
+  (ADR 0011, migration 0021, PR #31).
+- Media upload/serve API — `POST /media` + `GET /media/{id}` (PR #28).
+- Owner-aware draft reads — slice 3b, completes ADR 0009 (PR #30).
+- Flag-gated browser session login — ADR 0010, default off (PR #29).
 
 **Known issues:**
 
