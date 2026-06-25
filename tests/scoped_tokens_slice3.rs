@@ -261,8 +261,9 @@ async fn publish_scope_and_ownership_are_enforced() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// A `read`-only token cannot write (403) but can see drafts. A `write`-only
-/// token can write but is a public reader (no draft visibility).
+/// A `read`-only token cannot write (403). Under slice 3b it sees only its OWN
+/// drafts — NOT another author's (here the admin's) draft. A `write`-only token
+/// has no draft visibility at all. (Full owner-aware coverage: scoped_tokens_slice3b.)
 #[tokio::test]
 async fn read_scope_gates_writes_and_draft_visibility() -> anyhow::Result<()> {
     let _guard = db_guard().await;
@@ -285,10 +286,11 @@ async fn read_scope_gates_writes_and_draft_visibility() -> anyhow::Result<()> {
         create_doc(&router, "Nope", &reader).await?,
         StatusCode::FORBIDDEN
     );
-    // read-only: sees the draft (read scope ⇒ All visibility).
+    // read-only: does NOT see the admin's draft — slice 3b scopes draft reads to
+    // the principal's OWN notes, and Reader does not own seed-draft.
     assert_eq!(
         act(&router, Method::GET, "/documents/seed-draft", &reader).await?,
-        StatusCode::OK
+        StatusCode::NOT_FOUND
     );
 
     // write-only: creates its own draft...
@@ -296,8 +298,8 @@ async fn read_scope_gates_writes_and_draft_visibility() -> anyhow::Result<()> {
         create_doc(&router, "Writer Draft", &writer).await?,
         StatusCode::CREATED
     );
-    // ...but, lacking `read`, is a public reader and cannot see ANY draft —
-    // including its own (the coarse slice-3 read gate; isolation is slice 3b).
+    // ...but, lacking `read`, has no draft visibility at all (Public) and cannot
+    // see even its own draft.
     assert_eq!(
         act(&router, Method::GET, "/documents/writer-draft", &writer).await?,
         StatusCode::NOT_FOUND

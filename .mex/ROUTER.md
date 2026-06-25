@@ -16,7 +16,7 @@ edges:
     condition: when working on semantic search, RAG, embeddings, or the /ask endpoint
   - target: patterns/INDEX.md
     condition: when starting a task — check the pattern index for a matching pattern file
-last_updated: 2026-06-23
+last_updated: 2026-06-24
 ---
 
 # Session Bootstrap
@@ -37,7 +37,7 @@ Then read this file fully before doing anything else in this session.
 - MCP server (`inkwell mcp`) with 5 tools: `search_notes`, `read_note`, `list_notes`, `create_note`, `update_note`
 - HTML public site: index, paginated, document pages, tag index/pages, RSS feed, sitemap
 - Optimistic concurrency via `version` + `If-Match` (409 Conflict on stale writes)
-- Scoped author tokens (ADR 0009, plan 023): authors, `documents.owner_id`, durable write-audit trail (slice 1); token issuance via admin routes (`/admin/tokens` create/list/revoke), token resolution in `authenticate()` → `Principal`, per-author audit attribution, `inkwell author token` CLI (slice 2); **enforcement (slice 3)** — mutations require the right scope (`write` create/update/delete, `publish` publish/unpublish; missing scope → 403) and ownership is enforced **atomically** in the write (`owner_filter` → `WHERE … AND owner_id = $owner`; non-owner → 0 rows → 404, no TOCTOU; admin bypasses); `create` stamps `owner_id`; draft READ requires the `read` scope (admin implies all). **Coarse read gate only** — a `read` token sees ALL drafts; per-owner draft read isolation is slice 3b. **Tightening (slice 4):** `documents.owner_id` is `NOT NULL` (migration 0017; DB default kept as a safety net); `INKWELL_MCP_KEY` **retired** — the MCP server authenticates with `INKWELL_API_KEY` set to a scoped token. Shared `INKWELL_API_KEY` is the admin/bootstrap key.
+- Scoped author tokens (ADR 0009, plan 023): authors, `documents.owner_id`, durable write-audit trail (slice 1); token issuance via admin routes (`/admin/tokens` create/list/revoke), token resolution in `authenticate()` → `Principal`, per-author audit attribution, `inkwell author token` CLI (slice 2); **enforcement (slice 3)** — mutations require the right scope (`write` create/update/delete, `publish` publish/unpublish; missing scope → 403) and ownership is enforced **atomically** in the write (`owner_filter` → `WHERE … AND owner_id = $owner`; non-owner → 0 rows → 404, no TOCTOU; admin bypasses); `create` stamps `owner_id`; draft READ requires the `read` scope (admin implies all). **Per-owner draft read isolation (slice 3b)** — the binary `Visibility` (Public/All) is reworked into an owner-aware filter (`Public` / `Owner(id)` / `All`) derived once in `resolve_visibility` (`src/http/api.rs`) and threaded through every read surface (documents, links/backlinks/graph, RAG chunks, garden embeds, `/ask`+`/related`), so a `read`-scoped author sees only their OWN drafts + all published; admin sees all; the public sees published-only. Public HTML/RSS surfaces stay pinned to `Visibility::Public`; ownership lands in the same `WHERE` as the read (no TOCTOU). **Tightening (slice 4):** `documents.owner_id` is `NOT NULL` (migration 0017; DB default kept as a safety net); `INKWELL_MCP_KEY` **retired** — the MCP server authenticates with `INKWELL_API_KEY` set to a scoped token. Shared `INKWELL_API_KEY` is the admin/bootstrap key.
 - Webmention receiving (always on) + sending (opt-in via `INKWELL_WEBMENTION_SEND=true`)
 - Railway production deployment (auto-deploy on main push)
 - Docker Compose local stack (migrate → seed → serve)
@@ -48,12 +48,11 @@ Then read this file fully before doing anything else in this session.
 
 - Slug rename / redirect handling (slugs are currently immutable after creation)
 - Media/image upload (notes are Markdown text only)
-- Scoped-token **slice 3b** (only token work left): per-owner draft READ isolation — rework the binary `Visibility` (Public/All) into an owner-aware filter across the query layer so a `read`-scoped author sees only their OWN drafts, not everyone's. (Slices 1–4 shipped — see Working.)
 - Browser auth/login UI (ADR 0009 Option C, deferred)
 
 **Known issues:**
 
-- `set_document_status` (`publish`/`unpublish`) does not bump `version` or `updated_at` — status changes are invisible to the `If-Match` concurrency guard
+- None currently tracked.
 
 ## Routing Table
 

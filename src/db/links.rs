@@ -21,30 +21,31 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::domain::document::DocumentStatus;
 use sqlx::{PgPool, Postgres};
 use uuid::Uuid;
 
 /// Read scope for any surface that can expose note content. Centralized so the
 /// draft-invisibility invariant is enforced in one place instead of re-derived
 /// per surface (the systemic draft-leak fix).
+///
+/// Three cases (ADR 0009, slice 3b):
+///   - [`Public`](Self::Public) — anonymous: published notes only.
+///   - [`Owner(author_id)`](Self::Owner) — authenticated non-admin with `read`
+///     scope: `status='published' OR owner_id = author_id` (own drafts + all
+///     published, no other author's drafts).
+///   - [`All`](Self::All) — admin (`admin` scope or shared key): no restriction.
+///
+/// Every read query must match on all three arms; `status_filter()` was removed
+/// because the `Owner` case cannot be reduced to a single `DocumentStatus`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Visibility {
     /// Unauthenticated callers: published notes only.
     Public,
-    /// Authenticated owner: drafts and unlisted included.
+    /// Authenticated non-admin with `read` scope: own drafts + all published.
+    /// The contained [`Uuid`] is the viewing author's id.
+    Owner(Uuid),
+    /// Admin (shared key or `admin` scope): every note regardless of status.
     All,
-}
-
-impl Visibility {
-    /// The [`DocumentStatus`] filter this visibility implies, or `None` to mean
-    /// "no status restriction" (owner sees everything).
-    pub fn status_filter(self) -> Option<DocumentStatus> {
-        match self {
-            Visibility::Public => Some(DocumentStatus::Published),
-            Visibility::All => None,
-        }
-    }
 }
 
 /// Whether an edge points at another note in this garden or an external URL.
@@ -131,17 +132,26 @@ pub async fn resolve_existing_slugs(
     if slugs.is_empty() {
         return Ok(HashSet::new());
     }
-    let found: Vec<String> = match visibility.status_filter() {
-        Some(status) => {
+    let found: Vec<String> = match visibility {
+        Visibility::Public => {
             sqlx::query_scalar::<Postgres, String>(
-                "SELECT slug FROM documents WHERE slug = ANY($1) AND status = $2",
+                "SELECT slug FROM documents WHERE slug = ANY($1) AND status = 'published'",
             )
             .bind(slugs)
-            .bind(status.as_str())
             .fetch_all(pool)
             .await?
         }
-        None => {
+        Visibility::Owner(owner_id) => {
+            sqlx::query_scalar::<Postgres, String>(
+                "SELECT slug FROM documents WHERE slug = ANY($1) \
+                 AND (status = 'published' OR owner_id = $2)",
+            )
+            .bind(slugs)
+            .bind(owner_id)
+            .fetch_all(pool)
+            .await?
+        }
+        Visibility::All => {
             sqlx::query_scalar::<Postgres, String>(
                 "SELECT slug FROM documents WHERE slug = ANY($1)",
             )
@@ -164,17 +174,26 @@ pub async fn resolve_slug_ids(
     if slugs.is_empty() {
         return Ok(HashMap::new());
     }
-    let rows: Vec<(String, Uuid)> = match visibility.status_filter() {
-        Some(status) => {
+    let rows: Vec<(String, Uuid)> = match visibility {
+        Visibility::Public => {
             sqlx::query_as::<Postgres, (String, Uuid)>(
-                "SELECT slug, id FROM documents WHERE slug = ANY($1) AND status = $2",
+                "SELECT slug, id FROM documents WHERE slug = ANY($1) AND status = 'published'",
             )
             .bind(slugs)
-            .bind(status.as_str())
             .fetch_all(pool)
             .await?
         }
-        None => {
+        Visibility::Owner(owner_id) => {
+            sqlx::query_as::<Postgres, (String, Uuid)>(
+                "SELECT slug, id FROM documents WHERE slug = ANY($1) \
+                 AND (status = 'published' OR owner_id = $2)",
+            )
+            .bind(slugs)
+            .bind(owner_id)
+            .fetch_all(pool)
+            .await?
+        }
+        Visibility::All => {
             sqlx::query_as::<Postgres, (String, Uuid)>(
                 "SELECT slug, id FROM documents WHERE slug = ANY($1)",
             )
@@ -284,19 +303,22 @@ pub struct Backlink {
 }
 
 /// Notes that link *to* `target_note_id` — the "linked from" set — filtered by
-/// `visibility` so a draft source is NEVER exposed to a public caller (the
-/// no-draft-leak invariant). Only resolved internal edges count; a source that
-/// links more than once appears once (`DISTINCT ON` the source slug), ordered by
-/// slug for deterministic output. Mirrors the two-arm `status_filter()` pattern
-/// used by [`resolve_existing_slugs`]/[`resolve_slug_ids`]: `Public` ⇒ the source
-/// document must be `published`; `All` ⇒ no status restriction (owner scope).
+/// `visibility` so a draft source is NEVER exposed to a caller who cannot see it
+/// (the no-draft-leak invariant). Only resolved internal edges count; a source
+/// that links more than once appears once (`DISTINCT ON` the source slug), ordered
+/// by slug for deterministic output.
+///
+/// Three-arm visibility:
+///   - `Public` ⇒ the source document must be `published`.
+///   - `Owner(id)` ⇒ the source must be `published OR owner_id = id`.
+///   - `All` ⇒ no status restriction (admin scope).
 pub async fn backlinks(
     pool: &PgPool,
     target_note_id: Uuid,
     visibility: Visibility,
 ) -> Result<Vec<Backlink>, sqlx::Error> {
-    let rows: Vec<(String, String, Option<String>)> = match visibility.status_filter() {
-        Some(status) => {
+    let rows: Vec<(String, String, Option<String>)> = match visibility {
+        Visibility::Public => {
             sqlx::query_as::<Postgres, (String, String, Option<String>)>(
                 r#"
                 SELECT DISTINCT ON (documents.slug)
@@ -306,16 +328,34 @@ pub async fn backlinks(
                 WHERE links.target_note_id = $1
                   AND links.target_kind = 'internal'
                   AND links.resolved = true
-                  AND documents.status = $2
+                  AND documents.status = 'published'
                 ORDER BY documents.slug, links.created_at, links.id
                 "#,
             )
             .bind(target_note_id)
-            .bind(status.as_str())
             .fetch_all(pool)
             .await?
         }
-        None => {
+        Visibility::Owner(owner_id) => {
+            sqlx::query_as::<Postgres, (String, String, Option<String>)>(
+                r#"
+                SELECT DISTINCT ON (documents.slug)
+                       documents.slug, documents.title, links.context_snippet
+                FROM links
+                JOIN documents ON documents.id = links.source_note_id
+                WHERE links.target_note_id = $1
+                  AND links.target_kind = 'internal'
+                  AND links.resolved = true
+                  AND (documents.status = 'published' OR documents.owner_id = $2)
+                ORDER BY documents.slug, links.created_at, links.id
+                "#,
+            )
+            .bind(target_note_id)
+            .bind(owner_id)
+            .fetch_all(pool)
+            .await?
+        }
+        Visibility::All => {
             sqlx::query_as::<Postgres, (String, String, Option<String>)>(
                 r#"
                 SELECT DISTINCT ON (documents.slug)
@@ -393,17 +433,28 @@ pub struct Graph {
 /// to a note dropped by the node cap. Edges are capped at [`MAX_GRAPH_EDGES`].
 pub async fn garden_graph(pool: &PgPool, visibility: Visibility) -> Result<Graph, sqlx::Error> {
     // Nodes: the visible notes, deterministically ordered and bounded.
-    let node_rows: Vec<(String, String)> = match visibility.status_filter() {
-        Some(status) => {
+    let node_rows: Vec<(String, String)> = match visibility {
+        Visibility::Public => {
             sqlx::query_as::<Postgres, (String, String)>(
-                "SELECT slug, title FROM documents WHERE status = $1 ORDER BY slug LIMIT $2",
+                "SELECT slug, title FROM documents WHERE status = 'published' \
+                 ORDER BY slug LIMIT $1",
             )
-            .bind(status.as_str())
             .bind(MAX_GRAPH_NODES)
             .fetch_all(pool)
             .await?
         }
-        None => {
+        Visibility::Owner(owner_id) => {
+            sqlx::query_as::<Postgres, (String, String)>(
+                "SELECT slug, title FROM documents \
+                 WHERE (status = 'published' OR owner_id = $1) \
+                 ORDER BY slug LIMIT $2",
+            )
+            .bind(owner_id)
+            .bind(MAX_GRAPH_NODES)
+            .fetch_all(pool)
+            .await?
+        }
+        Visibility::All => {
             sqlx::query_as::<Postgres, (String, String)>(
                 "SELECT slug, title FROM documents ORDER BY slug LIMIT $1",
             )
@@ -422,8 +473,8 @@ pub async fn garden_graph(pool: &PgPool, visibility: Visibility) -> Result<Graph
     // is filtered to the same visibility on both ends in SQL; we additionally
     // intersect with the (capped) node set so an edge can never dangle to a
     // node the LIMIT dropped.
-    let edge_rows: Vec<(String, String)> = match visibility.status_filter() {
-        Some(status) => {
+    let edge_rows: Vec<(String, String)> = match visibility {
+        Visibility::Public => {
             sqlx::query_as::<Postgres, (String, String)>(
                 r#"
                 SELECT src.slug, tgt.slug
@@ -432,18 +483,37 @@ pub async fn garden_graph(pool: &PgPool, visibility: Visibility) -> Result<Graph
                 JOIN documents AS tgt ON tgt.id = links.target_note_id
                 WHERE links.target_kind = 'internal'
                   AND links.resolved = true
-                  AND src.status = $1
-                  AND tgt.status = $1
+                  AND src.status = 'published'
+                  AND tgt.status = 'published'
                 ORDER BY src.slug, tgt.slug
-                LIMIT $2
+                LIMIT $1
                 "#,
             )
-            .bind(status.as_str())
             .bind(MAX_GRAPH_EDGES)
             .fetch_all(pool)
             .await?
         }
-        None => {
+        Visibility::Owner(owner_id) => {
+            sqlx::query_as::<Postgres, (String, String)>(
+                r#"
+                SELECT src.slug, tgt.slug
+                FROM links
+                JOIN documents AS src ON src.id = links.source_note_id
+                JOIN documents AS tgt ON tgt.id = links.target_note_id
+                WHERE links.target_kind = 'internal'
+                  AND links.resolved = true
+                  AND (src.status = 'published' OR src.owner_id = $1)
+                  AND (tgt.status = 'published' OR tgt.owner_id = $1)
+                ORDER BY src.slug, tgt.slug
+                LIMIT $2
+                "#,
+            )
+            .bind(owner_id)
+            .bind(MAX_GRAPH_EDGES)
+            .fetch_all(pool)
+            .await?
+        }
+        Visibility::All => {
             sqlx::query_as::<Postgres, (String, String)>(
                 r#"
                 SELECT src.slug, tgt.slug
@@ -488,17 +558,26 @@ pub async fn note_neighborhood(
     visibility: Visibility,
 ) -> Result<Graph, sqlx::Error> {
     // The center note must itself be visible, or there is no neighborhood.
-    let center_exists: Option<String> = match visibility.status_filter() {
-        Some(status) => {
+    let center_exists: Option<String> = match visibility {
+        Visibility::Public => {
             sqlx::query_scalar::<Postgres, String>(
-                "SELECT slug FROM documents WHERE slug = $1 AND status = $2",
+                "SELECT slug FROM documents WHERE slug = $1 AND status = 'published'",
             )
             .bind(slug)
-            .bind(status.as_str())
             .fetch_optional(pool)
             .await?
         }
-        None => {
+        Visibility::Owner(owner_id) => {
+            sqlx::query_scalar::<Postgres, String>(
+                "SELECT slug FROM documents WHERE slug = $1 \
+                 AND (status = 'published' OR owner_id = $2)",
+            )
+            .bind(slug)
+            .bind(owner_id)
+            .fetch_optional(pool)
+            .await?
+        }
+        Visibility::All => {
             sqlx::query_scalar::<Postgres, String>("SELECT slug FROM documents WHERE slug = $1")
                 .bind(slug)
                 .fetch_optional(pool)
@@ -513,8 +592,8 @@ pub async fn note_neighborhood(
     // (in either direction), visibility-filtered on BOTH endpoints, bounded by
     // the edge cap. This is independent of the global node cap, so the center
     // and its neighbors are never silently dropped in a large garden.
-    let edge_rows: Vec<(String, String)> = match visibility.status_filter() {
-        Some(status) => {
+    let edge_rows: Vec<(String, String)> = match visibility {
+        Visibility::Public => {
             sqlx::query_as::<Postgres, (String, String)>(
                 r#"
                 SELECT src.slug, tgt.slug
@@ -523,20 +602,41 @@ pub async fn note_neighborhood(
                 JOIN documents AS tgt ON tgt.id = links.target_note_id
                 WHERE links.target_kind = 'internal'
                   AND links.resolved = true
-                  AND src.status = $1
-                  AND tgt.status = $1
-                  AND (src.slug = $2 OR tgt.slug = $2)
+                  AND src.status = 'published'
+                  AND tgt.status = 'published'
+                  AND (src.slug = $1 OR tgt.slug = $1)
                 ORDER BY src.slug, tgt.slug
-                LIMIT $3
+                LIMIT $2
                 "#,
             )
-            .bind(status.as_str())
             .bind(&center_slug)
             .bind(MAX_GRAPH_EDGES)
             .fetch_all(pool)
             .await?
         }
-        None => {
+        Visibility::Owner(owner_id) => {
+            sqlx::query_as::<Postgres, (String, String)>(
+                r#"
+                SELECT src.slug, tgt.slug
+                FROM links
+                JOIN documents AS src ON src.id = links.source_note_id
+                JOIN documents AS tgt ON tgt.id = links.target_note_id
+                WHERE links.target_kind = 'internal'
+                  AND links.resolved = true
+                  AND (src.status = 'published' OR src.owner_id = $1)
+                  AND (tgt.status = 'published' OR tgt.owner_id = $1)
+                  AND (src.slug = $2 OR tgt.slug = $2)
+                ORDER BY src.slug, tgt.slug
+                LIMIT $3
+                "#,
+            )
+            .bind(owner_id)
+            .bind(&center_slug)
+            .bind(MAX_GRAPH_EDGES)
+            .fetch_all(pool)
+            .await?
+        }
+        Visibility::All => {
             sqlx::query_as::<Postgres, (String, String)>(
                 r#"
                 SELECT src.slug, tgt.slug
@@ -578,18 +678,27 @@ pub async fn note_neighborhood(
 
     // Fetch titles for exactly the kept slugs (the center always exists). The
     // set is already bounded to the node cap above; ANY($1) leaves it bounded.
-    let node_rows: Vec<(String, String)> = match visibility.status_filter() {
-        Some(status) => {
+    let node_rows: Vec<(String, String)> = match visibility {
+        Visibility::Public => {
             sqlx::query_as::<Postgres, (String, String)>(
                 "SELECT slug, title FROM documents \
-                 WHERE slug = ANY($1) AND status = $2 ORDER BY slug",
+                 WHERE slug = ANY($1) AND status = 'published' ORDER BY slug",
             )
             .bind(&keep_slugs)
-            .bind(status.as_str())
             .fetch_all(pool)
             .await?
         }
-        None => {
+        Visibility::Owner(owner_id) => {
+            sqlx::query_as::<Postgres, (String, String)>(
+                "SELECT slug, title FROM documents \
+                 WHERE slug = ANY($1) AND (status = 'published' OR owner_id = $2) ORDER BY slug",
+            )
+            .bind(&keep_slugs)
+            .bind(owner_id)
+            .fetch_all(pool)
+            .await?
+        }
+        Visibility::All => {
             sqlx::query_as::<Postgres, (String, String)>(
                 "SELECT slug, title FROM documents \
                  WHERE slug = ANY($1) ORDER BY slug",
@@ -655,19 +764,15 @@ pub async fn notes_to_rerender(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::document::DocumentStatus;
+    use uuid::Uuid;
 
     #[test]
-    fn public_visibility_filters_to_published() {
-        assert_eq!(
-            Visibility::Public.status_filter(),
-            Some(DocumentStatus::Published)
-        );
-    }
-
-    #[test]
-    fn all_visibility_applies_no_status_filter() {
-        assert_eq!(Visibility::All.status_filter(), None);
+    fn visibility_variants_are_distinct() {
+        let id = Uuid::nil();
+        assert_ne!(Visibility::Public, Visibility::All);
+        assert_ne!(Visibility::Public, Visibility::Owner(id));
+        assert_ne!(Visibility::All, Visibility::Owner(id));
+        assert_eq!(Visibility::Owner(id), Visibility::Owner(id));
     }
 
     #[test]

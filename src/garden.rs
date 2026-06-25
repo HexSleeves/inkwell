@@ -200,17 +200,27 @@ async fn fetch_embed_target(
     slug: &str,
     visibility: Visibility,
 ) -> Result<Option<(DocumentStatus, String)>, sqlx::Error> {
-    match visibility.status_filter() {
-        Some(status) => {
+    match visibility {
+        Visibility::Public => {
             sqlx::query_as::<Postgres, (DocumentStatus, String)>(
-                "SELECT status, body_markdown FROM documents WHERE slug = $1 AND status = $2",
+                "SELECT status, body_markdown FROM documents \
+                 WHERE slug = $1 AND status = 'published'",
             )
             .bind(slug)
-            .bind(status.as_str())
             .fetch_optional(pool)
             .await
         }
-        None => {
+        Visibility::Owner(owner_id) => {
+            sqlx::query_as::<Postgres, (DocumentStatus, String)>(
+                "SELECT status, body_markdown FROM documents \
+                 WHERE slug = $1 AND (status = 'published' OR owner_id = $2)",
+            )
+            .bind(slug)
+            .bind(owner_id)
+            .fetch_optional(pool)
+            .await
+        }
+        Visibility::All => {
             sqlx::query_as::<Postgres, (DocumentStatus, String)>(
                 "SELECT status, body_markdown FROM documents WHERE slug = $1",
             )

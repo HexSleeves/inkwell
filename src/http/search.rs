@@ -5,8 +5,10 @@ use axum::response::{IntoResponse, Response};
 use serde::Serialize;
 
 use crate::db::documents;
+use crate::db::links::Visibility;
 use crate::domain::document::SearchOptions;
 use crate::http::AppState;
+use crate::http::api::resolve_visibility;
 use crate::http::cache;
 use crate::views::layout::{PAGE_SIZE, derive_excerpt};
 use crate::views::search::render_search_page;
@@ -50,10 +52,22 @@ pub async fn search(
     let trimmed = raw_query.trim().to_string();
     let page = parse_page(query.page.as_deref());
     let wants_json = query.format.as_deref() == Some("json");
+
+    // Only the JSON path is owner-aware: an authenticated owner finds their own
+    // drafts in search (slice 3b). The HTML page is served through
+    // `cache::html_response`, which emits `Cache-Control: public` with an ETag
+    // over route+body — so it MUST stay public-only, or a shared cache could
+    // serve one author's draft results to another caller on the same URL.
+    let visibility = if wants_json {
+        resolve_visibility(&headers, &state).await
+    } else {
+        Visibility::Public
+    };
+
     let total = if trimmed.is_empty() {
         0
     } else {
-        match documents::count_search_published_documents(&state.pool, &trimmed).await {
+        match documents::count_search_documents(&state.pool, &trimmed, visibility).await {
             Ok(total) => total,
             Err(_) => return error_page(),
         }
@@ -62,9 +76,10 @@ pub async fn search(
     let docs = if trimmed.is_empty() {
         Vec::new()
     } else {
-        match documents::search_published_documents(
+        match documents::search_documents(
             &state.pool,
             &trimmed,
+            visibility,
             SearchOptions {
                 limit: Some(PAGE_SIZE as u32),
                 offset: Some(((page - 1) * PAGE_SIZE) as u32),
