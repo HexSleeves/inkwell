@@ -5,6 +5,7 @@ use axum::response::{IntoResponse, Response};
 use serde::Serialize;
 
 use crate::db::documents;
+use crate::db::links::Visibility;
 use crate::domain::document::SearchOptions;
 use crate::http::AppState;
 use crate::http::api::resolve_visibility;
@@ -52,10 +53,16 @@ pub async fn search(
     let page = parse_page(query.page.as_deref());
     let wants_json = query.format.as_deref() == Some("json");
 
-    // Resolve visibility so authenticated owners find their own drafts in search
-    // (slice 3b). The HTML rendering path has always been public-only; the JSON
-    // path now respects the caller's read scope and owner-draft filter.
-    let visibility = resolve_visibility(&headers, &state).await;
+    // Only the JSON path is owner-aware: an authenticated owner finds their own
+    // drafts in search (slice 3b). The HTML page is served through
+    // `cache::html_response`, which emits `Cache-Control: public` with an ETag
+    // over route+body — so it MUST stay public-only, or a shared cache could
+    // serve one author's draft results to another caller on the same URL.
+    let visibility = if wants_json {
+        resolve_visibility(&headers, &state).await
+    } else {
+        Visibility::Public
+    };
 
     let total = if trimmed.is_empty() {
         0

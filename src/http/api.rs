@@ -796,28 +796,33 @@ fn resolve_growth(value: Option<&Value>) -> Result<Option<GrowthStage>, AppError
 }
 
 /// Parse the optional `?status` query param into an ADDITIONAL status filter
-/// on top of the visibility predicate. For `Public` the visibility itself
-/// restricts to published, so no extra filter is applied (always `None`).
-/// For `Owner` and `All`, the param narrows further:
+/// on top of the visibility predicate. The param is validated uniformly for
+/// every visibility — an unknown value (e.g. a `drfat` typo) is always a `400`,
+/// never silently ignored:
 ///   - absent / `"all"` → no extra restriction (visibility already applies)
-///   - `"draft"` → `Some(Draft)` (Admin: all drafts; Owner: own drafts only)
-///   - `"published"` → `Some(Published)`
+///   - `"draft"` → `Some(Draft)`; for `Public` this ANDs with the published-only
+///     predicate into an empty result (anonymous callers can't see drafts)
+///   - `"published"` → `Some(Published)`; redundant under `Public`, so dropped
 fn resolve_list_extra_status(
     visibility: Visibility,
     raw: Option<&str>,
 ) -> Result<Option<DocumentStatus>, AppError> {
-    match visibility {
-        // Public is already restricted to published by the visibility predicate;
-        // no extra status filter is needed.
-        Visibility::Public => Ok(None),
-        Visibility::Owner(_) | Visibility::All => match raw {
-            None | Some("all") => Ok(None),
-            Some("draft") => Ok(Some(DocumentStatus::Draft)),
-            Some("published") => Ok(Some(DocumentStatus::Published)),
-            _ => Err(AppError::BadRequest(
+    let extra_status = match raw {
+        None | Some("all") => None,
+        Some("draft") => Some(DocumentStatus::Draft),
+        Some("published") => Some(DocumentStatus::Published),
+        _ => {
+            return Err(AppError::BadRequest(
                 "Query param \"status\" must be one of: draft, published, all.".to_string(),
-            )),
-        },
+            ));
+        }
+    };
+
+    match (visibility, extra_status) {
+        // Public is already restricted to published by the visibility predicate,
+        // so an explicit `published` adds nothing.
+        (Visibility::Public, Some(DocumentStatus::Published)) => Ok(None),
+        _ => Ok(extra_status),
     }
 }
 
