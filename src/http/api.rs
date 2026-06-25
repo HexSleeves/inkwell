@@ -503,6 +503,19 @@ async fn get_document(
     let Some(document) =
         documents::get_document_by_slug_vis(&state.pool, &slug, visibility).await?
     else {
+        // The slug may be a retired one — 301 to the document's current slug, but
+        // only when that document is visible to the caller (a draft target the
+        // caller can't see resolves to None and stays a 404, no existence leak).
+        if let Some(current) =
+            documents::resolve_alias_target(&state.pool, &slug, visibility).await?
+            && let Ok(location) = HeaderValue::from_str(&format!("/documents/{current}"))
+        {
+            return Ok((
+                StatusCode::MOVED_PERMANENTLY,
+                [(axum::http::header::LOCATION, location)],
+            )
+                .into_response());
+        }
         return Err(AppError::NotFound(format!(
             "No document with slug \"{slug}\"."
         )));
@@ -579,13 +592,29 @@ async fn update_document(
     if map.contains_key("growth") {
         patch.growth = resolve_growth(map.get("growth"))?;
     }
+    if map.contains_key("slug") {
+        // A rename (ADR 0011). Validate format up front so a bad slug is a 400
+        // before any DB work; the db layer records the old slug as a 301 alias.
+        match map.get("slug") {
+            Some(Value::String(slug)) if is_valid_slug(slug) => {
+                patch.new_slug = Some(slug.clone());
+            }
+            _ => {
+                return Err(AppError::BadRequest(
+                    "Field \"slug\" must be lowercase alphanumerics separated by single hyphens."
+                        .to_string(),
+                ));
+            }
+        }
+    }
     if patch.title.is_none()
         && patch.body_markdown.is_none()
         && patch.tags.is_none()
         && patch.growth.is_none()
+        && patch.new_slug.is_none()
     {
         return Err(AppError::BadRequest(
-            "Provide at least one of \"title\", \"bodyMarkdown\", \"tags\", or \"growth\" to update."
+            "Provide at least one of \"title\", \"bodyMarkdown\", \"tags\", \"growth\", or \"slug\" to update."
                 .to_string(),
         ));
     }
