@@ -16,7 +16,7 @@ edges:
     condition: when working on semantic search, RAG, embeddings, or the /ask endpoint
   - target: patterns/INDEX.md
     condition: when starting a task — check the pattern index for a matching pattern file
-last_updated: 2026-06-24
+last_updated: 2026-06-25
 ---
 
 # Session Bootstrap
@@ -46,9 +46,11 @@ Then read this file fully before doing anything else in this session.
 
 **Not yet built:**
 
-- Slug rename / redirect handling (slugs are currently immutable after creation)
-- Media/image upload (notes are Markdown text only)
-- Browser auth/login UI (ADR 0009 Option C, deferred)
+- Slug rename / redirect handling — in progress (PR open; mutable slug + 301 alias)
+- Media upload UI — file-picker / drag-drop page that POSTs to `/media` and inserts
+  the returned URL (API shipped in #28; UI deferred — see `plans/027-media-upload-ui.md`)
+- Browser auth/login UI — the session backend shipped flag-gated (#29, ADR 0010,
+  `INKWELL_BROWSER_LOGIN` default off); the actual login HTML page is still deferred
 
 **Known issues:**
 
