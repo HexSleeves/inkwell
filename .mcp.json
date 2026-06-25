@@ -1,5 +1,9 @@
 {
   "mcpServers": {
+    "linear": {
+      "command": "npx",
+      "args": ["-y", "mcp-remote", "https://mcp.linear.app/mcp"]
+    },
     "inkwell": {
       "command": "/Users/lecoqjacob/Projects/personal/inkwell/target/debug/inkwell",
       "args": ["mcp"],
