@@ -60,7 +60,7 @@ pub async fn maybe_pool() -> Result<Option<PgPool>> {
     // `author_tokens` cascades from `authors` but is cleared explicitly so a test
     // that mints a token starts clean without disturbing the seeded author.
     sqlx::query(
-        "TRUNCATE TABLE documents, links, write_audit, author_tokens, media RESTART IDENTITY CASCADE",
+        "TRUNCATE TABLE documents, links, write_audit, author_tokens, media, sessions RESTART IDENTITY CASCADE",
     )
     .execute(&pool)
     .await?;
@@ -84,6 +84,9 @@ pub fn test_config(database_url: String) -> Arc<Config> {
         // Webmention send stays OFF in tests: the receive path and SSRF guard are
         // what we exercise; send is asserted inert separately.
         webmention_send: false,
+        // Browser login stays OFF by default: the flag-on surface is exercised
+        // separately in tests/browser_login.rs.
+        browser_login: false,
     })
 }
 

@@ -10,6 +10,7 @@ pub mod ai;
 pub mod api;
 pub mod assets;
 pub mod auth;
+pub mod auth_session;
 pub mod cache;
 pub mod extractors;
 pub mod feed;

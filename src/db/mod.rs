@@ -5,5 +5,6 @@ pub mod links;
 pub mod media;
 pub mod migrations;
 pub mod pool;
+pub mod sessions;
 pub mod tokens;
 pub mod webmentions;
