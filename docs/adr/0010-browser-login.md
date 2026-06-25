@@ -109,13 +109,16 @@ purged; a maintenance sweep can delete rows where `expires_at < now()`.
 
 ### Token-to-session coupling
 A revoked scoped token cannot be used to create new sessions. The guard is
-atomic: the session `INSERT` carries a `WHERE EXISTS (… author_tokens … NOT
-revoked)` predicate, so a `revoke_token` that commits between the login lookup
-and the insert results in zero rows inserted and a `401` — there is no
-check-then-insert TOCTOU window. Existing sessions created before revocation
-remain valid until they expire or the user logs out. This is intentional:
-strong coupling (auto-expiring sessions on token revocation) is deferred; if
-required, a session.token_id FK can be added later.
+atomic: `create_session` runs the non-revoked check and the session `INSERT` in
+one transaction, taking a `SELECT … FOR UPDATE` row lock on `author_tokens`.
+That lock serializes login against `revoke_token`'s `UPDATE` of the same row —
+the revoke either commits first (the locked re-read then sees `revoked_at` set
+and nothing is inserted → `401`) or blocks until login commits — so there is no
+check-then-insert window, even under the default READ COMMITTED isolation.
+Existing sessions created before revocation remain valid until they expire or
+the user logs out. This is intentional: strong coupling (auto-expiring sessions
+on token revocation) is deferred; if required, a session.token_id FK can be
+added later.
 
 ### Admin sessions
 A session inherits EXACTLY the scopes of the token it was minted from, stored in

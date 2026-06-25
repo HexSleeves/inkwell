@@ -30,11 +30,14 @@ pub struct SessionRow {
 /// originating token's scopes (already capped to read/write/publish) — the
 /// session never grants more.
 ///
-/// The non-revoked guard lives in the same statement as the INSERT (a
-/// `WHERE EXISTS` on `author_tokens`) so a concurrent `revoke_token` cannot
-/// slip between a separate check and the insert (TOCTOU): if the token is
-/// revoked by the time this runs, zero rows are inserted. Returns `true` when a
-/// session row was created, `false` when the token was already revoked.
+/// The non-revoked check and the insert run in ONE transaction, and the check
+/// takes a `SELECT … FOR UPDATE` row lock on `author_tokens`. That lock
+/// serializes login against `revoke_token`'s `UPDATE` of the same row: a revoke
+/// either commits first (so the locked re-read sees `revoked_at` set and we
+/// insert nothing) or blocks until this transaction commits (so it cannot slip
+/// in mid-statement). This closes the revoke/login race even under the default
+/// READ COMMITTED isolation. Returns `true` when a session row was created,
+/// `false` when the token was already revoked.
 pub async fn create_session(
     pool: &PgPool,
     author_id: Uuid,
@@ -43,19 +46,33 @@ pub async fn create_session(
     scopes: &[String],
     expires_at: OffsetDateTime,
 ) -> Result<bool, sqlx::Error> {
-    let result = sqlx::query(
-        "INSERT INTO sessions (session_token_hash, author_id, scopes, expires_at) \
-         SELECT $1, $2, $3, $4 \
-         WHERE EXISTS (SELECT 1 FROM author_tokens WHERE prefix = $5 AND revoked_at IS NULL)",
+    let mut tx = pool.begin().await?;
+
+    // Lock the token row; a concurrent revoke must wait behind this lock (or, if
+    // it already committed, this re-read sees revoked_at set and returns None).
+    let live: Option<(i32,)> = sqlx::query_as(
+        "SELECT 1 FROM author_tokens WHERE prefix = $1 AND revoked_at IS NULL FOR UPDATE",
+    )
+    .bind(token_prefix)
+    .fetch_optional(&mut *tx)
+    .await?;
+    if live.is_none() {
+        tx.rollback().await?;
+        return Ok(false);
+    }
+
+    sqlx::query(
+        "INSERT INTO sessions (session_token_hash, author_id, scopes, expires_at) VALUES ($1, $2, $3, $4)",
     )
     .bind(session_token_hash)
     .bind(author_id)
     .bind(scopes)
     .bind(expires_at)
-    .bind(token_prefix)
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
-    Ok(result.rows_affected() > 0)
+
+    tx.commit().await?;
+    Ok(true)
 }
 
 /// Look up a session by its token hash, joining the author name so the caller
