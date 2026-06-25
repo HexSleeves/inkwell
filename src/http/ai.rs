@@ -18,11 +18,9 @@ use serde::Serialize;
 use crate::ai::NO_ANSWER_MARKER;
 use crate::db::chunks;
 use crate::db::links::Visibility;
-use crate::domain::author::Scope;
-use crate::domain::document::StatusFilter;
 use crate::error::AppError;
 use crate::http::AppState;
-use crate::http::auth::authenticate;
+use crate::http::api::resolve_visibility;
 
 /// How many related notes a `/documents/{slug}/related` response returns.
 const RELATED_LIMIT: i64 = 5;
@@ -76,12 +74,9 @@ pub async fn document_related(
     if method != Method::GET {
         return Err(AppError::MethodNotAllowed(vec!["GET"]));
     }
-    let visibility = request_visibility(&headers, &state).await;
-    let filter = StatusFilter {
-        status: visibility.status_filter(),
-    };
+    let visibility = resolve_visibility(&headers, &state).await;
     let Some(document) =
-        crate::db::documents::get_document_by_slug(&state.pool, &slug, filter).await?
+        crate::db::documents::get_document_by_slug_vis(&state.pool, &slug, visibility).await?
     else {
         return Err(AppError::NotFound(format!(
             "No document with slug \"{slug}\"."
@@ -178,7 +173,7 @@ pub async fn ask(
         return Ok((StatusCode::OK, Json(response)).into_response());
     };
 
-    let visibility = request_visibility(&headers, &state).await;
+    let visibility = resolve_visibility(&headers, &state).await;
 
     // Vector retrieval over the question embedding; fall back to FTS when the
     // garden has no embeddings yet (e.g. a fresh import that hasn't been
@@ -284,8 +279,6 @@ fn dedup_citations(retrieved: &[chunks::RetrievedChunk]) -> Vec<Citation> {
     citations
 }
 
-/// Map the request's credentials to a read [`Visibility`] — the same rule every
-/// content-exposing surface uses (authenticated ⇒ `All`, anonymous ⇒ `Public`).
 /// Trim and validate an `/ask` question: non-empty and at most
 /// [`MAX_ASK_QUERY_CHARS`] characters. Runs before any provider call, so an
 /// oversized question is a cheap `400` rather than wasted embedding/synthesis.
@@ -302,18 +295,4 @@ fn validate_ask_query(raw_query: String) -> Result<String, AppError> {
         )));
     }
     Ok(trimmed)
-}
-
-async fn request_visibility(headers: &HeaderMap, state: &AppState) -> Visibility {
-    // Draft-grounded retrieval/citations require the `read` scope (admin implies
-    // it); a token without it is treated as a public reader. Mirrors
-    // `api::can_see_drafts` (ADR 0009 slice 3).
-    let can_see_drafts = authenticate(headers, &state.config, &state.pool)
-        .await
-        .is_some_and(|principal| principal.has(Scope::Read));
-    if can_see_drafts {
-        Visibility::All
-    } else {
-        Visibility::Public
-    }
 }

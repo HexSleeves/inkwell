@@ -14,7 +14,7 @@ pub const MAX_REQUEST_BODY_BYTES: usize = 1_000_000;
 pub const DEFAULT_LIMIT: u32 = 20;
 pub const MAX_LIMIT: u32 = 100;
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, sqlx::Type)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, sqlx::Type)]
 #[sqlx(type_name = "text", rename_all = "lowercase")]
 #[serde(rename_all = "lowercase")]
 pub enum DocumentStatus {

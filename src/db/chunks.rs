@@ -150,8 +150,8 @@ pub async fn related_notes(
     // DISTINCT ON (note) keeps each note's single nearest chunk; the outer order
     // then ranks notes by that best distance. Both the inner DISTINCT ON and the
     // outer query order by distance so the chosen chunk is genuinely the closest.
-    let rows: Vec<(String, String, f64)> = match visibility.status_filter() {
-        Some(status) => {
+    let rows: Vec<(String, String, f64)> = match visibility {
+        Visibility::Public => {
             sqlx::query_as::<Postgres, (String, String, f64)>(
                 r#"
                 SELECT slug, title, distance FROM (
@@ -162,7 +162,35 @@ pub async fn related_notes(
                     FROM note_chunks
                     JOIN documents ON documents.id = note_chunks.note_id
                     WHERE documents.id <> $2
-                      AND documents.status = $3
+                      AND documents.status = 'published'
+                      AND note_chunks.embedding_provider = $3
+                      AND note_chunks.embedding_model = $4
+                    ORDER BY documents.id, distance
+                ) AS nearest
+                ORDER BY distance ASC, slug ASC
+                LIMIT $5
+                "#,
+            )
+            .bind(&embedding)
+            .bind(exclude_note_id)
+            .bind(provider)
+            .bind(model)
+            .bind(limit)
+            .fetch_all(pool)
+            .await?
+        }
+        Visibility::Owner(owner_id) => {
+            sqlx::query_as::<Postgres, (String, String, f64)>(
+                r#"
+                SELECT slug, title, distance FROM (
+                    SELECT DISTINCT ON (documents.id)
+                           documents.slug AS slug,
+                           documents.title AS title,
+                           (note_chunks.embedding <=> $1::vector) AS distance
+                    FROM note_chunks
+                    JOIN documents ON documents.id = note_chunks.note_id
+                    WHERE documents.id <> $2
+                      AND (documents.status = 'published' OR documents.owner_id = $3)
                       AND note_chunks.embedding_provider = $4
                       AND note_chunks.embedding_model = $5
                     ORDER BY documents.id, distance
@@ -173,14 +201,14 @@ pub async fn related_notes(
             )
             .bind(&embedding)
             .bind(exclude_note_id)
-            .bind(status.as_str())
+            .bind(owner_id)
             .bind(provider)
             .bind(model)
             .bind(limit)
             .fetch_all(pool)
             .await?
         }
-        None => {
+        Visibility::All => {
             sqlx::query_as::<Postgres, (String, String, f64)>(
                 r#"
                 SELECT slug, title, distance FROM (
@@ -244,8 +272,8 @@ pub async fn related_notes_for_note(
     // for a given candidate note to a single row; min() picks its best match.
     // Both origin and candidate are filtered by provenance so vectors from
     // different embedding spaces are never cross-compared.
-    let rows: Vec<(String, String, f64)> = match visibility.status_filter() {
-        Some(status) => {
+    let rows: Vec<(String, String, f64)> = match visibility {
+        Visibility::Public => {
             sqlx::query_as::<Postgres, (String, String, f64)>(
                 r#"
                 SELECT documents.slug, documents.title,
@@ -254,7 +282,33 @@ pub async fn related_notes_for_note(
                 JOIN note_chunks AS candidate ON candidate.note_id <> origin.note_id
                 JOIN documents ON documents.id = candidate.note_id
                 WHERE origin.note_id = $1
-                  AND documents.status = $2
+                  AND documents.status = 'published'
+                  AND origin.embedding_provider = $2
+                  AND origin.embedding_model = $3
+                  AND candidate.embedding_provider = $2
+                  AND candidate.embedding_model = $3
+                GROUP BY documents.id, documents.slug, documents.title
+                ORDER BY distance ASC, documents.slug ASC
+                LIMIT $4
+                "#,
+            )
+            .bind(origin_note_id)
+            .bind(provider)
+            .bind(model)
+            .bind(limit)
+            .fetch_all(pool)
+            .await?
+        }
+        Visibility::Owner(owner_id) => {
+            sqlx::query_as::<Postgres, (String, String, f64)>(
+                r#"
+                SELECT documents.slug, documents.title,
+                       min(candidate.embedding <=> origin.embedding) AS distance
+                FROM note_chunks AS origin
+                JOIN note_chunks AS candidate ON candidate.note_id <> origin.note_id
+                JOIN documents ON documents.id = candidate.note_id
+                WHERE origin.note_id = $1
+                  AND (documents.status = 'published' OR documents.owner_id = $2)
                   AND origin.embedding_provider = $3
                   AND origin.embedding_model = $4
                   AND candidate.embedding_provider = $3
@@ -265,14 +319,14 @@ pub async fn related_notes_for_note(
                 "#,
             )
             .bind(origin_note_id)
-            .bind(status.as_str())
+            .bind(owner_id)
             .bind(provider)
             .bind(model)
             .bind(limit)
             .fetch_all(pool)
             .await?
         }
-        None => {
+        Visibility::All => {
             sqlx::query_as::<Postgres, (String, String, f64)>(
                 r#"
                 SELECT documents.slug, documents.title,
@@ -326,15 +380,36 @@ pub async fn search_chunks(
     model: &str,
 ) -> Result<Vec<RetrievedChunk>, sqlx::Error> {
     let embedding = vector_to_pg_text(query_embedding);
-    let rows: Vec<(String, String, String, f64)> = match visibility.status_filter() {
-        Some(status) => {
+    let rows: Vec<(String, String, String, f64)> = match visibility {
+        Visibility::Public => {
             sqlx::query_as::<Postgres, (String, String, String, f64)>(
                 r#"
                 SELECT documents.slug, documents.title, note_chunks.content,
                        (note_chunks.embedding <=> $1::vector) AS distance
                 FROM note_chunks
                 JOIN documents ON documents.id = note_chunks.note_id
-                WHERE documents.status = $2
+                WHERE documents.status = 'published'
+                  AND note_chunks.embedding_provider = $2
+                  AND note_chunks.embedding_model = $3
+                ORDER BY distance ASC, documents.slug ASC, note_chunks.chunk_index ASC
+                LIMIT $4
+                "#,
+            )
+            .bind(&embedding)
+            .bind(provider)
+            .bind(model)
+            .bind(limit)
+            .fetch_all(pool)
+            .await?
+        }
+        Visibility::Owner(owner_id) => {
+            sqlx::query_as::<Postgres, (String, String, String, f64)>(
+                r#"
+                SELECT documents.slug, documents.title, note_chunks.content,
+                       (note_chunks.embedding <=> $1::vector) AS distance
+                FROM note_chunks
+                JOIN documents ON documents.id = note_chunks.note_id
+                WHERE (documents.status = 'published' OR documents.owner_id = $2)
                   AND note_chunks.embedding_provider = $3
                   AND note_chunks.embedding_model = $4
                 ORDER BY distance ASC, documents.slug ASC, note_chunks.chunk_index ASC
@@ -342,14 +417,14 @@ pub async fn search_chunks(
                 "#,
             )
             .bind(&embedding)
-            .bind(status.as_str())
+            .bind(owner_id)
             .bind(provider)
             .bind(model)
             .bind(limit)
             .fetch_all(pool)
             .await?
         }
-        None => {
+        Visibility::All => {
             sqlx::query_as::<Postgres, (String, String, String, f64)>(
                 r#"
                 SELECT documents.slug, documents.title, note_chunks.content,

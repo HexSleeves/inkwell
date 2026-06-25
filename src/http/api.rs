@@ -250,11 +250,10 @@ pub async fn document_backlinks(
     if method != Method::GET {
         return Err(AppError::MethodNotAllowed(vec!["GET"]));
     }
-    let visibility = request_visibility(&headers, &state).await;
-    let filter = StatusFilter {
-        status: visibility.status_filter(),
-    };
-    let Some(document) = documents::get_document_by_slug(&state.pool, &slug, filter).await? else {
+    let visibility = resolve_visibility(&headers, &state).await;
+    let Some(document) =
+        documents::get_document_by_slug_vis(&state.pool, &slug, visibility).await?
+    else {
         return Err(AppError::NotFound(format!(
             "No document with slug \"{slug}\"."
         )));
@@ -284,7 +283,7 @@ pub async fn graph(
     if method != Method::GET {
         return Err(AppError::MethodNotAllowed(vec!["GET"]));
     }
-    let visibility = request_visibility(&headers, &state).await;
+    let visibility = resolve_visibility(&headers, &state).await;
     let graph = links::garden_graph(&state.pool, visibility).await?;
     Ok((StatusCode::OK, Json(GraphEnvelope::from(graph))).into_response())
 }
@@ -304,11 +303,8 @@ pub async fn document_graph(
     if method != Method::GET {
         return Err(AppError::MethodNotAllowed(vec!["GET"]));
     }
-    let visibility = request_visibility(&headers, &state).await;
-    let filter = StatusFilter {
-        status: visibility.status_filter(),
-    };
-    if documents::get_document_by_slug(&state.pool, &slug, filter)
+    let visibility = resolve_visibility(&headers, &state).await;
+    if documents::get_document_by_slug_vis(&state.pool, &slug, visibility)
         .await?
         .is_none()
     {
@@ -473,8 +469,8 @@ async fn list_documents(
     headers: HeaderMap,
     query: ListQuery,
 ) -> Result<Response, AppError> {
-    let authenticated = can_see_drafts(&headers, &state).await;
-    let status = resolve_list_status(authenticated, query.status.as_deref())?;
+    let visibility = resolve_visibility(&headers, &state).await;
+    let extra_status = resolve_list_extra_status(visibility, query.status.as_deref())?;
     let mut limit =
         parse_non_negative_int(query.limit.as_deref(), "limit")?.unwrap_or(DEFAULT_LIMIT);
     if limit < 1 {
@@ -486,19 +482,11 @@ async fn list_documents(
         limit = MAX_LIMIT;
     }
     let offset = parse_non_negative_int(query.offset.as_deref(), "offset")?.unwrap_or(0);
-    let filter = StatusFilter { status };
-    let documents = documents::list_documents(
-        &state.pool,
-        crate::domain::document::ListOptions {
-            limit: Some(limit),
-            offset: Some(offset),
-            status: filter.status.clone(),
-        },
-    )
-    .await?;
-    let total = documents::count_documents(&state.pool, filter).await?;
+    let docs =
+        documents::list_documents_vis(&state.pool, visibility, extra_status, limit, offset).await?;
+    let total = documents::count_documents_vis(&state.pool, visibility, extra_status).await?;
     let response = ListResponse {
-        documents: documents.into_iter().map(DocumentEnvelope::from).collect(),
+        documents: docs.into_iter().map(DocumentEnvelope::from).collect(),
         total,
         limit,
         offset,
@@ -511,15 +499,10 @@ async fn get_document(
     headers: HeaderMap,
     slug: String,
 ) -> Result<Response, AppError> {
-    let authenticated = can_see_drafts(&headers, &state).await;
-    let filter = if authenticated {
-        StatusFilter { status: None }
-    } else {
-        StatusFilter {
-            status: Some(DocumentStatus::Published),
-        }
-    };
-    let Some(document) = documents::get_document_by_slug(&state.pool, &slug, filter).await? else {
+    let visibility = resolve_visibility(&headers, &state).await;
+    let Some(document) =
+        documents::get_document_by_slug_vis(&state.pool, &slug, visibility).await?
+    else {
         return Err(AppError::NotFound(format!(
             "No document with slug \"{slug}\"."
         )));
@@ -812,46 +795,54 @@ fn resolve_growth(value: Option<&Value>) -> Result<Option<GrowthStage>, AppError
     }
 }
 
-fn resolve_list_status(
-    authenticated: bool,
+/// Parse the optional `?status` query param into an ADDITIONAL status filter
+/// on top of the visibility predicate. For `Public` the visibility itself
+/// restricts to published, so no extra filter is applied (always `None`).
+/// For `Owner` and `All`, the param narrows further:
+///   - absent / `"all"` → no extra restriction (visibility already applies)
+///   - `"draft"` → `Some(Draft)` (Admin: all drafts; Owner: own drafts only)
+///   - `"published"` → `Some(Published)`
+fn resolve_list_extra_status(
+    visibility: Visibility,
     raw: Option<&str>,
 ) -> Result<Option<DocumentStatus>, AppError> {
-    if !authenticated {
-        return Ok(Some(DocumentStatus::Published));
-    }
-    match raw {
-        None | Some("all") => Ok(None),
-        Some("draft") => Ok(Some(DocumentStatus::Draft)),
-        Some("published") => Ok(Some(DocumentStatus::Published)),
-        _ => Err(AppError::BadRequest(
-            "Query param \"status\" must be one of: draft, published, all.".to_string(),
-        )),
-    }
-}
-
-/// Map the request's credentials to a read [`Visibility`]: an authenticated
-/// caller (shared key or any live scoped token) sees everything (`All`), an
-/// anonymous one only published content (`Public`). The single place read-scope
-/// is derived for the document/graph surfaces. Token-aware as of slice 2, so a
-/// public request (no `x-api-key`) still short-circuits without a DB lookup.
-async fn request_visibility(headers: &HeaderMap, state: &AppState) -> Visibility {
-    if can_see_drafts(headers, state).await {
-        Visibility::All
-    } else {
-        Visibility::Public
+    match visibility {
+        // Public is already restricted to published by the visibility predicate;
+        // no extra status filter is needed.
+        Visibility::Public => Ok(None),
+        Visibility::Owner(_) | Visibility::All => match raw {
+            None | Some("all") => Ok(None),
+            Some("draft") => Ok(Some(DocumentStatus::Draft)),
+            Some("published") => Ok(Some(DocumentStatus::Published)),
+            _ => Err(AppError::BadRequest(
+                "Query param \"status\" must be one of: draft, published, all.".to_string(),
+            )),
+        },
     }
 }
 
-/// Whether the request may see draft/unlisted content: it must resolve to a
-/// principal that holds the `read` scope (admin implies it). A token lacking
-/// `read` — e.g. a write-only agent token — is treated as a public reader. This
-/// is the slice-3 read gate; per-owner draft isolation (an author seeing only
-/// their OWN drafts) is deferred to slice 3b, which reworks `Visibility` into an
-/// owner-aware filter across the query layer.
-async fn can_see_drafts(headers: &HeaderMap, state: &AppState) -> bool {
-    authenticate(headers, &state.config, &state.pool)
-        .await
-        .is_some_and(|principal| principal.has(Scope::Read))
+/// Resolve the request's credentials to the correct [`Visibility`] for read
+/// surfaces (ADR 0009, slice 3b):
+///   - No credential / no `read` scope → [`Visibility::Public`]
+///   - Admin (`admin` scope or shared key) → [`Visibility::All`]
+///   - Non-admin with `read` scope + known author id → [`Visibility::Owner(id)`]
+///
+/// This is the SINGLE place read-visibility is derived for every API surface
+/// that exposes note content; callers must NOT re-derive this rule.
+/// `pub(crate)` so the AI handler module can share the same rule.
+pub(crate) async fn resolve_visibility(headers: &HeaderMap, state: &AppState) -> Visibility {
+    let Some(principal) = authenticate(headers, &state.config, &state.pool).await else {
+        return Visibility::Public;
+    };
+    if principal.has(Scope::Admin) {
+        return Visibility::All;
+    }
+    if principal.has(Scope::Read)
+        && let Some(author_id) = principal.author_id
+    {
+        return Visibility::Owner(author_id);
+    }
+    Visibility::Public
 }
 
 /// Require the principal to hold `scope` (admin implies all). 403 otherwise.

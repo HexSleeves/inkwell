@@ -81,8 +81,8 @@ pub async fn verified_mentions(
     target_note_id: Uuid,
     visibility: Visibility,
 ) -> Result<Vec<Mention>, sqlx::Error> {
-    let rows: Vec<(String,)> = match visibility.status_filter() {
-        Some(status) => {
+    let rows: Vec<(String,)> = match visibility {
+        Visibility::Public => {
             sqlx::query_as::<Postgres, (String,)>(
                 r#"
                 SELECT webmentions.source_url
@@ -90,18 +90,36 @@ pub async fn verified_mentions(
                 JOIN documents ON documents.id = webmentions.target_note_id
                 WHERE webmentions.target_note_id = $1
                   AND webmentions.status = 'verified'
-                  AND documents.status = $2
+                  AND documents.status = 'published'
+                ORDER BY webmentions.created_at DESC, webmentions.id
+                LIMIT $2
+                "#,
+            )
+            .bind(target_note_id)
+            .bind(MAX_MENTIONS)
+            .fetch_all(pool)
+            .await?
+        }
+        Visibility::Owner(owner_id) => {
+            sqlx::query_as::<Postgres, (String,)>(
+                r#"
+                SELECT webmentions.source_url
+                FROM webmentions
+                JOIN documents ON documents.id = webmentions.target_note_id
+                WHERE webmentions.target_note_id = $1
+                  AND webmentions.status = 'verified'
+                  AND (documents.status = 'published' OR documents.owner_id = $2)
                 ORDER BY webmentions.created_at DESC, webmentions.id
                 LIMIT $3
                 "#,
             )
             .bind(target_note_id)
-            .bind(status.as_str())
+            .bind(owner_id)
             .bind(MAX_MENTIONS)
             .fetch_all(pool)
             .await?
         }
-        None => {
+        Visibility::All => {
             sqlx::query_as::<Postgres, (String,)>(
                 r#"
                 SELECT webmentions.source_url

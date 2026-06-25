@@ -306,8 +306,8 @@ async fn unknown_token_is_unauthorized() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// A read-scoped token sees drafts (owner visibility), an anonymous reader does
-/// not — token resolution feeds the read-visibility rule too.
+/// A read-scoped token sees its OWN drafts (owner visibility, slice 3b), but NOT
+/// another author's draft. An anonymous reader sees no drafts at all.
 #[tokio::test]
 async fn token_grants_draft_read_visibility() -> anyhow::Result<()> {
     let _guard = db_guard().await;
@@ -316,39 +316,120 @@ async fn token_grants_draft_read_visibility() -> anyhow::Result<()> {
     };
     let router = common::router_for(pool.clone());
 
-    // Create a draft with the shared key.
+    // Create a draft owned by the admin (shared key → bootstrap admin).
     assert_eq!(
-        create_doc_with_key(&router, "Secret Draft", SHARED_KEY).await?,
+        create_doc_with_key(&router, "Admin Secret Draft", SHARED_KEY).await?,
         StatusCode::CREATED
     );
 
-    let (read_token, _prefix) = mint_token(&router, "Reader", &["read"]).await?;
+    // Mint a read+write token so Reader can create their own draft.
+    let (rw_token, _prefix) = mint_token(&router, "Reader", &["read", "write"]).await?;
 
-    // Anonymous reader: draft is invisible (404).
+    // Reader creates their OWN draft.
+    assert_eq!(
+        create_doc_with_key(&router, "Reader Own Draft", &rw_token).await?,
+        StatusCode::CREATED
+    );
+
+    // Anonymous reader: both drafts are invisible (404).
     let response = router
         .clone()
         .oneshot(
             Request::builder()
                 .method(Method::GET)
-                .uri("/documents/secret-draft")
+                .uri("/documents/admin-secret-draft")
                 .body(Body::empty())?,
         )
         .await?;
-    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    assert_eq!(
+        response.status(),
+        StatusCode::NOT_FOUND,
+        "anonymous must not see admin draft"
+    );
 
-    // Token holder: draft is visible (200).
     let response = router
+        .clone()
         .oneshot(
             Request::builder()
                 .method(Method::GET)
-                .uri("/documents/secret-draft")
-                .header("x-api-key", &read_token)
+                .uri("/documents/reader-own-draft")
                 .body(Body::empty())?,
         )
         .await?;
-    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.status(),
+        StatusCode::NOT_FOUND,
+        "anonymous must not see reader draft"
+    );
+
+    // Reader (read+write) sees their OWN draft but NOT the admin's draft.
+    let response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/documents/reader-own-draft")
+                .header("x-api-key", &rw_token)
+                .body(Body::empty())?,
+        )
+        .await?;
+    assert_eq!(
+        response.status(),
+        StatusCode::OK,
+        "reader must see own draft"
+    );
     let json = body_json(response).await?;
     assert_eq!(json["status"], "draft");
+
+    // Reader CANNOT see the admin's draft (different owner — cross-author leak guard).
+    let response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/documents/admin-secret-draft")
+                .header("x-api-key", &rw_token)
+                .body(Body::empty())?,
+        )
+        .await?;
+    assert_eq!(
+        response.status(),
+        StatusCode::NOT_FOUND,
+        "reader must NOT see admin's draft (slice 3b owner isolation)"
+    );
+
+    // Admin (shared key) sees both drafts.
+    let response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/documents/admin-secret-draft")
+                .header("x-api-key", SHARED_KEY)
+                .body(Body::empty())?,
+        )
+        .await?;
+    assert_eq!(
+        response.status(),
+        StatusCode::OK,
+        "admin must see admin's own draft"
+    );
+
+    let response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/documents/reader-own-draft")
+                .header("x-api-key", SHARED_KEY)
+                .body(Body::empty())?,
+        )
+        .await?;
+    assert_eq!(
+        response.status(),
+        StatusCode::OK,
+        "admin must see reader's draft"
+    );
 
     Ok(())
 }

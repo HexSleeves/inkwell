@@ -397,9 +397,9 @@ pub async fn search_published_documents(
 
 /// Visibility-aware full-text search: identical to
 /// [`search_published_documents`] but applies the caller's
-/// [`Visibility`] status filter (owners see drafts/unlisted; the public sees
-/// only published). Keeps the ask-your-garden FTS fallback consistent with the
-/// vector path's visibility contract.
+/// [`Visibility`] predicate (`Owner` sees own drafts + published; the public sees
+/// only published; admin sees everything). Keeps the ask-your-garden FTS fallback
+/// consistent with the vector path's visibility contract.
 pub async fn search_documents(
     pool: &PgPool,
     query: &str,
@@ -412,8 +412,17 @@ pub async fn search_documents(
          WHERE search_vector @@ websearch_to_tsquery('english', ",
     );
     builder.push_bind(query).push(")");
-    if let Some(status) = visibility.status_filter() {
-        builder.push(" AND status = ").push_bind(status.as_str());
+    match visibility {
+        Visibility::Public => {
+            builder.push(" AND status = 'published'");
+        }
+        Visibility::Owner(owner_id) => {
+            builder
+                .push(" AND (status = 'published' OR owner_id = ")
+                .push_bind(owner_id)
+                .push(")");
+        }
+        Visibility::All => {}
     }
     builder
         .push(" ORDER BY ts_rank(search_vector, websearch_to_tsquery('english', ")
@@ -426,6 +435,163 @@ pub async fn search_documents(
         builder.push(" OFFSET ").push_bind(offset as i64);
     }
     builder.build_query_as().fetch_all(pool).await
+}
+
+/// Count FTS matches under the given [`Visibility`] predicate. Mirrors
+/// [`search_documents`] so pagination totals stay consistent with the result set.
+pub async fn count_search_documents(
+    pool: &PgPool,
+    query: &str,
+    visibility: Visibility,
+) -> Result<i64, sqlx::Error> {
+    let mut builder = QueryBuilder::<Postgres>::new(
+        "SELECT count(*)::bigint FROM documents \
+         WHERE search_vector @@ websearch_to_tsquery('english', ",
+    );
+    builder.push_bind(query).push(")");
+    match visibility {
+        Visibility::Public => {
+            builder.push(" AND status = 'published'");
+        }
+        Visibility::Owner(owner_id) => {
+            builder
+                .push(" AND (status = 'published' OR owner_id = ")
+                .push_bind(owner_id)
+                .push(")");
+        }
+        Visibility::All => {}
+    }
+    builder.build_query_scalar().fetch_one(pool).await
+}
+
+/// Visibility-aware single-document lookup by slug. The SQL predicate depends on
+/// the caller's [`Visibility`]:
+///   - [`Public`](Visibility::Public): `status = 'published'`
+///   - [`Owner(id)`](Visibility::Owner): `status = 'published' OR owner_id = id`
+///   - [`All`](Visibility::All): no restriction
+///
+/// Use this for every READ path that must enforce the no-draft-leak invariant.
+/// Write paths (update, delete) that always need to see the row regardless of
+/// status should continue to use [`get_document_by_slug`] with
+/// [`StatusFilter::default()`].
+pub async fn get_document_by_slug_vis(
+    pool: &PgPool,
+    slug: &str,
+    visibility: Visibility,
+) -> Result<Option<Document>, sqlx::Error> {
+    match visibility {
+        Visibility::Public => {
+            sqlx::query_as::<Postgres, Document>(
+                r#"SELECT id, slug, title, body_markdown, rendered_html, status, growth, tags,
+                          version, created_at, updated_at
+                   FROM documents WHERE slug = $1 AND status = 'published'"#,
+            )
+            .bind(slug)
+            .fetch_optional(pool)
+            .await
+        }
+        Visibility::Owner(owner_id) => {
+            sqlx::query_as::<Postgres, Document>(
+                r#"SELECT id, slug, title, body_markdown, rendered_html, status, growth, tags,
+                          version, created_at, updated_at
+                   FROM documents
+                   WHERE slug = $1 AND (status = 'published' OR owner_id = $2)"#,
+            )
+            .bind(slug)
+            .bind(owner_id)
+            .fetch_optional(pool)
+            .await
+        }
+        Visibility::All => {
+            sqlx::query_as::<Postgres, Document>(
+                r#"SELECT id, slug, title, body_markdown, rendered_html, status, growth, tags,
+                          version, created_at, updated_at
+                   FROM documents WHERE slug = $1"#,
+            )
+            .bind(slug)
+            .fetch_optional(pool)
+            .await
+        }
+    }
+}
+
+/// Visibility-aware document list. For Owner callers the base filter is
+/// `(status='published' OR owner_id=$id)`; `extra_status` (from the `?status`
+/// query param) further narrows the result set on top of that base:
+///   - Admin+draft → own all drafts; Owner+draft → only own drafts.
+///   - Admin+published / Owner+published → published only.
+///   - `None` → use the visibility base without additional restriction.
+pub async fn list_documents_vis(
+    pool: &PgPool,
+    visibility: Visibility,
+    extra_status: Option<DocumentStatus>,
+    limit: u32,
+    offset: u32,
+) -> Result<Vec<Document>, sqlx::Error> {
+    let mut builder = QueryBuilder::<Postgres>::new(
+        "SELECT id, slug, title, body_markdown, rendered_html, status, growth, tags, \
+         version, created_at, updated_at FROM documents",
+    );
+    // Apply visibility base predicate.
+    match visibility {
+        Visibility::Public => {
+            builder.push(" WHERE status = 'published'");
+        }
+        Visibility::Owner(owner_id) => {
+            builder
+                .push(" WHERE (status = 'published' OR owner_id = ")
+                .push_bind(owner_id)
+                .push(")");
+        }
+        Visibility::All => {
+            if let Some(status) = extra_status {
+                builder.push(" WHERE status = ").push_bind(status.as_str());
+            }
+            builder.push(" ORDER BY created_at DESC, id DESC");
+            builder.push(" LIMIT ").push_bind(limit as i64);
+            builder.push(" OFFSET ").push_bind(offset as i64);
+            return builder.build_query_as().fetch_all(pool).await;
+        }
+    }
+    // For Public and Owner: optionally AND a user-supplied status filter.
+    if let Some(status) = extra_status {
+        builder.push(" AND status = ").push_bind(status.as_str());
+    }
+    builder.push(" ORDER BY created_at DESC, id DESC");
+    builder.push(" LIMIT ").push_bind(limit as i64);
+    builder.push(" OFFSET ").push_bind(offset as i64);
+    builder.build_query_as().fetch_all(pool).await
+}
+
+/// Visibility-aware document count. Mirrors [`list_documents_vis`] so
+/// pagination totals are consistent.
+pub async fn count_documents_vis(
+    pool: &PgPool,
+    visibility: Visibility,
+    extra_status: Option<DocumentStatus>,
+) -> Result<i64, sqlx::Error> {
+    let mut builder = QueryBuilder::<Postgres>::new("SELECT count(*)::bigint FROM documents");
+    match visibility {
+        Visibility::Public => {
+            builder.push(" WHERE status = 'published'");
+        }
+        Visibility::Owner(owner_id) => {
+            builder
+                .push(" WHERE (status = 'published' OR owner_id = ")
+                .push_bind(owner_id)
+                .push(")");
+        }
+        Visibility::All => {
+            if let Some(status) = extra_status {
+                builder.push(" WHERE status = ").push_bind(status.as_str());
+            }
+            return builder.build_query_scalar().fetch_one(pool).await;
+        }
+    }
+    if let Some(status) = extra_status {
+        builder.push(" AND status = ").push_bind(status.as_str());
+    }
+    builder.build_query_scalar().fetch_one(pool).await
 }
 
 pub async fn count_search_published_documents(
