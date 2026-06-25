@@ -2,6 +2,7 @@ pub mod audit;
 pub mod chunks;
 pub mod documents;
 pub mod links;
+pub mod media;
 pub mod migrations;
 pub mod pool;
 pub mod tokens;

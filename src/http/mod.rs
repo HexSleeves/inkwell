@@ -13,6 +13,7 @@ pub mod auth;
 pub mod cache;
 pub mod extractors;
 pub mod feed;
+pub mod media;
 pub mod pages;
 pub mod router;
 pub mod search;
