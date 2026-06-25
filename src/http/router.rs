@@ -12,7 +12,8 @@ use crate::config::Config;
 use crate::http::AppState;
 
 use super::{
-    admin, ai, api, assets, feed, media, pages, search, security_headers, sitemap, webmention,
+    admin, ai, api, assets, auth_session, feed, media, pages, search, security_headers, sitemap,
+    webmention,
 };
 
 pub fn build_router(config: Arc<Config>, pool: sqlx::PgPool) -> Router {
@@ -35,13 +36,14 @@ pub fn build_router_with_providers(
     embedder: Arc<dyn Embedder>,
     llm: Option<Arc<dyn Llm>>,
 ) -> Router {
+    let browser_login = config.browser_login;
     let state = AppState {
         config,
         pool,
         embedder,
         llm,
     };
-    Router::new()
+    let mut router = Router::new()
         .route("/health", any(api::health))
         .route("/ask", any(ai::ask))
         .route("/webmention", any(webmention::webmention))
@@ -81,7 +83,18 @@ pub fn build_router_with_providers(
         .route("/tags/{tag}/page/{page}", get(pages::tag_page_numbered))
         .route("/page/{page}", get(pages::index_page))
         .route("/{slug}", get(pages::document_page))
-        .route("/", get(pages::index))
+        .route("/", get(pages::index));
+
+    // Register login/logout routes only when the flag is on. When off, any
+    // request to /auth/* hits the fallback and returns 404 — the routes do not
+    // exist, so no auth surface is exposed.
+    if browser_login {
+        router = router
+            .route("/auth/login", any(auth_session::login))
+            .route("/auth/logout", any(auth_session::logout));
+    }
+
+    router
         .layer(CompressionLayer::new())
         .layer(TraceLayer::new_for_http())
         .layer(middleware::from_fn(

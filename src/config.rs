@@ -28,6 +28,12 @@ pub struct Config {
     /// always on; sending is opt-in and, when off, the send code path is fully
     /// inert (no outbound requests). Not a secret, but a behavior toggle.
     pub webmention_send: bool,
+    /// Whether to enable browser session login (`INKWELL_BROWSER_LOGIN`).
+    /// Conservative default: **off**. When false, the `/auth/login` and
+    /// `/auth/logout` routes are not registered (404), no cookie is ever
+    /// consulted during authentication, and the existing auth paths are
+    /// byte-for-byte unchanged. See ADR 0010.
+    pub browser_login: bool,
 }
 
 impl std::fmt::Debug for Config {
@@ -50,6 +56,7 @@ impl std::fmt::Debug for Config {
             )
             .field("llm_model", &self.llm_model)
             .field("webmention_send", &self.webmention_send)
+            .field("browser_login", &self.browser_login)
             .finish()
     }
 }
@@ -85,6 +92,9 @@ impl Config {
         // "false", "1", garbage — leaves it off, the safe default.
         let webmention_send = trimmed_env("INKWELL_WEBMENTION_SEND")
             .is_some_and(|value| value.eq_ignore_ascii_case("true"));
+        // Browser login is opt-in: same parse rule as webmention_send.
+        let browser_login = trimmed_env("INKWELL_BROWSER_LOGIN")
+            .is_some_and(|value| value.eq_ignore_ascii_case("true"));
 
         Ok(Self {
             database_url,
@@ -96,6 +106,7 @@ impl Config {
             anthropic_api_key,
             llm_model,
             webmention_send,
+            browser_login,
         })
     }
 }
@@ -190,6 +201,7 @@ mod tests {
             anthropic_api_key: Some("sentinel-anthropic-value".to_string()),
             llm_model: DEFAULT_LLM_MODEL.to_string(),
             webmention_send: false,
+            browser_login: false,
         };
         let rendered = format!("{config:?}");
         assert!(!rendered.contains("sentinel-key-value"));
