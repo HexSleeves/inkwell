@@ -130,6 +130,10 @@ pub struct DocumentPatch {
     pub rendered_html: Option<String>,
     pub growth: Option<GrowthStage>,
     pub tags: Option<Vec<String>>,
+    /// A new slug to rename the document to (ADR 0011). When `Some` and different
+    /// from the current slug, the update records the old slug as a 301 alias and
+    /// changes `documents.slug` atomically. `None` leaves the slug untouched.
+    pub new_slug: Option<String>,
 }
 
 #[derive(Clone, Debug, Default)]

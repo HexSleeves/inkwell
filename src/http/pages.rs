@@ -73,13 +73,39 @@ pub async fn document_page(
                 ),
             )
         }
-        Ok(None) => (
-            StatusCode::NOT_FOUND,
-            Html(render_not_found_page(state.config.site_url.as_deref())),
-        )
-            .into_response(),
+        Ok(None) => {
+            // A retired slug 301-redirects to the document's current slug, but
+            // only when that document is published — the HTML page is public
+            // scope, so a draft target stays a 404 and never leaks (ADR 0011).
+            match documents::resolve_alias_target(&state.pool, &slug, Visibility::Public).await {
+                Ok(Some(current)) => {
+                    match axum::http::HeaderValue::from_str(&format!("/{current}")) {
+                        Ok(location) => (
+                            StatusCode::MOVED_PERMANENTLY,
+                            [(axum::http::header::LOCATION, location)],
+                        )
+                            .into_response(),
+                        Err(_) => not_found_page(&state),
+                    }
+                }
+                Ok(None) => not_found_page(&state),
+                Err(error) => {
+                    tracing::warn!(%slug, %error, "alias lookup failed; rendering 404 page");
+                    not_found_page(&state)
+                }
+            }
+        }
         Err(_) => error_page(&state),
     }
+}
+
+/// The shared 404 HTML page used by the document route (and its alias fallback).
+fn not_found_page(state: &AppState) -> Response {
+    (
+        StatusCode::NOT_FOUND,
+        Html(render_not_found_page(state.config.site_url.as_deref())),
+    )
+        .into_response()
 }
 
 /// Resolve the `[[wikilink]]` targets that appear in backlink context snippets

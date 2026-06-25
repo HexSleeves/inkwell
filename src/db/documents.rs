@@ -125,6 +125,19 @@ pub async fn update_document_by_slug(
     patch: DocumentPatch,
     owner: Option<Uuid>,
 ) -> Result<Option<Document>, DbError> {
+    // Rename path (ADR 0011): a patch that carries a *different* slug records the
+    // old slug as a 301 alias and changes `documents.slug` atomically (one
+    // version bump), alongside any field updates. A `new_slug` equal to the
+    // current slug is a no-op and falls through to the plain update below.
+    if let Some(new_slug) = patch.new_slug.as_deref().filter(|s| *s != slug) {
+        return match rename_and_update(pool, slug, new_slug, &patch, owner, None).await? {
+            ConditionalUpdate::Updated(document) => Ok(Some(*document)),
+            ConditionalUpdate::NotFound => Ok(None),
+            // No expected version is supplied here, so a mismatch never arises.
+            ConditionalUpdate::VersionMismatch { .. } => Ok(None),
+        };
+    }
+
     let result = sqlx::query_as::<Postgres, Document>(
         r#"
         UPDATE documents
@@ -182,6 +195,14 @@ pub async fn update_document_by_slug_if_version(
     patch: DocumentPatch,
     owner: Option<Uuid>,
 ) -> Result<ConditionalUpdate, DbError> {
+    // Rename path (ADR 0011) under optimistic concurrency: the version is checked
+    // against the FOR UPDATE-locked row inside the same transaction as the alias
+    // bookkeeping and slug change. See `rename_and_update`.
+    if let Some(new_slug) = patch.new_slug.as_deref().filter(|s| *s != slug) {
+        return rename_and_update(pool, slug, new_slug, &patch, owner, Some(expected_version))
+            .await;
+    }
+
     let result = sqlx::query_as::<Postgres, Document>(
         r#"
         UPDATE documents
@@ -225,6 +246,154 @@ pub async fn update_document_by_slug_if_version(
                 Some(current) => Ok(ConditionalUpdate::VersionMismatch { current }),
                 None => Ok(ConditionalUpdate::NotFound),
             }
+        }
+    }
+}
+
+/// Rename a document's slug (ADR 0011), recording the old slug as a 301 alias,
+/// together with any field patch — all in ONE transaction so the change is
+/// atomic and owner-enforced.
+///
+/// Steps, under a `FOR UPDATE` lock on the target row:
+///  1. Lock by `current_slug` + ownership; a non-owner or missing slug → `NotFound`.
+///  2. If `expected_version` is given and differs from the locked version →
+///     `VersionMismatch` (the locked read makes this race-free).
+///  3. If `new_slug` is already a live document's slug → `DuplicateSlug` (409).
+///  4. Upsert `current_slug -> id` into `slug_aliases`, and delete any alias
+///     equal to `new_slug` (so renaming back to a retired slug can't loop).
+///  5. Apply the slug change + COALESCE field patch with a single version bump.
+async fn rename_and_update(
+    pool: &PgPool,
+    current_slug: &str,
+    new_slug: &str,
+    patch: &DocumentPatch,
+    owner: Option<Uuid>,
+    expected_version: Option<i64>,
+) -> Result<ConditionalUpdate, DbError> {
+    let mut tx = pool.begin().await?;
+
+    let locked = sqlx::query_as::<Postgres, (Uuid, i64)>(
+        "SELECT id, version FROM documents \
+         WHERE slug = $1 AND ($2::uuid IS NULL OR owner_id = $2) FOR UPDATE",
+    )
+    .bind(current_slug)
+    .bind(owner)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some((id, version)) = locked else {
+        tx.rollback().await?;
+        return Ok(ConditionalUpdate::NotFound);
+    };
+
+    if let Some(expected) = expected_version
+        && version != expected
+    {
+        tx.rollback().await?;
+        return Ok(ConditionalUpdate::VersionMismatch { current: version });
+    }
+
+    // Destination slug must be free among live documents.
+    let taken = sqlx::query_scalar::<Postgres, i32>("SELECT 1 FROM documents WHERE slug = $1")
+        .bind(new_slug)
+        .fetch_optional(&mut *tx)
+        .await?;
+    if taken.is_some() {
+        tx.rollback().await?;
+        return Err(DbError::DuplicateSlug {
+            slug: new_slug.to_string(),
+        });
+    }
+
+    sqlx::query(
+        "INSERT INTO slug_aliases (old_slug, document_id) VALUES ($1, $2) \
+         ON CONFLICT (old_slug) DO UPDATE SET document_id = EXCLUDED.document_id, created_at = now()",
+    )
+    .bind(current_slug)
+    .bind(id)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query("DELETE FROM slug_aliases WHERE old_slug = $1")
+        .bind(new_slug)
+        .execute(&mut *tx)
+        .await?;
+
+    let updated = sqlx::query_as::<Postgres, Document>(
+        r#"
+        UPDATE documents
+        SET slug = $2,
+            title = COALESCE($3, title),
+            body_markdown = COALESCE($4, body_markdown),
+            rendered_html = COALESCE($5, rendered_html),
+            growth = COALESCE($6, growth),
+            tags = COALESCE($7, tags),
+            version = version + 1,
+            updated_at = now()
+        WHERE id = $1
+        RETURNING id, slug, title, body_markdown, rendered_html, status, growth, tags, version, created_at, updated_at
+        "#,
+    )
+    .bind(id)
+    .bind(new_slug)
+    .bind(&patch.title)
+    .bind(&patch.body_markdown)
+    .bind(&patch.rendered_html)
+    .bind(patch.growth.map(|growth| growth.as_str().to_string()))
+    .bind(&patch.tags)
+    .fetch_one(&mut *tx)
+    .await;
+
+    let document = match updated {
+        Ok(document) => document,
+        // A concurrent insert could still take `new_slug` between the check and
+        // this write; the unique index surfaces it as a 409 rather than a 500.
+        Err(error) if is_unique_violation(&error) => {
+            tx.rollback().await?;
+            return Err(DbError::DuplicateSlug {
+                slug: new_slug.to_string(),
+            });
+        }
+        Err(error) => {
+            tx.rollback().await?;
+            return Err(DbError::Sqlx(error));
+        }
+    };
+
+    tx.commit().await?;
+    Ok(ConditionalUpdate::Updated(Box::new(document)))
+}
+
+/// Resolve a retired slug to its document's CURRENT slug for a 301 redirect, but
+/// only when that document is visible under `visibility`. An alias whose target
+/// is a draft the caller cannot see resolves to `None` (no existence leak),
+/// mirroring the document read predicate (ADR 0009 slice 3b).
+pub async fn resolve_alias_target(
+    pool: &PgPool,
+    old_slug: &str,
+    visibility: Visibility,
+) -> Result<Option<String>, sqlx::Error> {
+    let base = "SELECT d.slug FROM slug_aliases a JOIN documents d ON d.id = a.document_id \
+                WHERE a.old_slug = $1";
+    match visibility {
+        Visibility::Public => {
+            sqlx::query_scalar::<Postgres, String>(&format!("{base} AND d.status = 'published'"))
+                .bind(old_slug)
+                .fetch_optional(pool)
+                .await
+        }
+        Visibility::Owner(owner_id) => {
+            sqlx::query_scalar::<Postgres, String>(&format!(
+                "{base} AND (d.status = 'published' OR d.owner_id = $2)"
+            ))
+            .bind(old_slug)
+            .bind(owner_id)
+            .fetch_optional(pool)
+            .await
+        }
+        Visibility::All => {
+            sqlx::query_scalar::<Postgres, String>(base)
+                .bind(old_slug)
+                .fetch_optional(pool)
+                .await
         }
     }
 }
