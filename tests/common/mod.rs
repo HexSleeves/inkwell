@@ -60,7 +60,7 @@ pub async fn maybe_pool() -> Result<Option<PgPool>> {
     // `author_tokens` cascades from `authors` but is cleared explicitly so a test
     // that mints a token starts clean without disturbing the seeded author.
     sqlx::query(
-        "TRUNCATE TABLE documents, links, write_audit, author_tokens RESTART IDENTITY CASCADE",
+        "TRUNCATE TABLE documents, links, write_audit, author_tokens, media RESTART IDENTITY CASCADE",
     )
     .execute(&pool)
     .await?;

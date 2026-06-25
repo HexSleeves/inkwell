@@ -11,7 +11,9 @@ use crate::ai::{Embedder, Llm};
 use crate::config::Config;
 use crate::http::AppState;
 
-use super::{admin, ai, api, assets, feed, pages, search, security_headers, sitemap, webmention};
+use super::{
+    admin, ai, api, assets, feed, media, pages, search, security_headers, sitemap, webmention,
+};
 
 pub fn build_router(config: Arc<Config>, pool: sqlx::PgPool) -> Router {
     // Provider selection from config: real providers when keys are set, else the
@@ -51,6 +53,16 @@ pub fn build_router_with_providers(
         .route("/graph", any(api::graph))
         .route("/documents/{slug}/publish", any(api::publish_document))
         .route("/documents/{slug}/unpublish", any(api::unpublish_document))
+        // Raise the body limit on upload to MAX_MEDIA_BYTES; axum's default 2 MiB
+        // `DefaultBodyLimit` would otherwise reject 2–5 MiB uploads before the
+        // handler's own size check runs.
+        .route(
+            "/media",
+            any(media::media_upload)
+                .layer(axum::extract::DefaultBodyLimit::max(media::MAX_MEDIA_BYTES)),
+        )
+        // `get(...)` so axum answers HEAD automatically.
+        .route("/media/{id}", get(media::media_serve))
         .route("/admin/tokens", any(admin::tokens))
         .route("/admin/tokens/prune", any(admin::prune_tokens))
         .route("/admin/tokens/{prefix}/revoke", any(admin::revoke_token))

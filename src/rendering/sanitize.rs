@@ -54,6 +54,10 @@ pub fn sanitize_html(html: &str) -> String {
         .add_tag_attributes("th", ["align"])
         .add_tag_attributes("td", ["align"])
         .url_schemes(["http", "https", "mailto"].into_iter().collect())
+        // Allow relative URLs (e.g. `/media/<uuid>`) so `![alt](/media/…)`
+        // survives sanitisation. Absolute URLs still go through the scheme
+        // allowlist above; only scheme-less paths bypass it here.
+        .url_relative(ammonia::UrlRelative::PassThrough)
         .link_rel(Some("noopener noreferrer nofollow"))
         .clean(html)
         .to_string()
