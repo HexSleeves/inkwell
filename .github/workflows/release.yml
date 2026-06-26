@@ -5,17 +5,59 @@ on:
     tags:
       - "v*.*.*"
 
-permissions:
-  contents: write
-  packages: write
-
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
-  build-and-push:
+  verify:
     runs-on: ubuntu-latest
+    permissions: {}
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17@sha256:3226977dafcdf8f8a8079c8e31763dab1d7e52a8c7e008fc04bc33234fce45bb
+        env:
+          POSTGRES_USER: inkwell
+          POSTGRES_PASSWORD: inkwell
+          POSTGRES_DB: inkwell_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U inkwell -d inkwell_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/setup-rust
+
+      - name: Formatting
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets --all-features --locked -- -D warnings
+
+      - id: postgres
+        uses: ./.github/actions/postgres-pgvector
+
+      - name: Tests (includes migration smoke)
+        run: cargo test --all --locked
+        env:
+          INKWELL_REQUIRE_DB_TESTS: "1"
+          DATABASE_URL: ${{ steps.postgres.outputs.database_url }}
+
+      - name: Release build smoke
+        run: cargo build --release --bin inkwell --locked
+
+      - name: Docker build smoke
+        run: docker build -t inkwell:release-verify .
+
+  build-and-push:
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
     steps:
       - uses: actions/checkout@v7
 
@@ -69,13 +111,15 @@ jobs:
   github-release:
     needs: build-and-push
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
       - name: Download release artifacts
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@v7
         with:
           name: release-assets
           path: dist
