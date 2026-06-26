@@ -1,0 +1,1303 @@
+openapi: "3.1.0"
+
+info:
+  title: Inkwell API
+  version: "0.1"
+  description: |
+    API-first Markdown publishing platform.
+
+    All write endpoints require `X-Api-Key`. Reads are public unless stated
+    otherwise. See [docs/API.md](./API.md) for the full narrative reference.
+  contact:
+    name: Inkwell
+
+servers:
+  - url: http://localhost:3000
+    description: Local development
+  - url: https://your-railway-domain.up.railway.app
+    description: Production (replace with actual domain)
+
+components:
+  securitySchemes:
+    ApiKey:
+      type: apiKey
+      in: header
+      name: X-Api-Key
+      description: |
+        Shared admin key (`INKWELL_API_KEY`) or a scoped token
+        (`ink_<prefix>_<secret>`).
+
+  schemas:
+    Document:
+      type: object
+      required:
+        - id
+        - slug
+        - title
+        - bodyMarkdown
+        - renderedHtml
+        - status
+        - growth
+        - tags
+        - version
+        - createdAt
+        - updatedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: "550e8400-e29b-41d4-a716-446655440000"
+        slug:
+          type: string
+          example: "hello-world"
+          maxLength: 200
+        title:
+          type: string
+          example: "Hello World"
+          maxLength: 500
+        bodyMarkdown:
+          type: string
+          example: "# Hello World\n\nBody text here."
+          maxLength: 262144
+        renderedHtml:
+          type: string
+          example: "<h1>Hello World</h1>\n<p>Body text here.</p>"
+        status:
+          type: string
+          enum: [draft, published]
+        growth:
+          type: string
+          enum: [seedling, budding, evergreen]
+        tags:
+          type: array
+          items:
+            type: string
+            maxLength: 50
+          maxItems: 20
+          example: ["rust", "notes"]
+        version:
+          type: integer
+          format: int64
+          description: Monotonic revision counter. Echo as `If-Match` on conditional updates.
+          example: 3
+        createdAt:
+          type: string
+          format: date-time
+          example: "2026-01-15T10:30:00Z"
+        updatedAt:
+          type: string
+          format: date-time
+          example: "2026-06-01T08:00:00Z"
+
+    DocumentList:
+      type: object
+      required: [documents, total, limit, offset]
+      properties:
+        documents:
+          type: array
+          items:
+            $ref: "#/components/schemas/Document"
+        total:
+          type: integer
+          format: int64
+        limit:
+          type: integer
+          format: int32
+        offset:
+          type: integer
+          format: int32
+
+    CreateDocumentRequest:
+      type: object
+      required: [title, bodyMarkdown]
+      properties:
+        title:
+          type: string
+          maxLength: 500
+          example: "Hello World"
+        bodyMarkdown:
+          type: string
+          maxLength: 262144
+          example: "# Hello World\n\nBody text here."
+        slug:
+          type: string
+          maxLength: 200
+          description: Auto-derived from title if omitted.
+          example: "hello-world"
+        tags:
+          type: array
+          items:
+            type: string
+            maxLength: 50
+          maxItems: 20
+          example: ["rust", "notes"]
+        growth:
+          type: string
+          enum: [seedling, budding, evergreen]
+          default: seedling
+
+    UpdateDocumentRequest:
+      type: object
+      description: At least one field is required.
+      properties:
+        title:
+          type: string
+          maxLength: 500
+        bodyMarkdown:
+          type: string
+          maxLength: 262144
+        tags:
+          type: array
+          items:
+            type: string
+            maxLength: 50
+          maxItems: 20
+        growth:
+          type: string
+          enum: [seedling, budding, evergreen]
+        slug:
+          type: string
+          maxLength: 200
+          description: Rename the document. Old slug registers as a 301 alias.
+
+    BacklinksResponse:
+      type: object
+      required: [backlinks, mentions]
+      properties:
+        backlinks:
+          type: array
+          items:
+            type: object
+            required: [slug, title]
+            properties:
+              slug:
+                type: string
+              title:
+                type: string
+              snippet:
+                type: string
+                nullable: true
+        mentions:
+          type: array
+          items:
+            type: object
+            required: [sourceUrl]
+            properties:
+              sourceUrl:
+                type: string
+                format: uri
+
+    GraphNode:
+      type: object
+      required: [slug, title]
+      properties:
+        slug:
+          type: string
+        title:
+          type: string
+
+    GraphEdge:
+      type: object
+      required: [sourceSlug, targetSlug]
+      properties:
+        sourceSlug:
+          type: string
+        targetSlug:
+          type: string
+
+    GraphResponse:
+      type: object
+      required: [nodes, edges]
+      properties:
+        nodes:
+          type: array
+          items:
+            $ref: "#/components/schemas/GraphNode"
+        edges:
+          type: array
+          items:
+            $ref: "#/components/schemas/GraphEdge"
+
+    AskRequest:
+      type: object
+      required: [q]
+      properties:
+        q:
+          type: string
+          maxLength: 1000
+          example: "What is a digital garden?"
+
+    AskResponse:
+      type: object
+      required: [query, answer, citations]
+      properties:
+        query:
+          type: string
+        answer:
+          type: string
+        citations:
+          type: array
+          items:
+            type: object
+            required: [slug, title]
+            properties:
+              slug:
+                type: string
+              title:
+                type: string
+
+    RelatedResponse:
+      type: object
+      required: [slug, related]
+      properties:
+        slug:
+          type: string
+        related:
+          type: array
+          items:
+            type: object
+            required: [slug, title, distance]
+            properties:
+              slug:
+                type: string
+              title:
+                type: string
+              distance:
+                type: number
+                format: double
+                description: Cosine distance (lower = more similar).
+
+    SearchResponse:
+      type: object
+      required: [query, page, pageSize, total, results]
+      properties:
+        query:
+          type: string
+        page:
+          type: integer
+          format: int64
+        pageSize:
+          type: integer
+          format: int64
+        total:
+          type: integer
+          format: int64
+        results:
+          type: array
+          items:
+            type: object
+            required: [slug, title, excerpt, tags, createdAt, updatedAt]
+            properties:
+              slug:
+                type: string
+              title:
+                type: string
+              excerpt:
+                type: string
+              tags:
+                type: array
+                items:
+                  type: string
+              createdAt:
+                type: string
+                format: date-time
+              updatedAt:
+                type: string
+                format: date-time
+
+    MediaUploadResponse:
+      type: object
+      required: [id, url]
+      properties:
+        id:
+          type: string
+          format: uuid
+        url:
+          type: string
+          example: "/media/550e8400-e29b-41d4-a716-446655440000"
+
+    TokenInfo:
+      type: object
+      required: [prefix, authorName, scopes, createdAt]
+      properties:
+        prefix:
+          type: string
+        authorName:
+          type: string
+        scopes:
+          type: array
+          items:
+            type: string
+        createdAt:
+          type: string
+          format: date-time
+        lastUsedAt:
+          type: string
+          format: date-time
+          nullable: true
+        revokedAt:
+          type: string
+          format: date-time
+          nullable: true
+
+    TokenListResponse:
+      type: object
+      required: [tokens]
+      properties:
+        tokens:
+          type: array
+          items:
+            $ref: "#/components/schemas/TokenInfo"
+
+    CreatedToken:
+      type: object
+      required: [token, prefix, author, scopes]
+      properties:
+        token:
+          type: string
+          description: Full secret. Shown exactly once; store securely.
+          example: "ink_abc123_secretvalue"
+        prefix:
+          type: string
+          example: "abc123"
+        author:
+          type: string
+          example: "Alice"
+        scopes:
+          type: array
+          items:
+            type: string
+
+    CreateTokenRequest:
+      type: object
+      required: [name, scopes]
+      properties:
+        name:
+          type: string
+          maxLength: 200
+          example: "Alice"
+          description: Author name. Created on first use.
+        scopes:
+          type: array
+          items:
+            type: string
+            enum: [read, write, publish, admin]
+          minItems: 1
+          example: ["write", "publish"]
+
+    RevokeResponse:
+      type: object
+      required: [prefix, revoked]
+      properties:
+        prefix:
+          type: string
+        revoked:
+          type: boolean
+
+    PruneResponse:
+      type: object
+      required: [pruned]
+      properties:
+        pruned:
+          type: integer
+          format: int64
+
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [message]
+          properties:
+            message:
+              type: string
+              example: "Missing or invalid API key."
+            requestId:
+              type: string
+              format: uuid
+              description: Correlation ID. Present on every in-request error.
+            slug:
+              type: string
+              description: Present on 409 Conflict for duplicate slug.
+            allow:
+              type: string
+              description: Present on 405 Method Not Allowed.
+              example: "GET, POST"
+
+  responses:
+    Unauthorized:
+      description: Missing or invalid `X-Api-Key`.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error:
+              message: "Missing or invalid API key."
+              requestId: "a3b5c7d9-1234-4abc-8def-0123456789ab"
+
+    Forbidden:
+      description: Valid credential, but insufficient scope.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error:
+              message: "This action requires the \"write\" scope."
+              requestId: "a3b5c7d9-1234-4abc-8def-0123456789ab"
+
+    NotFound:
+      description: Resource does not exist (or caller cannot see it).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error:
+              message: "No document with slug \"hello-world\"."
+              requestId: "a3b5c7d9-1234-4abc-8def-0123456789ab"
+
+    TooManyRequests:
+      description: Rate limit exceeded.
+      headers:
+        Retry-After:
+          schema:
+            type: integer
+          description: Seconds to wait before retrying.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error:
+              message: "Rate limit exceeded. Slow down and retry later."
+              requestId: "a3b5c7d9-1234-4abc-8def-0123456789ab"
+
+paths:
+  /health:
+    get:
+      summary: Health check
+      operationId: health
+      tags: [Meta]
+      responses:
+        "200":
+          description: Service is healthy.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [ok, error]
+                  db:
+                    type: string
+                    enum: [up, down]
+              example:
+                status: ok
+                db: up
+        "503":
+          description: Database unreachable.
+          content:
+            application/json:
+              example:
+                status: error
+                db: down
+
+  /documents:
+    get:
+      summary: List documents
+      operationId: listDocuments
+      tags: [Documents]
+      parameters:
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            default: 20
+            maximum: 100
+        - in: query
+          name: offset
+          schema:
+            type: integer
+            default: 0
+        - in: query
+          name: status
+          schema:
+            type: string
+            enum: [draft, published, all]
+          description: Filter by status. ANDs with visibility — anonymous callers cannot see drafts.
+      responses:
+        "200":
+          description: Paginated document list.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DocumentList"
+        "400":
+          description: Invalid query parameter.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+    post:
+      summary: Create a document
+      operationId: createDocument
+      tags: [Documents]
+      security:
+        - ApiKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateDocumentRequest"
+            example:
+              title: "Hello World"
+              bodyMarkdown: "# Hello World\n\nBody text here."
+              tags: ["rust", "notes"]
+              growth: "seedling"
+      responses:
+        "201":
+          description: Document created (status is `draft`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Document"
+        "400":
+          description: Validation error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          description: Duplicate slug.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error:
+                  message: "A document with slug \"hello-world\" already exists."
+                  slug: "hello-world"
+                  requestId: "a3b5c7d9-1234-4abc-8def-0123456789ab"
+        "413":
+          description: Request body too large (> 1 MB).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+  /documents/{slug}:
+    parameters:
+      - in: path
+        name: slug
+        required: true
+        schema:
+          type: string
+
+    get:
+      summary: Get a document
+      operationId: getDocument
+      tags: [Documents]
+      responses:
+        "200":
+          description: Document found.
+          headers:
+            ETag:
+              schema:
+                type: string
+              description: Current version as a quoted integer e.g. `"3"`. Echo as `If-Match` on updates.
+            X-Request-Id:
+              schema:
+                type: string
+                format: uuid
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Document"
+        "301":
+          description: Slug was renamed. Follow `Location` to the current slug.
+          headers:
+            Location:
+              schema:
+                type: string
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+    patch:
+      summary: Update a document (partial)
+      operationId: updateDocument
+      tags: [Documents]
+      security:
+        - ApiKey: []
+      parameters:
+        - in: header
+          name: If-Match
+          schema:
+            type: string
+          description: |
+            Expected version (e.g. `"3"`). Triggers a conditional update;
+            returns 409 on version mismatch. Omit for an unconditional update.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateDocumentRequest"
+            example:
+              title: "Updated Title"
+              tags: ["rust"]
+      responses:
+        "200":
+          description: Document updated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Document"
+        "400":
+          description: Validation error or empty body.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: If-Match version mismatch or duplicate slug on rename.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error:
+                  message: "Document \"hello-world\" has version 4, not the expected 3. Re-read the note and retry with the current version."
+                  requestId: "a3b5c7d9-1234-4abc-8def-0123456789ab"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+    put:
+      summary: Update a document (full — same semantics as PATCH)
+      operationId: updateDocumentPut
+      tags: [Documents]
+      security:
+        - ApiKey: []
+      parameters:
+        - in: header
+          name: If-Match
+          schema:
+            type: string
+          description: Optional optimistic-concurrency version guard.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateDocumentRequest"
+      responses:
+        "200":
+          description: Document updated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Document"
+        "400":
+          description: Validation error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Version mismatch or duplicate slug.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+    delete:
+      summary: Delete a document
+      operationId: deleteDocument
+      tags: [Documents]
+      security:
+        - ApiKey: []
+      responses:
+        "204":
+          description: Document deleted.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+  /documents/{slug}/publish:
+    post:
+      summary: Publish a document
+      operationId: publishDocument
+      tags: [Documents]
+      security:
+        - ApiKey: []
+      parameters:
+        - in: path
+          name: slug
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Document is now published.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Document"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+  /documents/{slug}/unpublish:
+    post:
+      summary: Unpublish a document (revert to draft)
+      operationId: unpublishDocument
+      tags: [Documents]
+      security:
+        - ApiKey: []
+      parameters:
+        - in: path
+          name: slug
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Document is now a draft.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Document"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+  /documents/{slug}/backlinks:
+    get:
+      summary: Backlinks and Webmentions for a document
+      operationId: documentBacklinks
+      tags: [Documents]
+      parameters:
+        - in: path
+          name: slug
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Internal backlinks and verified inbound Webmentions.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BacklinksResponse"
+              example:
+                backlinks:
+                  - slug: "other-note"
+                    title: "Other Note"
+                    snippet: "…see also [[hello-world]] for context…"
+                mentions:
+                  - sourceUrl: "https://external.example/post"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /documents/{slug}/graph:
+    get:
+      summary: One-hop neighborhood graph for a document
+      operationId: documentGraph
+      tags: [Documents]
+      parameters:
+        - in: path
+          name: slug
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Nodes and directed edges within one hop of this note.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GraphResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /documents/{slug}/related:
+    get:
+      summary: Semantically related notes
+      operationId: documentRelated
+      tags: [AI]
+      parameters:
+        - in: path
+          name: slug
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Top 5 related notes by embedding cosine distance.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RelatedResponse"
+              example:
+                slug: "hello-world"
+                related:
+                  - slug: "rust-notes"
+                    title: "Rust Notes"
+                    distance: 0.12
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /graph:
+    get:
+      summary: Whole-garden link graph
+      operationId: gardenGraph
+      tags: [Documents]
+      responses:
+        "200":
+          description: All nodes and directed edges in the bounded garden graph.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GraphResponse"
+
+  /ask:
+    get:
+      summary: AI question answering (GET)
+      operationId: askGet
+      tags: [AI]
+      parameters:
+        - in: query
+          name: q
+          required: true
+          schema:
+            type: string
+            maxLength: 1000
+          example: "What is a digital garden?"
+      responses:
+        "200":
+          description: Grounded answer with citations.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AskResponse"
+              example:
+                query: "What is a digital garden?"
+                answer: "A digital garden is an evolving collection of interconnected notes…"
+                citations:
+                  - slug: "digital-garden"
+                    title: "Digital Garden"
+        "400":
+          description: Empty or oversized query.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+    post:
+      summary: AI question answering (POST)
+      operationId: askPost
+      tags: [AI]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AskRequest"
+            example:
+              q: "What is a digital garden?"
+      responses:
+        "200":
+          description: Grounded answer with citations.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AskResponse"
+        "400":
+          description: Empty or oversized query, or invalid JSON.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+  /search:
+    get:
+      summary: Full-text search (JSON or HTML)
+      operationId: search
+      tags: [Search]
+      parameters:
+        - in: query
+          name: q
+          schema:
+            type: string
+          example: "digital garden"
+        - in: query
+          name: format
+          schema:
+            type: string
+            enum: [json]
+          description: Pass `json` for a JSON response; omit for the HTML search page.
+        - in: query
+          name: page
+          schema:
+            type: integer
+            default: 1
+      responses:
+        "200":
+          description: Search results (JSON when `?format=json`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SearchResponse"
+            text/html:
+              schema:
+                type: string
+
+  /media:
+    post:
+      summary: Upload a media file
+      operationId: uploadMedia
+      tags: [Media]
+      security:
+        - ApiKey: []
+      requestBody:
+        required: true
+        content:
+          image/png:
+            schema:
+              type: string
+              format: binary
+          image/jpeg:
+            schema:
+              type: string
+              format: binary
+          image/gif:
+            schema:
+              type: string
+              format: binary
+          image/webp:
+            schema:
+              type: string
+              format: binary
+      responses:
+        "201":
+          description: Media uploaded.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MediaUploadResponse"
+        "400":
+          description: Unsupported Content-Type.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "413":
+          description: Body exceeds 5 MiB.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+  /media/{id}:
+    get:
+      summary: Serve a stored media file
+      operationId: getMedia
+      tags: [Media]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Raw image bytes with immutable cache headers.
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+              example: "public, max-age=31536000, immutable"
+            Content-Type:
+              schema:
+                type: string
+              example: "image/png"
+          content:
+            image/png:
+              schema:
+                type: string
+                format: binary
+            image/jpeg:
+              schema:
+                type: string
+                format: binary
+            image/gif:
+              schema:
+                type: string
+                format: binary
+            image/webp:
+              schema:
+                type: string
+                format: binary
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /admin/tokens:
+    get:
+      summary: List tokens
+      operationId: listTokens
+      tags: [Admin]
+      security:
+        - ApiKey: []
+      parameters:
+        - in: query
+          name: all
+          schema:
+            type: boolean
+            default: false
+          description: Include revoked tokens.
+      responses:
+        "200":
+          description: Token metadata list (secrets are never returned).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenListResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+    post:
+      summary: Mint a new scoped token
+      operationId: createToken
+      tags: [Admin]
+      security:
+        - ApiKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateTokenRequest"
+            example:
+              name: "Alice"
+              scopes: ["write", "publish"]
+      responses:
+        "201":
+          description: Token minted. The `token` secret is shown exactly once.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreatedToken"
+              example:
+                token: "ink_abc123_secretvalue"
+                prefix: "abc123"
+                author: "Alice"
+                scopes: ["write", "publish"]
+        "400":
+          description: Missing name, empty scopes, or unknown scope.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+  /admin/tokens/prune:
+    post:
+      summary: Hard-delete all revoked tokens
+      operationId: pruneTokens
+      tags: [Admin]
+      security:
+        - ApiKey: []
+      responses:
+        "200":
+          description: Count of pruned token rows.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PruneResponse"
+              example:
+                pruned: 3
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /admin/tokens/{prefix}/revoke:
+    post:
+      summary: Revoke a token by prefix
+      operationId: revokeToken
+      tags: [Admin]
+      security:
+        - ApiKey: []
+      parameters:
+        - in: path
+          name: prefix
+          required: true
+          schema:
+            type: string
+          example: "abc123"
+      responses:
+        "200":
+          description: Token revoked.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RevokeResponse"
+              example:
+                prefix: "abc123"
+                revoked: true
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /feed.xml:
+    get:
+      summary: Atom/RSS feed of published documents
+      operationId: feed
+      tags: [Public]
+      responses:
+        "200":
+          description: XML feed.
+          content:
+            application/xml:
+              schema:
+                type: string
+
+  /sitemap.xml:
+    get:
+      summary: Root sitemap index
+      operationId: sitemap
+      tags: [Public]
+      responses:
+        "200":
+          description: XML sitemap.
+          content:
+            application/xml:
+              schema:
+                type: string
+
+  /sitemap-static.xml:
+    get:
+      summary: Sitemap for static pages
+      operationId: sitemapStatic
+      tags: [Public]
+      responses:
+        "200":
+          description: XML sitemap.
+          content:
+            application/xml:
+              schema:
+                type: string
+
+  /sitemaps/documents/{page}:
+    get:
+      summary: Paginated document sitemap
+      operationId: sitemapDocumentsPage
+      tags: [Public]
+      parameters:
+        - in: path
+          name: page
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: XML sitemap page.
+          content:
+            application/xml:
+              schema:
+                type: string
+
+  /sitemaps/tags/{page}:
+    get:
+      summary: Paginated tag sitemap
+      operationId: sitemapTagsPage
+      tags: [Public]
+      parameters:
+        - in: path
+          name: page
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: XML sitemap page.
+          content:
+            application/xml:
+              schema:
+                type: string
+
+tags:
+  - name: Meta
+    description: Health and service status
+  - name: Documents
+    description: Document CRUD, publish/unpublish, backlinks, and graph
+  - name: AI
+    description: Semantic question answering and related-note retrieval
+  - name: Search
+    description: Full-text search
+  - name: Media
+    description: Media upload and serving
+  - name: Admin
+    description: Token management (admin scope required)
+  - name: Public
+    description: Public XML feeds and sitemaps

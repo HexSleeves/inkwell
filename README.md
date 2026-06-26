@@ -79,6 +79,12 @@ See [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) for the full production deploymen
 
 See [`docs/STAGING.md`](docs/STAGING.md) for the reproducible staging deploy: secret handling, deploy/redeploy/teardown commands, and the release smoke check.
 
+## API reference
+
+See [`docs/API.md`](docs/API.md) for the full HTTP API reference, including
+authentication, error shapes, request/response examples, and all endpoints.
+A machine-readable OpenAPI 3.1 contract is at [`docs/openapi.yaml`](docs/openapi.yaml).
+
 ## HTTP surface
 
 Preserved routes:
