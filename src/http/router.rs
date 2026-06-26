@@ -12,8 +12,8 @@ use crate::config::Config;
 use crate::http::AppState;
 
 use super::{
-    admin, ai, api, assets, auth_session, feed, media, pages, request_id, search, security_headers,
-    sitemap, webmention,
+    admin, ai, api, assets, auth_session, feed, media, pages, rate_limit, request_id, search,
+    security_headers, sitemap, webmention,
 };
 
 pub fn build_router(config: Arc<Config>, pool: sqlx::PgPool) -> Router {
@@ -37,6 +37,13 @@ pub fn build_router_with_providers(
     llm: Option<Arc<dyn Llm>>,
 ) -> Router {
     let browser_login = config.browser_login;
+    // One shared GCRA limiter for the whole process. It validates credentials
+    // via `authenticate`, so it gets clones of `config`/`pool` before `state`
+    // takes ownership. Internally a no-op when `write_rate_limit == 0`.
+    let rate_limiter = Arc::new(rate_limit::RateLimitState::new(
+        config.clone(),
+        pool.clone(),
+    ));
     let state = AppState {
         config,
         pool,
@@ -111,6 +118,13 @@ pub fn build_router_with_providers(
                 )
             }),
         )
+        // Rate limiting sits inside the security-headers layer so a 429 still
+        // gets the standard security headers, but outside the handlers so an
+        // over-limit write is rejected before any DB or AI work runs.
+        .layer(middleware::from_fn_with_state(
+            rate_limiter,
+            rate_limit::rate_limit,
+        ))
         .layer(middleware::from_fn(
             security_headers::apply_security_headers,
         ))

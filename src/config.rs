@@ -6,6 +6,12 @@ use anyhow::{Result, anyhow};
 /// — the LLM client never sends those.
 pub const DEFAULT_LLM_MODEL: &str = "claude-sonnet-4-6";
 
+/// Default per-principal (or per-IP) write rate limit, in requests per minute,
+/// when `INKWELL_WRITE_RATE_LIMIT` is unset. Generous enough for a human author
+/// or an MCP agent doing bulk edits, low enough to blunt abusive write floods.
+/// Set the env var to `0` to disable rate limiting entirely.
+pub const DEFAULT_WRITE_RATE_LIMIT: u32 = 60;
+
 #[derive(Clone)]
 pub struct Config {
     pub database_url: String,
@@ -34,6 +40,18 @@ pub struct Config {
     /// consulted during authentication, and the existing auth paths are
     /// byte-for-byte unchanged. See ADR 0010.
     pub browser_login: bool,
+    /// Write rate limit (`INKWELL_WRITE_RATE_LIMIT`) in requests per minute,
+    /// applied per authenticated principal/token (or per client IP when
+    /// anonymous) to mutation routes and `/ask`. Reads and the public HTML site
+    /// are never throttled. `0` disables limiting. Defaults to
+    /// [`DEFAULT_WRITE_RATE_LIMIT`]. See CIL-128 and `src/http/rate_limit.rs`.
+    pub write_rate_limit: u32,
+    /// Trust `X-Forwarded-For` / `X-Real-IP` when keying the rate limiter by
+    /// client IP (`INKWELL_TRUST_FORWARDED_HEADERS`). Conservative default:
+    /// **off** — those headers are client-controllable and only safe behind a
+    /// proxy that overwrites them (e.g. Railway). When off, IP keying uses the
+    /// real peer address, so a directly-exposed instance can't be spoofed.
+    pub trust_forwarded_headers: bool,
 }
 
 impl std::fmt::Debug for Config {
@@ -57,6 +75,8 @@ impl std::fmt::Debug for Config {
             .field("llm_model", &self.llm_model)
             .field("webmention_send", &self.webmention_send)
             .field("browser_login", &self.browser_login)
+            .field("write_rate_limit", &self.write_rate_limit)
+            .field("trust_forwarded_headers", &self.trust_forwarded_headers)
             .finish()
     }
 }
@@ -95,6 +115,21 @@ impl Config {
         // Browser login is opt-in: same parse rule as webmention_send.
         let browser_login = trimmed_env("INKWELL_BROWSER_LOGIN")
             .is_some_and(|value| value.eq_ignore_ascii_case("true"));
+        // Write rate limit (requests/minute). Only an UNSET (or blank) variable
+        // falls back to the default; a present-but-malformed value (e.g. "abc",
+        // "-1") fails startup rather than silently defaulting, mirroring PORT.
+        // An explicit `0` is valid and disables limiting.
+        let write_rate_limit = match trimmed_env("INKWELL_WRITE_RATE_LIMIT") {
+            Some(raw) => raw.parse::<u32>().map_err(|_| {
+                anyhow!(
+                    "Invalid INKWELL_WRITE_RATE_LIMIT \"{raw}\": expected a non-negative integer (0 disables)."
+                )
+            })?,
+            None => DEFAULT_WRITE_RATE_LIMIT,
+        };
+        // Trust forwarded headers is opt-in: same parse rule as the other flags.
+        let trust_forwarded_headers = trimmed_env("INKWELL_TRUST_FORWARDED_HEADERS")
+            .is_some_and(|value| value.eq_ignore_ascii_case("true"));
 
         Ok(Self {
             database_url,
@@ -107,6 +142,8 @@ impl Config {
             llm_model,
             webmention_send,
             browser_login,
+            write_rate_limit,
+            trust_forwarded_headers,
         })
     }
 }
@@ -202,6 +239,8 @@ mod tests {
             llm_model: DEFAULT_LLM_MODEL.to_string(),
             webmention_send: false,
             browser_login: false,
+            write_rate_limit: DEFAULT_WRITE_RATE_LIMIT,
+            trust_forwarded_headers: false,
         };
         let rendered = format!("{config:?}");
         assert!(!rendered.contains("sentinel-key-value"));

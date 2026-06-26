@@ -90,9 +90,15 @@ async fn serve() -> Result<()> {
 
     info!(host = %config.host, port = config.port, "listening");
 
-    axum::serve(listener, router)
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
+    // `into_make_service_with_connect_info` exposes the peer `SocketAddr` to
+    // handlers/middleware (via `ConnectInfo`), which the rate limiter uses to
+    // bucket anonymous callers by client IP.
+    axum::serve(
+        listener,
+        router.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await?;
 
     Ok(())
 }

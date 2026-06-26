@@ -16,6 +16,7 @@ pub mod extractors;
 pub mod feed;
 pub mod media;
 pub mod pages;
+pub mod rate_limit;
 pub mod request_id;
 pub mod router;
 pub mod search;

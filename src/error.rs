@@ -1,5 +1,5 @@
 use axum::Json;
-use axum::http::StatusCode;
+use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use serde::Serialize;
 
@@ -21,6 +21,8 @@ pub enum AppError {
     Conflict(String),
     #[error("Method not allowed.")]
     MethodNotAllowed(Vec<&'static str>),
+    #[error("Rate limit exceeded.")]
+    TooManyRequests { retry_after_secs: u64 },
     #[error(transparent)]
     Database(#[from] sqlx::Error),
     #[error(transparent)]
@@ -74,6 +76,18 @@ impl IntoResponse for AppError {
                 None,
                 Some(allow.join(", ")),
             ),
+            Self::TooManyRequests { retry_after_secs } => {
+                let mut response = json_error(
+                    StatusCode::TOO_MANY_REQUESTS,
+                    "Rate limit exceeded. Slow down and retry later.",
+                    None,
+                    None,
+                );
+                if let Ok(value) = HeaderValue::from_str(&retry_after_secs.to_string()) {
+                    response.headers_mut().insert(header::RETRY_AFTER, value);
+                }
+                response
+            }
             Self::Db(DbError::DuplicateSlug { slug }) => json_error(
                 StatusCode::CONFLICT,
                 &format!("A document with slug \"{slug}\" already exists."),

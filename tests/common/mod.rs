@@ -87,6 +87,12 @@ pub fn test_config(database_url: String) -> Arc<Config> {
         // Browser login stays OFF by default: the flag-on surface is exercised
         // separately in tests/browser_login.rs.
         browser_login: false,
+        // Rate limiting OFF by default so existing contract tests can fire many
+        // writes under one key without 429s. The rate-limit contract test opts
+        // into a low limit via `router_for_with_rate_limit`.
+        write_rate_limit: 0,
+        // Forwarded-header trust off in tests; IP keying uses the peer address.
+        trust_forwarded_headers: false,
     })
 }
 
@@ -106,6 +112,17 @@ pub async fn maybe_router() -> Result<Option<axum::Router>> {
 pub fn router_for(pool: PgPool) -> axum::Router {
     let database_url = std::env::var("DATABASE_URL").unwrap_or_default();
     build_router(test_config(database_url), pool)
+}
+
+/// Build a router with a custom write rate limit (requests/minute) over an
+/// already-acquired pool. The shared [`test_config`] disables rate limiting
+/// (limit 0); this opts into a low limit so the rate-limit contract test can
+/// drive a burst into a 429 without firing dozens of requests.
+pub fn router_for_with_rate_limit(pool: PgPool, write_rate_limit: u32) -> axum::Router {
+    let database_url = std::env::var("DATABASE_URL").unwrap_or_default();
+    let mut config = (*test_config(database_url)).clone();
+    config.write_rate_limit = write_rate_limit;
+    build_router(Arc::new(config), pool)
 }
 
 /// Router wired with the deterministic mock embedder AND mock LLM, so the eval

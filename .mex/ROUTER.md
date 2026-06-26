@@ -39,6 +39,7 @@ Then read this file fully before doing anything else in this session.
 - Optimistic concurrency via `version` + `If-Match` (409 Conflict on stale writes)
 - Scoped author tokens (ADR 0009, plan 023): authors, `documents.owner_id`, durable write-audit trail (slice 1); token issuance via admin routes (`/admin/tokens` create/list/revoke), token resolution in `authenticate()` → `Principal`, per-author audit attribution, `inkwell author token` CLI (slice 2); **enforcement (slice 3)** — mutations require the right scope (`write` create/update/delete, `publish` publish/unpublish; missing scope → 403) and ownership is enforced **atomically** in the write (`owner_filter` → `WHERE … AND owner_id = $owner`; non-owner → 0 rows → 404, no TOCTOU; admin bypasses); `create` stamps `owner_id`; draft READ requires the `read` scope (admin implies all). **Per-owner draft read isolation (slice 3b)** — the binary `Visibility` (Public/All) is reworked into an owner-aware filter (`Public` / `Owner(id)` / `All`) derived once in `resolve_visibility` (`src/http/api.rs`) and threaded through every read surface (documents, links/backlinks/graph, RAG chunks, garden embeds, `/ask`+`/related`), so a `read`-scoped author sees only their OWN drafts + all published; admin sees all; the public sees published-only. Public HTML/RSS surfaces stay pinned to `Visibility::Public`; ownership lands in the same `WHERE` as the read (no TOCTOU). **Tightening (slice 4):** `documents.owner_id` is `NOT NULL` (migration 0017; DB default kept as a safety net); `INKWELL_MCP_KEY` **retired** — the MCP server authenticates with `INKWELL_API_KEY` set to a scoped token. Shared `INKWELL_API_KEY` is the admin/bootstrap key.
 - Request correlation IDs (CIL-125): `request_id` middleware (`src/http/request_id.rs`) honours a well-formed inbound `X-Request-Id` (else mints a UUID v4), stashes it in a task-local, adds it to the `TraceLayer` span (every log line carries `request_id`), echoes it on every response via `X-Request-Id`, and includes it in the JSON error envelope (`error.requestId`) so a user-reported error traces to its logs
+- Pragmatic write rate limiting (CIL-128): a process-wide GCRA limiter (`governor`) throttles mutations (`POST`/`PUT`/`PATCH`/`DELETE`) + `/ask`, bucketed by **validated principal** (keying reuses `authenticate`, so a forged/invalid credential can't mint a bucket) else client IP, configurable via `INKWELL_WRITE_RATE_LIMIT` req/min (default 60; `0` disables); over-limit → `429` + `Retry-After`. Forwarded-header trust for IP keying is opt-in (`INKWELL_TRUST_FORWARDED_HEADERS`, default off). Reads + public HTML never throttled. Middleware in `src/http/rate_limit.rs`.
 - Webmention receiving (always on) + sending (opt-in via `INKWELL_WEBMENTION_SEND=true`)
 - Railway production deployment (auto-deploy on main push)
 - Docker Compose local stack (migrate → seed → serve)
@@ -56,6 +57,9 @@ Then read this file fully before doing anything else in this session.
 
 - Request correlation IDs — `X-Request-Id` middleware: span + response header +
   error-envelope `requestId` (CIL-125).
+- Pragmatic write rate limiting — `governor` GCRA middleware on mutations + `/ask`,
+  keyed by principal/credential else IP, `INKWELL_WRITE_RATE_LIMIT` env (default 60),
+  429 + Retry-After; reads/public site unthrottled (CIL-128).
 - Slug rename + 301 alias redirect — mutable slug, owner-enforced, no draft leak
   (ADR 0011, migration 0021, PR #31).
 - Media upload/serve API — `POST /media` + `GET /media/{id}` (PR #28).
