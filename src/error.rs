@@ -35,8 +35,14 @@ struct ErrorBody<'a> {
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct ErrorPayload<'a> {
     message: &'a str,
+    /// Correlation id of the request, so a user-reported error is traceable to
+    /// its logs. Present whenever the error is produced inside a request scope
+    /// (always, in practice); `None` only for errors built outside one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    request_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     slug: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -107,6 +113,7 @@ fn json_error(
         Json(ErrorBody {
             error: ErrorPayload {
                 message,
+                request_id: crate::http::request_id::current(),
                 slug,
                 allow,
             },
