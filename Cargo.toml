@@ -14,6 +14,7 @@ comrak = "0.52"
 dotenvy = "0.15"
 form_urlencoded = "1"
 futures-util = { version = "0.3", default-features = false }
+governor = "0.10.4"
 http = "1"
 reqwest = { version = "0.13.4", features = ["json", "stream"] }
 rmcp = { version = "1.7", features = ["server", "transport-io", "macros"] }

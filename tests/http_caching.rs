@@ -39,6 +39,7 @@ fn router_with_unreachable_database() -> Result<axum::Router> {
             llm_model: inkwell::config::DEFAULT_LLM_MODEL.to_string(),
             webmention_send: false,
             browser_login: false,
+            write_rate_limit: 0,
         }),
         pool,
     ))

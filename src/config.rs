@@ -6,6 +6,12 @@ use anyhow::{Result, anyhow};
 /// — the LLM client never sends those.
 pub const DEFAULT_LLM_MODEL: &str = "claude-sonnet-4-6";
 
+/// Default per-principal (or per-IP) write rate limit, in requests per minute,
+/// when `INKWELL_WRITE_RATE_LIMIT` is unset. Generous enough for a human author
+/// or an MCP agent doing bulk edits, low enough to blunt abusive write floods.
+/// Set the env var to `0` to disable rate limiting entirely.
+pub const DEFAULT_WRITE_RATE_LIMIT: u32 = 60;
+
 #[derive(Clone)]
 pub struct Config {
     pub database_url: String,
@@ -34,6 +40,12 @@ pub struct Config {
     /// consulted during authentication, and the existing auth paths are
     /// byte-for-byte unchanged. See ADR 0010.
     pub browser_login: bool,
+    /// Write rate limit (`INKWELL_WRITE_RATE_LIMIT`) in requests per minute,
+    /// applied per authenticated principal/token (or per client IP when
+    /// anonymous) to mutation routes and `/ask`. Reads and the public HTML site
+    /// are never throttled. `0` disables limiting. Defaults to
+    /// [`DEFAULT_WRITE_RATE_LIMIT`]. See CIL-128 and `src/http/rate_limit.rs`.
+    pub write_rate_limit: u32,
 }
 
 impl std::fmt::Debug for Config {
@@ -57,6 +69,7 @@ impl std::fmt::Debug for Config {
             .field("llm_model", &self.llm_model)
             .field("webmention_send", &self.webmention_send)
             .field("browser_login", &self.browser_login)
+            .field("write_rate_limit", &self.write_rate_limit)
             .finish()
     }
 }
@@ -95,6 +108,11 @@ impl Config {
         // Browser login is opt-in: same parse rule as webmention_send.
         let browser_login = trimmed_env("INKWELL_BROWSER_LOGIN")
             .is_some_and(|value| value.eq_ignore_ascii_case("true"));
+        // Write rate limit (requests/minute). An unset or unparseable value
+        // falls back to the default; an explicit `0` disables limiting.
+        let write_rate_limit = trimmed_env("INKWELL_WRITE_RATE_LIMIT")
+            .and_then(|value| value.parse::<u32>().ok())
+            .unwrap_or(DEFAULT_WRITE_RATE_LIMIT);
 
         Ok(Self {
             database_url,
@@ -107,6 +125,7 @@ impl Config {
             llm_model,
             webmention_send,
             browser_login,
+            write_rate_limit,
         })
     }
 }
@@ -202,6 +221,7 @@ mod tests {
             llm_model: DEFAULT_LLM_MODEL.to_string(),
             webmention_send: false,
             browser_login: false,
+            write_rate_limit: DEFAULT_WRITE_RATE_LIMIT,
         };
         let rendered = format!("{config:?}");
         assert!(!rendered.contains("sentinel-key-value"));
