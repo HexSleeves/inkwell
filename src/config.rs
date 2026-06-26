@@ -1,10 +1,10 @@
 use anyhow::{Result, anyhow};
 
 /// Default Claude model for ask-your-garden answer synthesis. Configurable via
-/// `INKWELL_LLM_MODEL`. Per the project's claude-api guidance, `claude-opus-4-8`
+/// `INKWELL_LLM_MODEL`. Per the project's claude-api guidance, `claude-sonnet-4-6`
 /// uses adaptive thinking and rejects `temperature`/`top_p`/`top_k`/`budget_tokens`
 /// — the LLM client never sends those.
-pub const DEFAULT_LLM_MODEL: &str = "claude-opus-4-8";
+pub const DEFAULT_LLM_MODEL: &str = "claude-sonnet-4-6";
 
 #[derive(Clone)]
 pub struct Config {

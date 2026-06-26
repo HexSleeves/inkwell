@@ -5,9 +5,9 @@
 //! only: one `POST /v1/messages` with the retrieved context in the system prompt
 //! and the question as the sole user message. No streaming, tools, or agents.
 //!
-//! Per the project's claude-api guidance for `claude-opus-4-8` (the default
+//! Per the project's claude-api guidance for `claude-sonnet-4-6` (the default
 //! model): the request carries **no** `temperature`/`top_p`/`top_k`/`budget_tokens`
-//! — those 400 on Opus 4.8/4.7 — and a `refusal` stop reason is handled
+//! — those 400 on Sonnet 4.6 — and a `refusal` stop reason is handled
 //! gracefully rather than surfaced as a hard error.
 
 use std::time::Duration;
@@ -130,7 +130,7 @@ impl Llm for ClaudeLlm {
             return Ok(NO_ANSWER_MARKER.to_string());
         }
         let user_content = user_prompt(question, context_blocks);
-        // No temperature/top_p/top_k/budget_tokens — they 400 on claude-opus-4-8.
+        // No temperature/top_p/top_k/budget_tokens — they 400 on claude-sonnet-4-6.
         let body = serde_json::json!({
             "model": self.model,
             "max_tokens": MAX_TOKENS,
