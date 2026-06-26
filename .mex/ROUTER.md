@@ -38,6 +38,7 @@ Then read this file fully before doing anything else in this session.
 - HTML public site: index, paginated, document pages, tag index/pages, RSS feed, sitemap
 - Optimistic concurrency via `version` + `If-Match` (409 Conflict on stale writes)
 - Scoped author tokens (ADR 0009, plan 023): authors, `documents.owner_id`, durable write-audit trail (slice 1); token issuance via admin routes (`/admin/tokens` create/list/revoke), token resolution in `authenticate()` → `Principal`, per-author audit attribution, `inkwell author token` CLI (slice 2); **enforcement (slice 3)** — mutations require the right scope (`write` create/update/delete, `publish` publish/unpublish; missing scope → 403) and ownership is enforced **atomically** in the write (`owner_filter` → `WHERE … AND owner_id = $owner`; non-owner → 0 rows → 404, no TOCTOU; admin bypasses); `create` stamps `owner_id`; draft READ requires the `read` scope (admin implies all). **Per-owner draft read isolation (slice 3b)** — the binary `Visibility` (Public/All) is reworked into an owner-aware filter (`Public` / `Owner(id)` / `All`) derived once in `resolve_visibility` (`src/http/api.rs`) and threaded through every read surface (documents, links/backlinks/graph, RAG chunks, garden embeds, `/ask`+`/related`), so a `read`-scoped author sees only their OWN drafts + all published; admin sees all; the public sees published-only. Public HTML/RSS surfaces stay pinned to `Visibility::Public`; ownership lands in the same `WHERE` as the read (no TOCTOU). **Tightening (slice 4):** `documents.owner_id` is `NOT NULL` (migration 0017; DB default kept as a safety net); `INKWELL_MCP_KEY` **retired** — the MCP server authenticates with `INKWELL_API_KEY` set to a scoped token. Shared `INKWELL_API_KEY` is the admin/bootstrap key.
+- Request correlation IDs (CIL-125): `request_id` middleware (`src/http/request_id.rs`) honours a well-formed inbound `X-Request-Id` (else mints a UUID v4), stashes it in a task-local, adds it to the `TraceLayer` span (every log line carries `request_id`), echoes it on every response via `X-Request-Id`, and includes it in the JSON error envelope (`error.requestId`) so a user-reported error traces to its logs
 - Webmention receiving (always on) + sending (opt-in via `INKWELL_WEBMENTION_SEND=true`)
 - Railway production deployment (auto-deploy on main push)
 - Docker Compose local stack (migrate → seed → serve)
@@ -53,6 +54,8 @@ Then read this file fully before doing anything else in this session.
 
 **Recently shipped (this run):**
 
+- Request correlation IDs — `X-Request-Id` middleware: span + response header +
+  error-envelope `requestId` (CIL-125).
 - Slug rename + 301 alias redirect — mutable slug, owner-enforced, no draft leak
   (ADR 0011, migration 0021, PR #31).
 - Media upload/serve API — `POST /media` + `GET /media/{id}` (PR #28).

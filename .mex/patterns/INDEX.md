@@ -5,6 +5,7 @@ Lookup table for all pattern files in this directory. Check here before starting
 | Pattern | Use when |
 |---------|----------|
 | [add-endpoint.md](add-endpoint.md) | Adding a new HTTP route or handler to the API or page surface |
+| [add-middleware.md](add-middleware.md) | Adding a tower/axum middleware layer (request-scoped state, span fields, response headers) — covers the layer-ordering trap |
 | [add-mcp-tool.md](add-mcp-tool.md) | Adding a new tool to the MCP server for AI agent access |
 | [database-migration.md#task-add-a-new-column-to-documents](database-migration.md#task-add-a-new-column-to-documents) | Adding a column to the `documents` table |
 | [database-migration.md#task-add-a-new-table](database-migration.md#task-add-a-new-table) | Creating a new database table |

@@ -12,8 +12,8 @@ use crate::config::Config;
 use crate::http::AppState;
 
 use super::{
-    admin, ai, api, assets, auth_session, feed, media, pages, search, security_headers, sitemap,
-    webmention,
+    admin, ai, api, assets, auth_session, feed, media, pages, request_id, search, security_headers,
+    sitemap, webmention,
 };
 
 pub fn build_router(config: Arc<Config>, pool: sqlx::PgPool) -> Router {
@@ -96,9 +96,26 @@ pub fn build_router_with_providers(
 
     router
         .layer(CompressionLayer::new())
-        .layer(TraceLayer::new_for_http())
+        // Add the correlation id to the per-request span so EVERY log line for
+        // the request carries `request_id`. The id is read from the task-local
+        // populated by `propagate_request_id`, which sits outside this layer and
+        // is therefore already in scope when the span is built.
+        .layer(
+            TraceLayer::new_for_http().make_span_with(|request: &axum::extract::Request| {
+                let request_id = request_id::current().unwrap_or_default();
+                tracing::info_span!(
+                    "http_request",
+                    method = %request.method(),
+                    uri = %request.uri(),
+                    %request_id,
+                )
+            }),
+        )
         .layer(middleware::from_fn(
             security_headers::apply_security_headers,
         ))
+        // Outermost app layer: assign/propagate the correlation id before any
+        // other layer (notably TraceLayer) runs, and echo it on the response.
+        .layer(middleware::from_fn(request_id::propagate_request_id))
         .with_state(state)
 }
