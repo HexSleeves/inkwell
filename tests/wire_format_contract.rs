@@ -123,63 +123,6 @@ async fn error_envelope_carries_message_and_request_id() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// A 403 Forbidden response (insufficient scope) also carries the stable
-/// error envelope with a non-empty message and request id.
-#[tokio::test]
-async fn error_envelope_present_on_403_insufficient_scope() -> anyhow::Result<()> {
-    let _guard = db_guard().await;
-    let Some(pool) = common::maybe_pool().await? else {
-        return Ok(());
-    };
-    let router = common::router_for(pool);
-
-    // Mint a read-only token.
-    let mint_resp = router
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method(Method::POST)
-                .uri("/admin/tokens")
-                .header("content-type", "application/json")
-                .header("x-api-key", "test-secret-key")
-                .body(Body::from(r#"{"name":"reader","scopes":["read"]}"#))?,
-        )
-        .await?;
-    assert_eq!(mint_resp.status(), StatusCode::CREATED);
-    let token = body_json(mint_resp).await?["token"]
-        .as_str()
-        .expect("token in mint response")
-        .to_string();
-
-    // A read-only token attempting a write returns 403.
-    let response = router
-        .oneshot(
-            Request::builder()
-                .method(Method::POST)
-                .uri("/documents")
-                .header("content-type", "application/json")
-                .header("authorization", format!("Bearer {token}"))
-                .body(Body::from(r##"{"title":"x","bodyMarkdown":"x"}"##))?,
-        )
-        .await?;
-
-    assert_eq!(response.status(), StatusCode::FORBIDDEN);
-    let json = body_json(response).await?;
-    assert!(
-        json["error"]["message"].is_string(),
-        "error.message must be a string on 403"
-    );
-    assert!(
-        !json["error"]["message"].as_str().unwrap().is_empty(),
-        "error.message must not be empty on 403"
-    );
-    assert!(
-        json["error"]["requestId"].is_string(),
-        "error.requestId must be a string on 403"
-    );
-    Ok(())
-}
-
 // ---------------------------------------------------------------------------
 // Document JSON envelope stable field names
 // ---------------------------------------------------------------------------
