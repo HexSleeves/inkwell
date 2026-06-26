@@ -39,7 +39,10 @@ pub fn build_router_with_providers(
     let browser_login = config.browser_login;
     // One shared GCRA limiter for the whole process. Built before `state` moves
     // `config`; `None` internally when `write_rate_limit == 0` (disabled).
-    let rate_limiter = Arc::new(rate_limit::RateLimitState::new(config.write_rate_limit));
+    let rate_limiter = Arc::new(rate_limit::RateLimitState::new(
+        config.write_rate_limit,
+        config.browser_login,
+    ));
     let state = AppState {
         config,
         pool,
