@@ -85,6 +85,14 @@ See [`docs/API.md`](docs/API.md) for the full HTTP API reference, including
 authentication, error shapes, request/response examples, and all endpoints.
 A machine-readable OpenAPI 3.1 contract is at [`docs/openapi.yaml`](docs/openapi.yaml).
 
+## Compatibility
+
+[`docs/COMPATIBILITY.md`](docs/COMPATIBILITY.md) documents which public
+behaviors are **stability commitments** before v0.2 and which are
+intentionally flexible. Changes to stable surfaces require a migration note in
+`CHANGELOG.md` and a semver version bump. The contract-test suite in `tests/`
+covers all stable surfaces.
+
 ## HTTP surface
 
 Preserved routes:
