@@ -71,6 +71,10 @@ from this repo, attach Railway PostgreSQL, reference the database
 `DATABASE_URL`, set `INKWELL_API_KEY` and `INKWELL_SITE_URL`, then deploy. See
 [`docs/RAILWAY.md`](docs/RAILWAY.md).
 
+## Deployment
+
+See [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) for the full production deployment guide: all environment variables, Docker Compose and single-binary paths, reverse proxy/TLS setup, migration order, and secret handling.
+
 ## Staging
 
 See [`docs/STAGING.md`](docs/STAGING.md) for the reproducible staging deploy: secret handling, deploy/redeploy/teardown commands, and the release smoke check.
