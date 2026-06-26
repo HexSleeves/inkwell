@@ -6,18 +6,19 @@
 //! paths and the public HTML site are never consulted by the limiter, so the
 //! garden stays fast for visitors.
 //!
-//! Requests are bucketed by the calling **principal** when one is present and
-//! by **client IP** otherwise, in the same precedence the auth layer resolves a
-//! principal:
-//! - an `x-api-key` request buckets by the SHA-256 of that credential (never the
-//!   raw secret) so each token / the shared key gets its own quota without a
-//!   database round-trip;
-//! - when browser login is on (`INKWELL_BROWSER_LOGIN=true`), a cookie-
-//!   authenticated request buckets by the SHA-256 of its `inkwell_session`
-//!   token, so two logged-in users behind one NAT/IP don't throttle each other;
-//! - an anonymous request (e.g. public `/ask` or inbound `/webmention`) is
-//!   bucketed by client IP, preferring the platform proxy's forwarded headers
-//!   (Railway terminates TLS at the edge) and falling back to the peer address.
+//! Requests are bucketed by the **validated principal** when one resolves and
+//! by **client IP** otherwise. Keying goes through the same [`authenticate`]
+//! the handlers use, so the credential is *verified* before it can mint a
+//! bucket — an attacker cannot evade the per-IP limit (or grow the limiter map)
+//! by spraying random `x-api-key` / `inkwell_session` values, because an invalid
+//! credential resolves to no principal and falls back to the IP bucket:
+//! - a valid `x-api-key` (shared key or scoped token) or a valid browser session
+//!   buckets by `p:<author-id>` — bounded by the number of real principals;
+//! - everything else buckets by client IP. Forwarded headers
+//!   (`X-Forwarded-For` / `X-Real-IP`) are trusted **only** when
+//!   `INKWELL_TRUST_FORWARDED_HEADERS=true` (a deployment behind a trusted proxy
+//!   that overwrites them, e.g. Railway). Off by default, so a directly-exposed
+//!   instance can't be spoofed and the IP keyspace stays bounded by real peers.
 //!
 //! The limit is configured by `INKWELL_WRITE_RATE_LIMIT` (requests per minute,
 //! see [`crate::config`]). `0` disables limiting entirely. Over-limit requests
@@ -34,43 +35,38 @@ use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use governor::clock::{Clock, DefaultClock};
 use governor::{DefaultKeyedRateLimiter, Quota, RateLimiter};
+use sqlx::PgPool;
 
-use crate::domain::token;
+use crate::config::Config;
 use crate::error::AppError;
-use crate::http::auth_session::extract_session_cookie;
+use crate::http::auth::authenticate;
 
-/// Shared rate-limit state: one keyed GCRA limiter for the whole process.
-///
-/// `limiter` is `None` when `INKWELL_WRITE_RATE_LIMIT=0` (limiting disabled),
-/// in which case [`check`](RateLimitState::check) always allows the request.
-pub struct RateLimitState {
-    limiter: Option<DefaultKeyedRateLimiter<String>>,
+/// The keyed GCRA limiter plus its clock. Split out from [`RateLimitState`] so
+/// the limiter algorithm is unit-testable without a `Config`/`PgPool`.
+struct Limiter {
+    /// `None` when `INKWELL_WRITE_RATE_LIMIT=0` (limiting disabled).
+    inner: Option<DefaultKeyedRateLimiter<String>>,
     clock: DefaultClock,
-    /// Whether to bucket browser-session callers by their `inkwell_session`
-    /// cookie (set from `INKWELL_BROWSER_LOGIN`). Mirrors the auth layer, which
-    /// only consults the cookie when browser login is enabled.
-    session_keying: bool,
 }
 
-impl RateLimitState {
-    /// Build the limiter for `per_minute` mutating requests per key. `0`
-    /// disables limiting (the limiter is `None`). `session_keying` enables
-    /// per-session bucketing of cookie-authenticated callers (pass
-    /// `config.browser_login`).
-    pub fn new(per_minute: u32, session_keying: bool) -> Self {
-        let limiter = NonZeroU32::new(per_minute).map(|n| RateLimiter::keyed(Quota::per_minute(n)));
+impl Limiter {
+    fn new(per_minute: u32) -> Self {
+        let inner = NonZeroU32::new(per_minute).map(|n| RateLimiter::keyed(Quota::per_minute(n)));
         Self {
-            limiter,
+            inner,
             clock: DefaultClock::default(),
-            session_keying,
         }
     }
 
-    /// Check one request against `key`. `Ok(())` allows it; `Err(secs)` rejects
-    /// it and reports how many whole seconds until the next request would pass
-    /// (always at least 1, for the `Retry-After` header).
+    fn enabled(&self) -> bool {
+        self.inner.is_some()
+    }
+
+    /// `Ok(())` allows the request; `Err(secs)` rejects it and reports how many
+    /// whole seconds until the next request would pass (always at least 1, for
+    /// the `Retry-After` header).
     fn check(&self, key: &str) -> Result<(), u64> {
-        let Some(limiter) = self.limiter.as_ref() else {
+        let Some(limiter) = self.inner.as_ref() else {
             return Ok(());
         };
         match limiter.check_key(&key.to_owned()) {
@@ -85,17 +81,72 @@ impl RateLimitState {
     }
 }
 
+/// Shared rate-limit state for the whole process: the limiter plus the handles
+/// [`authenticate`] needs to *validate* a credential before it keys a bucket.
+pub struct RateLimitState {
+    limiter: Limiter,
+    config: Arc<Config>,
+    pool: PgPool,
+    /// Trust `X-Forwarded-For` / `X-Real-IP` for IP keying. From
+    /// `INKWELL_TRUST_FORWARDED_HEADERS`; only safe behind a proxy that
+    /// overwrites those headers.
+    trust_forwarded: bool,
+}
+
+impl RateLimitState {
+    /// Build the limiter from `config.write_rate_limit` (`0` disables) and wire
+    /// in the `config`/`pool` used to validate credentials during keying.
+    pub fn new(config: Arc<Config>, pool: PgPool) -> Self {
+        let limiter = Limiter::new(config.write_rate_limit);
+        let trust_forwarded = config.trust_forwarded_headers;
+        Self {
+            limiter,
+            config,
+            pool,
+            trust_forwarded,
+        }
+    }
+
+    /// Resolve the bucket key: `p:<author-id>` for a validated principal, else
+    /// `ip:<client-ip>`. Validation reuses [`authenticate`] so an invalid or
+    /// forged credential never produces its own bucket.
+    ///
+    /// Takes `&HeaderMap` + the peer address rather than `&Request`: the request
+    /// body (`axum::body::Body`) is `!Sync`, so holding `&Request` across the
+    /// auth `.await` would make the middleware future non-`Send`. `HeaderMap` is
+    /// `Sync`, so a borrow of it is fine across the await.
+    async fn resolve_key(&self, headers: &HeaderMap, peer: Option<SocketAddr>) -> String {
+        if let Some(principal) = authenticate(headers, &self.config, &self.pool).await {
+            let id = principal
+                .author_id
+                .map(|id| id.to_string())
+                .unwrap_or_else(|| principal.label.clone());
+            return format!("p:{id}");
+        }
+        format!("ip:{}", client_ip(headers, peer, self.trust_forwarded))
+    }
+}
+
 /// Axum middleware: throttle mutating + `/ask` traffic, pass everything else
-/// through untouched.
+/// through untouched. When limiting is disabled (or the request isn't a
+/// mutation) it short-circuits before resolving any principal — a true no-op,
+/// no auth or key work.
 pub async fn rate_limit(
     State(state): State<Arc<RateLimitState>>,
     request: Request,
     next: Next,
 ) -> Response {
-    if !should_limit(request.method(), request.uri().path()) {
+    if !state.limiter.enabled() || !should_limit(request.method(), request.uri().path()) {
         return next.run(request).await;
     }
-    match state.check(&client_key(&request, state.session_keying)) {
+    // Pull the peer address before the await so we don't hold a `&Request`
+    // (whose body is `!Sync`) across `resolve_key`.
+    let peer = request
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|connect_info| connect_info.0);
+    let key = state.resolve_key(request.headers(), peer).await;
+    match state.limiter.check(&key) {
         Ok(()) => next.run(request).await,
         Err(retry_after_secs) => AppError::TooManyRequests { retry_after_secs }.into_response(),
     }
@@ -111,62 +162,36 @@ fn should_limit(method: &Method, path: &str) -> bool {
     ) || path == "/ask"
 }
 
-/// Bucket key, in the same precedence the auth layer resolves a principal:
-/// the `x-api-key` credential, then (when browser login is on) the
-/// `inkwell_session` cookie, then the client IP. Keying sessions by their own
-/// token means two logged-in users behind one NAT/IP get independent quotas
-/// instead of throttling each other.
-fn client_key(request: &Request, session_keying: bool) -> String {
-    if let Some(hash) = credential_hash(request.headers()) {
-        return format!("k:{hash}");
+/// Best-effort client IP. When `trust_forwarded` is set, prefers the platform
+/// proxy's forwarded headers (`X-Forwarded-For` first hop, then `X-Real-IP`);
+/// otherwise ignores them so they can't be spoofed. Falls back to the `peer`
+/// address (from [`ConnectInfo`]), then a constant when none is available (e.g.
+/// tower `oneshot` in tests) — anonymous callers then share one bucket, a safe
+/// over-approximation.
+fn client_ip(headers: &HeaderMap, peer: Option<SocketAddr>, trust_forwarded: bool) -> String {
+    if trust_forwarded {
+        if let Some(forwarded) = headers
+            .get("x-forwarded-for")
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.split(',').next())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            return forwarded.to_string();
+        }
+        if let Some(real) = headers
+            .get("x-real-ip")
+            .and_then(|value| value.to_str().ok())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            return real.to_string();
+        }
     }
-    if session_keying && let Some(raw) = extract_session_cookie(request.headers()) {
-        // Hash the session token; the raw cookie never enters the limiter map.
-        return format!("s:{}", token::sha256_hex(&raw));
+    match peer {
+        Some(addr) => addr.ip().to_string(),
+        None => "unknown".to_string(),
     }
-    format!("ip:{}", client_ip(request))
-}
-
-/// SHA-256 of the single ASCII `x-api-key` credential, or `None` when the
-/// header is absent, duplicated, or non-ASCII (mirrors the auth layer's
-/// single-header rule). The raw secret never enters the limiter map.
-fn credential_hash(headers: &HeaderMap) -> Option<String> {
-    let mut values = headers.get_all("x-api-key").iter();
-    let value = values.next()?;
-    if values.next().is_some() {
-        // More than one credential header: bucket by IP rather than guess.
-        return None;
-    }
-    Some(token::sha256_hex(value.to_str().ok()?))
-}
-
-/// Best-effort client IP. Prefers the platform proxy's forwarded headers
-/// (Railway/edge), then the peer address from [`ConnectInfo`]. Falls back to a
-/// constant when none is available (e.g. tower `oneshot` in tests) — anonymous
-/// callers then share one bucket, a safe over-approximation.
-fn client_ip(request: &Request) -> String {
-    let headers = request.headers();
-    if let Some(forwarded) = headers
-        .get("x-forwarded-for")
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.split(',').next())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        return forwarded.to_string();
-    }
-    if let Some(real) = headers
-        .get("x-real-ip")
-        .and_then(|value| value.to_str().ok())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        return real.to_string();
-    }
-    if let Some(ConnectInfo(addr)) = request.extensions().get::<ConnectInfo<SocketAddr>>() {
-        return addr.ip().to_string();
-    }
-    "unknown".to_string()
 }
 
 #[cfg(test)]
@@ -191,10 +216,10 @@ mod tests {
 
     #[test]
     fn limiter_allows_burst_up_to_limit_then_blocks() {
-        let state = RateLimitState::new(2, false);
-        assert!(state.check("k:a").is_ok());
-        assert!(state.check("k:a").is_ok());
-        let third = state.check("k:a");
+        let limiter = Limiter::new(2);
+        assert!(limiter.check("p:a").is_ok());
+        assert!(limiter.check("p:a").is_ok());
+        let third = limiter.check("p:a");
         assert!(third.is_err(), "third request over a limit of 2 must block");
         assert!(
             third.unwrap_err() >= 1,
@@ -204,55 +229,38 @@ mod tests {
 
     #[test]
     fn limiter_buckets_are_independent_per_key() {
-        let state = RateLimitState::new(1, false);
-        assert!(state.check("k:a").is_ok());
-        assert!(state.check("k:a").is_err());
+        let limiter = Limiter::new(1);
+        assert!(limiter.check("p:a").is_ok());
+        assert!(limiter.check("p:a").is_err());
         // A different principal / IP has its own quota.
-        assert!(state.check("ip:1.2.3.4").is_ok());
+        assert!(limiter.check("ip:1.2.3.4").is_ok());
     }
 
     #[test]
     fn zero_disables_rate_limiting() {
-        let state = RateLimitState::new(0, false);
+        let limiter = Limiter::new(0);
+        assert!(!limiter.enabled());
         for _ in 0..1000 {
-            assert!(state.check("k:a").is_ok());
+            assert!(limiter.check("p:a").is_ok());
         }
     }
 
-    fn post_with(headers: &[(&str, &str)]) -> Request {
-        let mut builder = axum::http::Request::builder()
-            .method(Method::POST)
-            .uri("/documents");
-        for (name, value) in headers {
-            builder = builder.header(*name, *value);
-        }
-        builder.body(axum::body::Body::empty()).unwrap()
-    }
-
     #[test]
-    fn session_cookie_buckets_distinct_users_when_enabled() {
-        // Browser login ON: two distinct session tokens behind one NAT/IP get
-        // independent `s:` buckets instead of sharing an `ip:` bucket.
-        let a = client_key(&post_with(&[("cookie", "inkwell_session=aaa")]), true);
-        let b = client_key(&post_with(&[("cookie", "inkwell_session=bbb")]), true);
-        assert!(a.starts_with("s:"), "session key, got {a}");
-        assert_ne!(a, b, "distinct sessions must not share a bucket");
-
-        // Browser login OFF: the cookie is ignored (mirrors auth), so both fall
-        // to the same IP bucket.
-        let a_off = client_key(&post_with(&[("cookie", "inkwell_session=aaa")]), false);
-        let b_off = client_key(&post_with(&[("cookie", "inkwell_session=bbb")]), false);
-        assert!(a_off.starts_with("ip:"), "ip key, got {a_off}");
-        assert_eq!(a_off, b_off);
-    }
-
-    #[test]
-    fn api_key_takes_precedence_over_session_cookie() {
-        // A present x-api-key wins even with session keying on (matches auth).
-        let key = client_key(
-            &post_with(&[("x-api-key", "shared"), ("cookie", "inkwell_session=aaa")]),
-            true,
+    fn client_ip_ignores_forwarded_headers_unless_trusted() {
+        let headers = |xff: &str| {
+            let mut map = HeaderMap::new();
+            map.insert("x-forwarded-for", xff.parse().unwrap());
+            map
+        };
+        let peer: Option<SocketAddr> = Some("203.0.113.7:51000".parse().unwrap());
+        // Untrusted: the spoofable header is ignored; the real peer wins.
+        assert_eq!(client_ip(&headers("9.9.9.9"), peer, false), "203.0.113.7");
+        // Untrusted with no peer (e.g. tower oneshot) falls back to the constant.
+        assert_eq!(client_ip(&headers("9.9.9.9"), None, false), "unknown");
+        // Trusted: the first forwarded hop is honored.
+        assert_eq!(
+            client_ip(&headers("9.9.9.9, 10.0.0.1"), peer, true),
+            "9.9.9.9"
         );
-        assert!(key.starts_with("k:"), "credential key, got {key}");
     }
 }

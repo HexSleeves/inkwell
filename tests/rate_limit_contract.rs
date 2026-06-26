@@ -43,6 +43,26 @@ async fn post_doc(router: &axum::Router, title: &str) -> anyhow::Result<axum::re
         .await?)
 }
 
+/// `POST /documents` with an arbitrary (here: invalid) `x-api-key`.
+async fn post_doc_with_key(
+    router: &axum::Router,
+    title: &str,
+    key: &str,
+) -> anyhow::Result<axum::response::Response> {
+    let payload = serde_json::json!({ "title": title, "bodyMarkdown": "# Hi" });
+    Ok(router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/documents")
+                .header("content-type", "application/json")
+                .header("x-api-key", key)
+                .body(Body::from(serde_json::to_vec(&payload)?))?,
+        )
+        .await?)
+}
+
 /// An unauthenticated `GET` (a read / public-site request).
 async fn get(router: &axum::Router, uri: &str) -> anyhow::Result<axum::response::Response> {
     Ok(router
@@ -54,6 +74,46 @@ async fn get(router: &axum::Router, uri: &str) -> anyhow::Result<axum::response:
                 .body(Body::empty())?,
         )
         .await?)
+}
+
+#[tokio::test]
+async fn invalid_api_keys_cannot_bypass_the_limiter() -> anyhow::Result<()> {
+    // Regression for the keying bypass (Macroscope/Copilot review on PR #36):
+    // an attacker must not evade the per-IP limit by sending a DIFFERENT random
+    // credential per request. Because keying validates the credential via
+    // `authenticate`, every invalid key resolves to no principal and shares the
+    // one anonymous IP bucket — so the burst still trips 429. If keying used the
+    // raw credential hash instead, each unique key would mint its own bucket and
+    // never 429.
+    let _guard = db_guard().await;
+    let Some(pool) = maybe_pool().await? else {
+        return Ok(());
+    };
+    let limit: u32 = 3;
+    let router = router_for_with_rate_limit(pool, limit);
+
+    let mut statuses = Vec::new();
+    for i in 0..(limit + 3) {
+        // A unique, invalid key on every request.
+        let response =
+            post_doc_with_key(&router, &format!("bypass-{i}"), &format!("invalid-key-{i}")).await?;
+        statuses.push(response.status());
+    }
+
+    // Invalid keys never authenticate, so under the limit they reach the handler
+    // and get 401 (not 429).
+    assert_eq!(
+        statuses[0],
+        StatusCode::UNAUTHORIZED,
+        "an invalid key under the limit should reach the handler (401); got {statuses:?}"
+    );
+    // Over the shared anonymous bucket's limit, the limiter trips 429 even though
+    // every request used a different key — proving no per-key bypass.
+    assert!(
+        statuses.contains(&StatusCode::TOO_MANY_REQUESTS),
+        "distinct invalid keys must still share the IP bucket and hit 429; got {statuses:?}"
+    );
+    Ok(())
 }
 
 #[tokio::test]

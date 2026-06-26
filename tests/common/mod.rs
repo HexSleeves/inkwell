@@ -91,6 +91,8 @@ pub fn test_config(database_url: String) -> Arc<Config> {
         // writes under one key without 429s. The rate-limit contract test opts
         // into a low limit via `router_for_with_rate_limit`.
         write_rate_limit: 0,
+        // Forwarded-header trust off in tests; IP keying uses the peer address.
+        trust_forwarded_headers: false,
     })
 }
 

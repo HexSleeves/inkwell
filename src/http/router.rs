@@ -37,11 +37,12 @@ pub fn build_router_with_providers(
     llm: Option<Arc<dyn Llm>>,
 ) -> Router {
     let browser_login = config.browser_login;
-    // One shared GCRA limiter for the whole process. Built before `state` moves
-    // `config`; `None` internally when `write_rate_limit == 0` (disabled).
+    // One shared GCRA limiter for the whole process. It validates credentials
+    // via `authenticate`, so it gets clones of `config`/`pool` before `state`
+    // takes ownership. Internally a no-op when `write_rate_limit == 0`.
     let rate_limiter = Arc::new(rate_limit::RateLimitState::new(
-        config.write_rate_limit,
-        config.browser_login,
+        config.clone(),
+        pool.clone(),
     ));
     let state = AppState {
         config,

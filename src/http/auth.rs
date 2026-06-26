@@ -189,6 +189,7 @@ mod tests {
             webmention_send: false,
             browser_login: false,
             write_rate_limit: 0,
+            trust_forwarded_headers: false,
         }
     }
 

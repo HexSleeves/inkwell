@@ -46,6 +46,12 @@ pub struct Config {
     /// are never throttled. `0` disables limiting. Defaults to
     /// [`DEFAULT_WRITE_RATE_LIMIT`]. See CIL-128 and `src/http/rate_limit.rs`.
     pub write_rate_limit: u32,
+    /// Trust `X-Forwarded-For` / `X-Real-IP` when keying the rate limiter by
+    /// client IP (`INKWELL_TRUST_FORWARDED_HEADERS`). Conservative default:
+    /// **off** — those headers are client-controllable and only safe behind a
+    /// proxy that overwrites them (e.g. Railway). When off, IP keying uses the
+    /// real peer address, so a directly-exposed instance can't be spoofed.
+    pub trust_forwarded_headers: bool,
 }
 
 impl std::fmt::Debug for Config {
@@ -70,6 +76,7 @@ impl std::fmt::Debug for Config {
             .field("webmention_send", &self.webmention_send)
             .field("browser_login", &self.browser_login)
             .field("write_rate_limit", &self.write_rate_limit)
+            .field("trust_forwarded_headers", &self.trust_forwarded_headers)
             .finish()
     }
 }
@@ -113,6 +120,9 @@ impl Config {
         let write_rate_limit = trimmed_env("INKWELL_WRITE_RATE_LIMIT")
             .and_then(|value| value.parse::<u32>().ok())
             .unwrap_or(DEFAULT_WRITE_RATE_LIMIT);
+        // Trust forwarded headers is opt-in: same parse rule as the other flags.
+        let trust_forwarded_headers = trimmed_env("INKWELL_TRUST_FORWARDED_HEADERS")
+            .is_some_and(|value| value.eq_ignore_ascii_case("true"));
 
         Ok(Self {
             database_url,
@@ -126,6 +136,7 @@ impl Config {
             webmention_send,
             browser_login,
             write_rate_limit,
+            trust_forwarded_headers,
         })
     }
 }
@@ -222,6 +233,7 @@ mod tests {
             webmention_send: false,
             browser_login: false,
             write_rate_limit: DEFAULT_WRITE_RATE_LIMIT,
+            trust_forwarded_headers: false,
         };
         let rendered = format!("{config:?}");
         assert!(!rendered.contains("sentinel-key-value"));
