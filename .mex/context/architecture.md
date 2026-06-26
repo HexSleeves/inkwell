@@ -19,7 +19,7 @@ edges:
     condition: when adding a new HTTP route or handler
   - target: context/ai.md
     condition: when working on semantic search, RAG, or embeddings
-last_updated: 2026-06-23
+last_updated: 2026-06-25
 ---
 
 # Architecture
@@ -44,7 +44,8 @@ The MCP server (`src/mcp/`) runs as a separate `inkwell mcp` CLI process over st
 - **`src/mcp/mod.rs`** — MCP server via `rmcp` crate; tools: `search_notes`, `read_note`, `list_notes`, `create_note`, `update_note`; uses `If-Match` optimistic concurrency
 - **`src/rendering/`** — Comrak markdown pipeline: `wikilink.rs` (extract + render `[[links]]` and `![[embeds]]`), `highlight.rs` (syntect syntax coloring), `sanitize.rs` (Ammonia HTML sanitizer)
 - **`src/domain/document.rs`** — core types: `Document`, `NewDocument`, `DocumentPatch`, `DocumentStatus` (Draft/Published), `GrowthStage` (Seedling/Budding/Evergreen)
-- **`src/error.rs`** — `AppError` enum; all variants impl `IntoResponse` with structured JSON `{"error":{"message":"..."}}`
+- **`src/http/rate_limit.rs`** — process-wide GCRA write rate limiter (`governor`); `from_fn` middleware throttling mutations + `/ask`, keyed by credential else client IP; `INKWELL_WRITE_RATE_LIMIT` req/min (CIL-128). Layered inside `security_headers`, outside the handlers.
+- **`src/error.rs`** — `AppError` enum; all variants impl `IntoResponse` with structured JSON `{"error":{"message":"..."}}` (incl. `TooManyRequests` → 429 + `Retry-After`)
 
 ## External Dependencies
 
