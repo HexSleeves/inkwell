@@ -115,11 +115,18 @@ impl Config {
         // Browser login is opt-in: same parse rule as webmention_send.
         let browser_login = trimmed_env("INKWELL_BROWSER_LOGIN")
             .is_some_and(|value| value.eq_ignore_ascii_case("true"));
-        // Write rate limit (requests/minute). An unset or unparseable value
-        // falls back to the default; an explicit `0` disables limiting.
-        let write_rate_limit = trimmed_env("INKWELL_WRITE_RATE_LIMIT")
-            .and_then(|value| value.parse::<u32>().ok())
-            .unwrap_or(DEFAULT_WRITE_RATE_LIMIT);
+        // Write rate limit (requests/minute). Only an UNSET (or blank) variable
+        // falls back to the default; a present-but-malformed value (e.g. "abc",
+        // "-1") fails startup rather than silently defaulting, mirroring PORT.
+        // An explicit `0` is valid and disables limiting.
+        let write_rate_limit = match trimmed_env("INKWELL_WRITE_RATE_LIMIT") {
+            Some(raw) => raw.parse::<u32>().map_err(|_| {
+                anyhow!(
+                    "Invalid INKWELL_WRITE_RATE_LIMIT \"{raw}\": expected a non-negative integer (0 disables)."
+                )
+            })?,
+            None => DEFAULT_WRITE_RATE_LIMIT,
+        };
         // Trust forwarded headers is opt-in: same parse rule as the other flags.
         let trust_forwarded_headers = trimmed_env("INKWELL_TRUST_FORWARDED_HEADERS")
             .is_some_and(|value| value.eq_ignore_ascii_case("true"));

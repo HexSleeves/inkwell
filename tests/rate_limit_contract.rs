@@ -12,8 +12,10 @@
 mod common;
 
 use axum::body::Body;
+use axum::extract::ConnectInfo;
 use common::{maybe_pool, router_for_with_rate_limit};
 use http::{Method, Request, StatusCode, header};
+use std::net::SocketAddr;
 use std::sync::LazyLock;
 use tokio::sync::{Mutex, MutexGuard};
 use tower::ServiceExt;
@@ -61,6 +63,24 @@ async fn post_doc_with_key(
                 .body(Body::from(serde_json::to_vec(&payload)?))?,
         )
         .await?)
+}
+
+/// Anonymous `POST /documents` carrying a `ConnectInfo<SocketAddr>` peer, as the
+/// real server injects via `into_make_service_with_connect_info`. Exercises the
+/// limiter's peer-IP extraction path (not the `"unknown"` fallback).
+async fn post_doc_from_peer(
+    router: &axum::Router,
+    title: &str,
+    peer: SocketAddr,
+) -> anyhow::Result<axum::response::Response> {
+    let payload = serde_json::json!({ "title": title, "bodyMarkdown": "# Hi" });
+    let mut request = Request::builder()
+        .method(Method::POST)
+        .uri("/documents")
+        .header("content-type", "application/json")
+        .body(Body::from(serde_json::to_vec(&payload)?))?;
+    request.extensions_mut().insert(ConnectInfo(peer));
+    Ok(router.clone().oneshot(request).await?)
 }
 
 /// An unauthenticated `GET` (a read / public-site request).
@@ -112,6 +132,46 @@ async fn invalid_api_keys_cannot_bypass_the_limiter() -> anyhow::Result<()> {
     assert!(
         statuses.contains(&StatusCode::TOO_MANY_REQUESTS),
         "distinct invalid keys must still share the IP bucket and hit 429; got {statuses:?}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn anonymous_callers_are_keyed_by_peer_ip() -> anyhow::Result<()> {
+    // Exercises the ConnectInfo<SocketAddr> peer-extraction path: two different
+    // anonymous peers must get INDEPENDENT buckets. If peer extraction regressed
+    // (both falling to the "unknown" bucket), peer B's first write would already
+    // be throttled by peer A's exhaustion.
+    let _guard = db_guard().await;
+    let Some(pool) = maybe_pool().await? else {
+        return Ok(());
+    };
+    let router = router_for_with_rate_limit(pool, 1);
+    let peer_a: SocketAddr = "203.0.113.10:40000".parse()?;
+    let peer_b: SocketAddr = "198.51.100.20:40000".parse()?;
+
+    // Peer A: first anonymous write reaches the handler (401, no auth) and
+    // consumes A's bucket; the second is rate-limited.
+    assert_eq!(
+        post_doc_from_peer(&router, "peer-a-1", peer_a)
+            .await?
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        post_doc_from_peer(&router, "peer-a-2", peer_a)
+            .await?
+            .status(),
+        StatusCode::TOO_MANY_REQUESTS,
+        "peer A's second write should be throttled"
+    );
+    // Peer B has its own bucket — not affected by A's exhaustion.
+    assert_eq!(
+        post_doc_from_peer(&router, "peer-b-1", peer_b)
+            .await?
+            .status(),
+        StatusCode::UNAUTHORIZED,
+        "a distinct peer IP must get an independent bucket"
     );
     Ok(())
 }

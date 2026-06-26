@@ -51,6 +51,7 @@ global `axum::middleware::from_fn` (or `from_fn_with_state`) that inspects
    `async fn(/* State(...) optional, */ request: Request, next: Next) -> Response`; add
    `pub mod <name>;` to `src/http/mod.rs`.
 2. **Write the middleware fn** with a pass-through fast path:
+
    ```rust
    pub async fn my_mw(/* State(...) optional, */ request: Request, next: Next) -> Response {
        if !applies(request.method(), request.uri().path()) {
@@ -60,10 +61,13 @@ global `axum::middleware::from_fn` (or `from_fn_with_state`) that inspects
        next.run(request).await
    }
    ```
+
 3. **Add to the `use super::{...}` import** in `router.rs` and add the layer:
+
    ```rust
    .layer(middleware::from_fn(<name>::<fn>))
    ```
+
 4. **If it needs shared state** (a limiter, a cache), build it **once** in
    `build_router_with_providers` before `state` moves `config`, wrap in `Arc`, and use
    `middleware::from_fn_with_state(the_arc, my_mw)` with a `State<Arc<T>>` first arg.

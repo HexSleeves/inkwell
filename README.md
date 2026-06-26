@@ -19,7 +19,7 @@ An open, API-first Markdown publishing platform implemented as a Rust service.
 - `INKWELL_API_KEY` optional but writes fail closed when unset
 - `INKWELL_SITE_URL` optional, used for absolute feed/sitemap/page metadata URLs
 - `INKWELL_API_URL` optional, base URL the `inkwell author` CLI targets (defaults to `http://HOST:PORT`)
-- `INKWELL_WRITE_RATE_LIMIT` optional, write rate limit in requests/minute (default `60`). Applied per **validated** principal (the credential is verified before it keys a bucket), or per client IP when anonymous, to mutation routes (create/update/delete/publish/unpublish, `POST /media`, `/webmention`) and `/ask`. Reads and the public HTML site are never throttled. Over-limit requests get `429` with a `Retry-After` header. Set to `0` to disable.
+- `INKWELL_WRITE_RATE_LIMIT` optional, write rate limit in requests/minute (default `60`). Applied per **validated** principal (the credential is verified before it keys a bucket), or per client IP when anonymous. It throttles **every** `POST`/`PUT`/`PATCH`/`DELETE` request — document create/update/delete, publish/unpublish, `POST /media`, `/webmention`, **and** `/admin/tokens*` and browser-login (`/auth/*`) writes — plus the expensive `/ask` endpoint. Only safe (`GET`/`HEAD`) reads and the public HTML site are never throttled. Over-limit requests get `429` with a `Retry-After` header. Set to `0` to disable.
 - `INKWELL_TRUST_FORWARDED_HEADERS` optional (default `false`). When `true`, the rate limiter keys anonymous callers by `X-Forwarded-For` / `X-Real-IP`. Those headers are client-spoofable, so leave it off unless the service sits behind a proxy that overwrites them (e.g. Railway); off means IP keying uses the real peer address.
 
 ## Run
