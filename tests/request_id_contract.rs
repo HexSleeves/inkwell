@@ -139,7 +139,9 @@ async fn error_body_carries_request_id_matching_the_header() -> anyhow::Result<(
         .to_owned();
     assert_eq!(header_id, sent);
 
-    let body = to_bytes(response.into_body(), usize::MAX).await?;
+    // The error envelope is a tiny JSON object; cap the read so a regressed
+    // handler can't turn this assertion into an unbounded allocation.
+    let body = to_bytes(response.into_body(), 64 * 1024).await?;
     let json: serde_json::Value = serde_json::from_slice(&body)?;
     assert_eq!(
         json["error"]["requestId"], sent,

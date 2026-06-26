@@ -70,11 +70,22 @@ fn resolve_request_id(request: &Request) -> String {
 /// Middleware: assign/propagate the correlation id, expose it via the
 /// task-local for the duration of the request, and echo it on the response.
 pub async fn propagate_request_id(request: Request, next: Next) -> Response {
-    let request_id = resolve_request_id(&request);
-    // `request_id` is always header-safe here (a UUID or a validated token), but
-    // fall back rather than panic if that invariant ever changes.
-    let header_value =
-        HeaderValue::from_str(&request_id).unwrap_or_else(|_| HeaderValue::from_static("invalid"));
+    // `request_id` is always header-safe here (a UUID or a validated token). If
+    // that invariant ever breaks, regenerate a fresh UUID and use it for BOTH
+    // the header and the task-local, so the header, error body, and logs never
+    // disagree on the id (and the fallback can't re-introduce injection).
+    let (request_id, header_value) = {
+        let candidate = resolve_request_id(&request);
+        match HeaderValue::from_str(&candidate) {
+            Ok(value) => (candidate, value),
+            Err(_) => {
+                let fresh = Uuid::new_v4().to_string();
+                let value = HeaderValue::from_str(&fresh)
+                    .expect("a UUID v4 string is always a valid header value");
+                (fresh, value)
+            }
+        }
+    };
 
     REQUEST_ID
         .scope(request_id, async move {
