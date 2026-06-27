@@ -64,7 +64,7 @@ INKWELL_REQUIRE_DB_TESTS=1 cargo test --all --locked 2>&1 | grep -E "PASS|FAIL|t
 
 | Step | Env | Pass criterion | Evidence field |
 |------|-----|----------------|----------------|
-| Fresh DB: `cargo run -- db migrate` | minimal | exits 0, 21 migrations applied | [ ] |
+| Fresh DB: `cargo run -- db migrate` | minimal | exits 0, 22 migrations applied | [ ] |
 | Re-run migrate (idempotent) | minimal | exits 0, `0 migrations applied` | [ ] |
 | pgvector check: `psql -c "SELECT 'ok' FROM pg_extension WHERE extname='vector'"` | minimal | returns `ok` | [ ] |
 
@@ -256,9 +256,9 @@ Covered by `api_contract`, `scoped_tokens_slice*`, and `links_contract` suites a
 
 | Step | Env | Pass criterion | Evidence field |
 |------|-----|----------------|----------------|
-| `curl -s -X POST http://localhost:3000/documents -H "Authorization: Bearer $INKWELL_API_KEY" -H "Content-Type: application/json" -d '{"title":"Smoke test","bodyMarkdown":"Hello **world**"}' \| jq .slug` | compose | slug printed (e.g. `"smoke-test"`) | [ ] |
+| `curl -s -X POST http://localhost:3000/documents -H "X-Api-Key: $INKWELL_API_KEY" -H "Content-Type: application/json" -d '{"title":"Smoke test","bodyMarkdown":"Hello **world**"}' \| jq .slug` | compose | slug printed (e.g. `"smoke-test"`) | [ ] |
 | `curl -s http://localhost:3000/documents/smoke-test \| jq .status` | compose | `"draft"` | [ ] |
-| `curl -s -X POST http://localhost:3000/documents/smoke-test/publish -H "Authorization: Bearer $INKWELL_API_KEY" \| jq .status` | compose | `"published"` | [ ] |
+| `curl -s -X POST http://localhost:3000/documents/smoke-test/publish -H "X-Api-Key: $INKWELL_API_KEY" \| jq .status` | compose | `"published"` | [ ] |
 | `curl -si http://localhost:3000/smoke-test` | compose | `200 OK`; HTML body shows "Hello world" | [ ] |
 | Unauthenticated write: omit `Authorization` header | compose | `401 Unauthorized` | [ ] |
 | Write with revoked token | compose | `401 Unauthorized` | [ ] |
@@ -357,7 +357,7 @@ cargo test --test http_caching
 | Step | Env | Pass criterion | Evidence field |
 |------|-----|----------------|----------------|
 | `cp .env.example .env && docker compose up --build` | compose | postgres healthy, migrations applied, seed runs, server listening on port 3000 | [ ] |
-| `curl http://localhost:3000/health` | compose | `200 OK`; `{"ok":true}` | [ ] |
+| `curl http://localhost:3000/health` | compose | `200 OK`; `{"status":"ok","db":"up"}` | [ ] |
 | `docker compose down -v && docker compose up --build` (clean slate) | compose | same as above; no leftover state | [ ] |
 
 ---
@@ -376,6 +376,53 @@ cargo test --test http_caching
 | Step | Env | Pass criterion | Evidence field |
 |------|-----|----------------|----------------|
 | `inkwell author create --title "CLI test" --body "hello"` | compose | exits 0; note appears in `GET /documents` | [ ] |
+
+---
+
+## 16. Preview Tokens (CIL-129)
+
+### 16a. Automated (DB-backed)
+
+| Test | Pass criterion | Evidence field |
+|------|----------------|----------------|
+| `preview_contract::*` | preview-token mint → anonymous preview → revoke → 401 round-trip | [ ] |
+
+Run with:
+```
+INKWELL_REQUIRE_DB_TESTS=1 cargo test --test preview_contract
+```
+
+### 16b. Manual smoke
+
+| Step | Env | Pass criterion | Evidence field |
+|------|-----|----------------|----------------|
+| `curl -s -X POST http://localhost:3000/documents/<slug>/preview-tokens -H "X-Api-Key: $INKWELL_API_KEY" -H "Content-Type: application/json" -d '{}' \| jq .token` | compose | token printed (`pvw_…`) | [ ] |
+| `curl -s "http://localhost:3000/documents/<slug>/preview?token=<token>"` (no auth header) | compose | `200 OK`; HTML draft rendered | [ ] |
+| `curl -s -X DELETE "http://localhost:3000/documents/<slug>/preview-tokens/<prefix>" -H "X-Api-Key: $INKWELL_API_KEY"` | compose | `204 No Content` | [ ] |
+| Re-attempt preview with revoked token | compose | `401 Unauthorized` | [ ] |
+
+---
+
+## 17. Archive Navigation (CIL-132)
+
+### 17a. Automated (DB-backed)
+
+| Test | Pass criterion | Evidence field |
+|------|----------------|----------------|
+| `archive_nav_contract::*` | archive list, month page, prev/next nav bar render correctly | [ ] |
+
+Run with:
+```
+INKWELL_REQUIRE_DB_TESTS=1 cargo test --test archive_nav_contract
+```
+
+### 17b. Manual smoke
+
+| Step | Env | Pass criterion | Evidence field |
+|------|-----|----------------|----------------|
+| `curl -si http://localhost:3000/archive` | compose | `200 OK`; HTML page lists year/month buckets | [ ] |
+| `curl -si http://localhost:3000/archive/2026/01` (adjust year/month) | compose | `200 OK` or `404` if no docs that month | [ ] |
+| View a published document page in a browser | compose | `<nav class="doc-nav">` prev/next bar present (or absent gracefully if first/last) | [ ] |
 
 ---
 

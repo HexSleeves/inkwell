@@ -17,6 +17,7 @@ edges:
   - target: patterns/INDEX.md
     condition: when starting a task — check the pattern index for a matching pattern file
 last_updated: 2026-06-27
+docs_last_updated: 2026-06-27
 ---
 
 # Session Bootstrap
@@ -74,6 +75,13 @@ Then read this file fully before doing anything else in this session.
 - Media upload/serve API — `POST /media` + `GET /media/{id}` (PR #28); `inkwell author upload <file>` CLI command (CIL-130). Storage: PostgreSQL `bytea`, no external store, DB-level MIME+size constraints. Deployment/backup docs updated.
 - Owner-aware draft reads — slice 3b, completes ADR 0009 (PR #30).
 - Flag-gated browser session login — ADR 0010, default off (PR #29).
+
+**Docs state:**
+
+- MkDocs Material docs site added (`mkdocs.yml`, `docs/index.md`, `docs/assets/stylesheets/inkwell.css`)
+- GitHub Actions deploy workflow: `.github/workflows/docs.yml` (deploys to GitHub Pages on push to main)
+- New docs: `docs/AUTHORING.md`, `docs/SITE-CONFIGURATION.md`, `docs/adr/index.md`
+- Stale-doc fixes: BACKUP-RESTORE, RELEASE-CHECKLIST, CLOSEOUT, COMPATIBILITY, QA-MATRIX, DEPLOYMENT, API.md, openapi.yaml
 
 **Known issues:**
 

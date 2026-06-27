@@ -77,6 +77,17 @@ are included here for archival completeness.
 
 ---
 
+## Post-closeout additions
+
+The following items shipped after the closeout was written (PR merge `1554c72`).
+They are stable, deployed, and covered by contract tests.
+
+| Issue | PR | What shipped | Merge commit |
+|-------|----|-------------|--------------|
+| [CIL-129](https://linear.app/hexsleeves/issue/CIL-129) | [#48](https://github.com/HexSleeves/inkwell/pull/48) | Shareable draft preview links — `POST/GET/DELETE /documents/{slug}/preview-tokens`, anonymous `GET /documents/{slug}/preview?token=…` | `c5ed942` |
+| [CIL-131](https://linear.app/hexsleeves/issue/CIL-131) | [#46](https://github.com/HexSleeves/inkwell/pull/46) | Configurable site metadata — `INKWELL_SITE_TITLE`, `INKWELL_SITE_DESCRIPTION`, `INKWELL_SITE_AUTHOR`, `INKWELL_CUSTOM_CSS_URL` | `4b6c1b2` |
+| [CIL-132](https://linear.app/hexsleeves/issue/CIL-132) | [#47](https://github.com/HexSleeves/inkwell/pull/47) | Archive browsing + prev/next doc navigation — `GET /archive`, `GET /archive/{year}/{month}`, pagination, `<nav class="doc-nav">` on doc pages | `9e0b28f` |
+
 ## Deferred work
 
 The following items were captured during this project run but explicitly excluded
@@ -84,10 +95,7 @@ from v0.2 scope. They belong to the next roadmap cycle.
 
 | Issue | Title | Why deferred |
 |-------|-------|-------------|
-| [CIL-129](https://linear.app/hexsleeves/issue/CIL-129) | Draft preview | UI-layer work; blocked on browser login UI |
-| [CIL-130](https://linear.app/hexsleeves/issue/CIL-130) | Media upload workflow (UI) | File-picker UI deferred; API already shipped (#28) |
-| [CIL-131](https://linear.app/hexsleeves/issue/CIL-131) | Site metadata (Open Graph, canonical, meta description) | SEO surface; no blocker except prioritization |
-| [CIL-132](https://linear.app/hexsleeves/issue/CIL-132) | Archive / navigation UI | Pagination and archive index improvements; non-critical |
+| [CIL-130](https://linear.app/hexsleeves/issue/CIL-130) | Media upload browser UI | File-picker UI deferred; API + CLI shipped (#28, #49) |
 | [CIL-199](https://linear.app/hexsleeves/issue/CIL-199) | Browser login UI | Session backend shipped flag-gated; actual login HTML page still needed |
 
 ---
@@ -131,8 +139,8 @@ scoped here — they are pointers for whoever picks up the roadmap next.
 | **Analytics** | No traffic metrics exist. Options range from a simple `inkwell_view_events` table to plumbing Plausible or Umami. |
 | **Webhooks** | Outbound notification on publish/unpublish events. Enables downstream integrations without polling. |
 | **Multi-site support** | Currently one site per instance. A `site_id` tenant column plus routing by `Host` header would allow multiple gardens from one deployment. |
-| **Draft preview** | Real-time rendered preview before publish (CIL-129). Requires browser login UI (CIL-199). |
-| **Media upload UI** | File-picker page to complete the media authoring loop (CIL-130). |
+| **Media upload UI** | File-picker page to complete the media authoring loop (CIL-130); API + CLI shipped. |
+| **Browser login UI** | Login HTML page (CIL-199); session backend already shipped, flag-gated off. |
 
 ---
 
@@ -173,7 +181,8 @@ scoped here — they are pointers for whoever picks up the roadmap next.
 ### Linear issues
 
 - Professionalization project issues: CIL-124 through CIL-137 (M5: Release Readiness milestone)
-- Deferred: CIL-129, CIL-130, CIL-131, CIL-132, CIL-199
+- Post-closeout additions: CIL-129 (preview tokens), CIL-131 (site metadata), CIL-132 (archive nav)
+- Deferred: CIL-130 (media upload UI), CIL-199 (browser login UI)
 
 ---
 

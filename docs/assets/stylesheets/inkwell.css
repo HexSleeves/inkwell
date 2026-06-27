@@ -1,0 +1,156 @@
+/* Inkwell — Botanical Soft theme for MkDocs Material
+   Palette extracted from src/views/layout.rs ("Botanical Soft").
+   Forest-green headings, warm-clay links, sage accents. */
+
+@font-face {
+  font-family: "Nunito";
+  font-style: normal;
+  font-weight: 200 1000;
+  font-display: swap;
+  src: url(../fonts/nunito.woff2) format("woff2");
+}
+
+/* ── Color overrides for Material's custom primary/accent ── */
+[data-md-color-scheme="default"] {
+  /* Primary: forest green */
+  --md-primary-fg-color:              #2F5D45;
+  --md-primary-fg-color--light:       #3d7a5c;
+  --md-primary-fg-color--dark:        #1e3d2d;
+  --md-primary-bg-color:              #ffffff;
+  --md-primary-bg-color--light:       rgba(255,255,255,0.7);
+
+  /* Accent: warm clay */
+  --md-accent-fg-color:               #C56B47;
+  --md-accent-fg-color--transparent:  rgba(197,107,71,0.1);
+  --md-accent-bg-color:               #ffffff;
+  --md-accent-bg-color--light:        rgba(255,255,255,0.7);
+
+  /* Canvas: botanical cream */
+  --md-default-bg-color:              rgb(251 250 246);
+  --md-default-bg-color--light:       rgba(251,250,246,0.7);
+  --md-default-bg-color--lighter:     rgba(251,250,246,0.3);
+  --md-default-bg-color--lightest:    rgba(251,250,246,0.12);
+
+  /* Text */
+  --md-default-fg-color:              rgb(54 64 58);
+  --md-default-fg-color--light:       rgba(54,64,58,0.7);
+  --md-default-fg-color--lighter:     rgba(54,64,58,0.54);
+  --md-default-fg-color--lightest:    rgba(54,64,58,0.12);
+
+  /* Code */
+  --md-code-bg-color:                 rgb(43 53 47);
+  --md-code-fg-color:                 rgb(238 242 236);
+  --md-code-hl-color:                 rgba(168,192,170,0.2);
+}
+
+/* ── Typography: Nunito throughout ─────────────────────── */
+body,
+.md-typeset,
+.md-nav__title,
+.md-header__title,
+.md-footer,
+.md-search__input {
+  font-family: "Nunito", "Quicksand", ui-rounded, "SF Pro Rounded", system-ui, sans-serif;
+}
+
+/* ── Header ─────────────────────────────────────────────── */
+.md-header {
+  background-color: var(--md-primary-fg-color);
+  border-top: 4px solid rgb(168 192 170);
+}
+.md-header__title {
+  font-weight: 800;
+  letter-spacing: -0.01em;
+}
+
+/* ── Navigation ──────────────────────────────────────────── */
+.md-nav__link--active,
+.md-nav__link:hover {
+  color: var(--md-accent-fg-color);
+}
+
+/* Sidebar active item */
+.md-nav__item .md-nav__link--active {
+  font-weight: 700;
+}
+
+/* ── Content typography ──────────────────────────────────── */
+.md-typeset h1,
+.md-typeset h2,
+.md-typeset h3,
+.md-typeset h4,
+.md-typeset h5,
+.md-typeset h6 {
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  color: var(--md-primary-fg-color);
+}
+
+.md-typeset a {
+  color: var(--md-accent-fg-color);
+}
+.md-typeset a:hover {
+  color: rgb(176 90 56);
+}
+
+/* ── Tabs ─────────────────────────────────────────────────── */
+.md-tabs {
+  background-color: var(--md-primary-fg-color--dark);
+}
+.md-tabs__link--active,
+.md-tabs__link:hover {
+  color: rgb(168 192 170);
+}
+
+/* ── Admonitions — Botanical palette ─────────────────────── */
+.md-typeset .admonition,
+.md-typeset details {
+  border-left-color: var(--md-primary-fg-color);
+}
+.md-typeset .admonition-title,
+.md-typeset summary {
+  background-color: rgba(47, 93, 69, 0.08);
+}
+
+/* ── Cards grid (used on landing page) ─────────────────────── */
+.md-typeset .grid.cards > ul > li,
+.md-typeset .grid.cards > ol > li {
+  border: 1px solid rgb(201 219 203);
+  border-radius: 0.85rem;
+  background: #ffffff;
+}
+.md-typeset .grid.cards > ul > li:hover,
+.md-typeset .grid.cards > ol > li:hover {
+  box-shadow: 0 2px 12px rgba(47, 93, 69, 0.1);
+  border-color: rgb(168 192 170);
+}
+
+/* ── Footer ─────────────────────────────────────────────────── */
+.md-footer {
+  background-color: var(--md-primary-fg-color--dark);
+}
+.md-footer-meta {
+  background-color: rgba(0,0,0,0.15);
+}
+
+/* ── Search ─────────────────────────────────────────────────── */
+.md-search__form {
+  border-radius: 0.6rem;
+}
+
+/* ── Code blocks ──────────────────────────────────────────── */
+.md-typeset pre > code {
+  font-size: 0.85rem;
+}
+
+/* ── Tables ──────────────────────────────────────────────── */
+.md-typeset table:not([class]) th {
+  background-color: rgb(234 241 234);
+  color: var(--md-primary-fg-color);
+}
+
+/* ── Scrollbar ──────────────────────────────────────────── */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgb(201 219 203); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: rgb(168 192 170); }

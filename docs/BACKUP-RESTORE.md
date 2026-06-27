@@ -14,8 +14,8 @@ migration compatibility, and post-restore smoke checks.
    - [Railway (Production)](#railway-production)
 3. [Restoring](#restoring)
    - [Prerequisites: pgvector Extension](#prerequisites-pgvector-extension)
-   - [Restore — Local](#restore--local)
-   - [Restore — Railway (Production)](#restore--railway-production)
+   - [Restore — Local](#restore-local)
+   - [Restore — Railway (Production)](#restore-railway-production)
 4. [Migration Compatibility](#migration-compatibility)
 5. [Post-Restore Smoke Checks](#post-restore-smoke-checks)
 
@@ -306,7 +306,7 @@ curl -fsS "$BASE/graph" | jq '.nodes | length'
 # Expected: integer >= 0
 
 # 4. Full-text search (verifies search_vector column / migration 0008)
-curl -fsS "$BASE/search?q=garden" | jq '.hits | length'
+curl -fsS "$BASE/search?q=garden&format=json" | jq '.results | length'
 # Expected: integer >= 0 (no 500 error)
 ```
 
@@ -343,7 +343,7 @@ curl -fsS -X DELETE "$BASE/documents/restore-smoke-test" \
 curl -fsS -X POST "$BASE/ask" \
   -H "x-api-key: $KEY" \
   -H "content-type: application/json" \
-  -d '{"question":"What is this garden about?"}' \
+  -d '{"q":"What is this garden about?"}' \
   | jq '.answer'
 # Expected: non-empty string (or "AI not configured" if ANTHROPIC_API_KEY absent)
 # A 500 here indicates the note_chunks table or pgvector index is missing

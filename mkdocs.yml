@@ -1,0 +1,95 @@
+site_name: Inkwell
+site_description: Open, API-first Markdown publishing platform built in Rust
+site_url: https://hexsleeves.github.io/inkwell/
+repo_url: https://github.com/HexSleeves/inkwell
+repo_name: HexSleeves/inkwell
+docs_dir: docs
+site_dir: site
+
+theme:
+  name: material
+  palette:
+    scheme: default
+    primary: custom
+    accent: custom
+  font:
+    text: false   # Nunito loaded via custom CSS
+    code: false
+  icon:
+    repo: fontawesome/brands/github
+  features:
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.sections
+    - navigation.top
+    - navigation.footer
+    - search.highlight
+    - search.suggest
+    - content.code.copy
+    - content.code.annotate
+    - toc.follow
+
+extra_css:
+  - assets/stylesheets/inkwell.css
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/HexSleeves/inkwell
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - def_list
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+
+nav:
+  - Home: index.md
+  - Getting Started:
+    - Quickstart: QUICKSTART.md
+    - Authoring: AUTHORING.md
+    - Site Configuration: SITE-CONFIGURATION.md
+  - API Reference:
+    - HTTP API: API.md
+    - Compatibility Contracts: COMPATIBILITY.md
+  - Operations:
+    - Deployment Guide: DEPLOYMENT.md
+    - Railway: RAILWAY.md
+    - Staging: STAGING.md
+    - Backup & Restore: BACKUP-RESTORE.md
+  - Releases:
+    - Release Process: RELEASES.md
+    - Release Checklist: RELEASE-CHECKLIST.md
+    - Release Notes v0.1: RELEASE-NOTES-v0.1.0.md
+  - Internals:
+    - Project Closeout: CLOSEOUT.md
+    - QA Matrix: QA-MATRIX.md
+    - v0.1 Audit: audit-v0.1.md
+    - Architecture Decisions:
+      - Overview: adr/index.md
+      - ADR 0001 — Toolchain: adr/0001-toolchain.md
+      - ADR 0002 — Markdown Rendering: adr/0002-markdown-rendering.md
+      - ADR 0003 — Postgres: adr/0003-postgres-persistence.md
+      - ADR 0004 — HTTP API: adr/0004-http-api.md
+      - ADR 0005 — Public Site: adr/0005-public-web-frontend.md
+      - ADR 0006 — SEO: adr/0006-content-discovery-and-seo.md
+      - ADR 0007 — Rust Migration: adr/0007-rust-migration.md
+      - ADR 0008 — Authoring CLI: adr/0008-authoring-cli.md
+      - ADR 0009 — Scoped Tokens: adr/0009-scoped-author-tokens.md
+      - ADR 0010 — Browser Login: adr/0010-browser-login.md
+      - ADR 0011 — Slug Rename: adr/0011-slug-rename-redirect.md

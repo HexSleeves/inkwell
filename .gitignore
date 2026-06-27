@@ -21,3 +21,6 @@ coverage/
 .claude/
 .gstack/
 .lavish/
+
+# MkDocs generated site
+site/

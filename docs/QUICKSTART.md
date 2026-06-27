@@ -14,7 +14,7 @@ By the end you will have:
 - [Docker](https://docs.docker.com/get-docker/) with Compose v2
   (`docker compose version`).
 - That's it for the demo. (To build the CLI from source instead, you also need
-  Rust — see the [README](../README.md).)
+  Rust — see the project [README](https://github.com/HexSleeves/inkwell#run).)
 
 ## 1. Configure your keys
 
