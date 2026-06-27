@@ -61,9 +61,16 @@ pub async fn document_page(
             // stubs). Resolution is Public, exactly like the body and the panel
             // itself: a draft target stays an unresolved stub and never leaks.
             let snippet_links = resolve_snippet_links(&state.pool, &backlinks).await;
-            // Fetch adjacent published documents for prev/next navigation.
+            // Fetch adjacent published documents for prev/next navigation using
+            // the already-fetched id/created_at, avoiding a redundant SELECT.
             // Degrade gracefully: a query failure omits the nav rather than 500ing.
-            let (prev, next) = match documents::get_adjacent_documents(&state.pool, &slug).await {
+            let (prev, next) = match documents::get_adjacent_documents(
+                &state.pool,
+                document.id,
+                document.created_at,
+            )
+            .await
+            {
                 Ok(pair) => pair,
                 Err(error) => {
                     tracing::warn!(%slug, %error, "adjacent-doc query failed; rendering note without prev/next nav");

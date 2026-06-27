@@ -805,13 +805,15 @@ fn map_optional_duplicate_slug(
 
 /// Return year/month buckets of published documents ordered newest first.
 /// Used by the archive index page to build the browsing hierarchy.
+/// Timestamps are normalised to UTC before year/month extraction so the
+/// buckets are stable regardless of the database session timezone.
 pub async fn list_archive_months(pool: &PgPool) -> Result<Vec<ArchiveMonth>, sqlx::Error> {
     sqlx::query_as::<Postgres, ArchiveMonth>(
         r#"
         SELECT
-            EXTRACT(YEAR  FROM created_at)::int AS year,
-            EXTRACT(MONTH FROM created_at)::int AS month,
-            count(*)::bigint                    AS count
+            EXTRACT(YEAR  FROM created_at AT TIME ZONE 'UTC')::int AS year,
+            EXTRACT(MONTH FROM created_at AT TIME ZONE 'UTC')::int AS month,
+            count(*)::bigint                                        AS count
         FROM documents
         WHERE status = 'published'
         GROUP BY year, month
@@ -832,8 +834,8 @@ pub async fn count_documents_by_month(
         SELECT count(*)::bigint
         FROM documents
         WHERE status = 'published'
-          AND EXTRACT(YEAR  FROM created_at)::int = $1
-          AND EXTRACT(MONTH FROM created_at)::int = $2
+          AND EXTRACT(YEAR  FROM created_at AT TIME ZONE 'UTC')::int = $1
+          AND EXTRACT(MONTH FROM created_at AT TIME ZONE 'UTC')::int = $2
         "#,
     )
     .bind(year)
@@ -855,8 +857,8 @@ pub async fn list_documents_by_month(
                version, created_at, updated_at
         FROM documents
         WHERE status = 'published'
-          AND EXTRACT(YEAR  FROM created_at)::int = $1
-          AND EXTRACT(MONTH FROM created_at)::int = $2
+          AND EXTRACT(YEAR  FROM created_at AT TIME ZONE 'UTC')::int = $1
+          AND EXTRACT(MONTH FROM created_at AT TIME ZONE 'UTC')::int = $2
         ORDER BY created_at DESC, id DESC
         LIMIT $3 OFFSET $4
         "#,
@@ -869,26 +871,18 @@ pub async fn list_documents_by_month(
     .await
 }
 
-/// Return the published document immediately before (older) and immediately after
-/// (newer) `slug` in the default listing order (`created_at DESC, id DESC`).
+/// Return the published document immediately before (older) and immediately
+/// after (newer) the document identified by `id`/`created_at` in the default
+/// listing order (`created_at DESC, id DESC`). Either neighbour may be `None`
+/// when this is the oldest or newest published document.
 ///
-/// Returns `(None, None)` when `slug` is not a published document. Either
-/// neighbour may be `None` when this is the oldest or newest document.
+/// Accepts the already-fetched `id` and `created_at` so the handler avoids a
+/// redundant SELECT when the document row is already in memory.
 pub async fn get_adjacent_documents(
     pool: &PgPool,
-    slug: &str,
+    id: uuid::Uuid,
+    created_at: time::OffsetDateTime,
 ) -> Result<(Option<AdjacentDoc>, Option<AdjacentDoc>), sqlx::Error> {
-    let row = sqlx::query_as::<Postgres, (uuid::Uuid, time::OffsetDateTime)>(
-        "SELECT id, created_at FROM documents WHERE slug = $1 AND status = 'published'",
-    )
-    .bind(slug)
-    .fetch_optional(pool)
-    .await?;
-
-    let Some((id, created_at)) = row else {
-        return Ok((None, None));
-    };
-
     let prev = sqlx::query_as::<Postgres, AdjacentDoc>(
         r#"
         SELECT slug, title FROM documents
