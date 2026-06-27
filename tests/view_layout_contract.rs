@@ -1,7 +1,7 @@
 use inkwell::domain::document::{Document, DocumentStatus, GrowthStage};
 use inkwell::views::document::render_document_page;
 use inkwell::views::index::render_index_page;
-use inkwell::views::layout::{HeadMeta, derive_excerpt, render_page};
+use inkwell::views::layout::{HeadMeta, SiteMeta, derive_excerpt, render_page};
 use inkwell::views::search::render_search_page;
 use inkwell::views::tags::render_tag_page;
 use serde_json::json;
@@ -55,7 +55,9 @@ fn runtime_config_marker() -> String {
 
 #[test]
 fn render_page_emits_valid_html_attributes() {
+    let site = SiteMeta::defaults();
     let html = render_page(
+        &site,
         HeadMeta {
             title: "Test",
             description: Some("Description"),
@@ -88,7 +90,9 @@ fn render_page_emits_valid_html_attributes() {
 fn render_page_omits_tailwind_browser_build() {
     let browser_runtime_src = browser_runtime_src();
     let runtime_config_marker = runtime_config_marker();
+    let site = SiteMeta::defaults();
     let html = render_page(
+        &site,
         HeadMeta {
             title: "Test",
             description: None,
@@ -109,7 +113,9 @@ fn render_page_omits_tailwind_browser_build() {
 fn render_page_allows_json_ld_with_csp_nonce_and_without_tailwind_runtime() {
     let browser_runtime_src = browser_runtime_src();
     let runtime_config_marker = runtime_config_marker();
+    let site = SiteMeta::defaults();
     let html = render_page(
+        &site,
         HeadMeta {
             title: "Test",
             description: None,
@@ -138,11 +144,12 @@ fn document_page_with_tags_has_no_literal_backslash_n() {
     // The fixture carries tags so the tag-chip template is exercised; this
     // assertion would have FAILED before the fix.
     let document = tagged_document();
+    let site = SiteMeta::defaults();
     let html = render_document_page(
         &document,
         &[],
         &std::collections::HashSet::new(),
-        Some("http://localhost"),
+        &site,
         "nonce123",
     );
     assert!(
@@ -161,7 +168,8 @@ fn index_listing_with_tags_has_no_literal_backslash_n() {
     // both came from raw-string `\n` templates. Exercise the listing and assert
     // no literal backslash-n leaks into the rendered output.
     let documents = vec![tagged_document()];
-    let html = render_index_page(&documents, 1, 1, Some("http://localhost"));
+    let site = SiteMeta::defaults();
+    let html = render_index_page(&documents, 1, 1, &site);
     assert!(
         html.contains(r#"<p class="excerpt">"#),
         "excerpt must render"
@@ -182,7 +190,8 @@ fn search_results_pager_has_no_literal_backslash_n() {
     // renders when there is more than one page, so drive `total_pages > 1` to
     // exercise the `<nav class="pager">` path that was fixed.
     let documents = vec![tagged_document()];
-    let html = render_search_page("hello", &documents, 1, 3, Some("http://localhost"));
+    let site = SiteMeta::defaults();
+    let html = render_search_page("hello", &documents, 1, 3, &site);
     assert!(
         html.contains(r#"<nav class="pager">"#),
         "search pager must render when total_pages > 1"
@@ -198,7 +207,8 @@ fn tag_page_pager_has_no_literal_backslash_n() {
     // The per-tag pager template was likewise built from a raw-string `\n`
     // literal. Drive `total_pages > 1` so the `<nav class="pager">` path renders.
     let documents = vec![tagged_document()];
-    let html = render_tag_page("rust", &documents, 1, 3, Some("http://localhost"));
+    let site = SiteMeta::defaults();
+    let html = render_tag_page("rust", &documents, 1, 3, &site);
     assert!(
         html.contains(r#"<nav class="pager">"#),
         "tag pager must render when total_pages > 1"
@@ -206,5 +216,132 @@ fn tag_page_pager_has_no_literal_backslash_n() {
     assert!(
         !html.contains("\\n"),
         "rendered HTML must not contain a literal backslash-n"
+    );
+}
+
+// ── CIL-131: configurable site metadata ──────────────────────────────────────
+
+#[test]
+fn render_page_uses_configured_site_name_in_brand_and_og_site_name() {
+    let site = SiteMeta {
+        name: "My Garden",
+        description: None,
+        author: None,
+        base_url: "http://localhost".to_string(),
+        custom_css_url: None,
+    };
+    let html = render_page(
+        &site,
+        HeadMeta {
+            title: "A Note — My Garden",
+            description: None,
+            canonical_url: "http://localhost/a-note".to_string(),
+            og_type: "article",
+            json_ld: None,
+            csp_nonce: None,
+        },
+        "<p>Body</p>",
+    );
+    assert!(
+        html.contains(r#"<span class="brand-name">My Garden</span>"#),
+        "brand name must reflect INKWELL_SITE_TITLE"
+    );
+    assert!(
+        html.contains(r#"og:site_name" content="My Garden""#),
+        "og:site_name must reflect INKWELL_SITE_TITLE"
+    );
+    assert!(
+        !html.contains(r#"<span class="brand-name">Inkwell</span>"#),
+        "default brand name must not appear when overridden"
+    );
+    assert!(
+        html.contains("Published with My Garden."),
+        "footer must use configured site name"
+    );
+}
+
+#[test]
+fn render_page_defaults_to_inkwell_when_no_site_name_configured() {
+    let site = SiteMeta::defaults();
+    let html = render_page(
+        &site,
+        HeadMeta {
+            title: "Inkwell",
+            description: None,
+            canonical_url: "http://localhost/".to_string(),
+            og_type: "website",
+            json_ld: None,
+            csp_nonce: None,
+        },
+        "<p>Body</p>",
+    );
+    assert!(html.contains(r#"<span class="brand-name">Inkwell</span>"#));
+}
+
+#[test]
+fn render_page_injects_custom_css_link_when_url_is_set() {
+    let site = SiteMeta {
+        name: "Inkwell",
+        description: None,
+        author: None,
+        base_url: "http://localhost".to_string(),
+        custom_css_url: Some("https://example.com/theme.css"),
+    };
+    let html = render_page(
+        &site,
+        HeadMeta {
+            title: "Test",
+            description: None,
+            canonical_url: "http://localhost/".to_string(),
+            og_type: "website",
+            json_ld: None,
+            csp_nonce: None,
+        },
+        "<p>Body</p>",
+    );
+    assert!(
+        html.contains(r#"<link rel="stylesheet" href="https://example.com/theme.css" />"#),
+        "custom CSS URL must be injected as a stylesheet link"
+    );
+}
+
+#[test]
+fn render_page_omits_extra_stylesheet_when_custom_css_url_is_absent() {
+    let site = SiteMeta::defaults();
+    let html = render_page(
+        &site,
+        HeadMeta {
+            title: "Test",
+            description: None,
+            canonical_url: "http://localhost/".to_string(),
+            og_type: "website",
+            json_ld: None,
+            csp_nonce: None,
+        },
+        "<p>Body</p>",
+    );
+    assert!(
+        !html.contains(r#"rel="stylesheet" href="http"#),
+        "no external stylesheet must be injected when custom_css_url is None"
+    );
+}
+
+#[test]
+fn render_index_page_uses_configured_description_over_default() {
+    let site = SiteMeta {
+        name: "My Garden",
+        description: Some("Notes on code and life."),
+        author: None,
+        base_url: "http://localhost".to_string(),
+        custom_css_url: None,
+    };
+    let html = render_index_page(&[], 1, 1, &site);
+    assert!(
+        html.contains(r#"content="Notes on code and life.""#),
+        "configured site description must appear in meta description"
+    );
+    assert!(
+        !html.contains("API-first Markdown"),
+        "built-in fallback description must not appear when overridden"
     );
 }

@@ -6,6 +6,9 @@ use anyhow::{Result, anyhow};
 /// — the LLM client never sends those.
 pub const DEFAULT_LLM_MODEL: &str = "claude-sonnet-4-6";
 
+/// Default site title (brand name) when `INKWELL_SITE_TITLE` is unset.
+pub const DEFAULT_SITE_TITLE: &str = "Inkwell";
+
 /// Default per-principal (or per-IP) write rate limit, in requests per minute,
 /// when `INKWELL_WRITE_RATE_LIMIT` is unset. Generous enough for a human author
 /// or an MCP agent doing bulk edits, low enough to blunt abusive write floods.
@@ -52,6 +55,22 @@ pub struct Config {
     /// proxy that overwrites them (e.g. Railway). When off, IP keying uses the
     /// real peer address, so a directly-exposed instance can't be spoofed.
     pub trust_forwarded_headers: bool,
+    /// Human-readable site title used as the brand name in the HTML header,
+    /// feed title, and page `<title>` suffix (`INKWELL_SITE_TITLE`). Defaults
+    /// to [`DEFAULT_SITE_TITLE`] ("Inkwell"). Non-secret; shown publicly.
+    pub site_title: String,
+    /// Site-level description surfaced as the index page `<meta name="description">`
+    /// and the Atom feed subtitle (`INKWELL_SITE_DESCRIPTION`). Optional;
+    /// omitted from generated HTML when absent.
+    pub site_description: Option<String>,
+    /// Default author name for JSON-LD `author` and Atom feed `<author>` entries
+    /// when a document does not specify one (`INKWELL_SITE_AUTHOR`). Optional.
+    pub site_author: Option<String>,
+    /// URL of an extra stylesheet to load on every public HTML page
+    /// (`INKWELL_CUSTOM_CSS_URL`). When set, a `<link rel="stylesheet">` is
+    /// injected after the built-in styles so operators can apply a custom theme
+    /// without touching source code. Optional; nothing injected when absent.
+    pub custom_css_url: Option<String>,
 }
 
 impl std::fmt::Debug for Config {
@@ -77,6 +96,10 @@ impl std::fmt::Debug for Config {
             .field("browser_login", &self.browser_login)
             .field("write_rate_limit", &self.write_rate_limit)
             .field("trust_forwarded_headers", &self.trust_forwarded_headers)
+            .field("site_title", &self.site_title)
+            .field("site_description", &self.site_description)
+            .field("site_author", &self.site_author)
+            .field("custom_css_url", &self.custom_css_url)
             .finish()
     }
 }
@@ -130,6 +153,11 @@ impl Config {
         // Trust forwarded headers is opt-in: same parse rule as the other flags.
         let trust_forwarded_headers = trimmed_env("INKWELL_TRUST_FORWARDED_HEADERS")
             .is_some_and(|value| value.eq_ignore_ascii_case("true"));
+        let site_title =
+            trimmed_env("INKWELL_SITE_TITLE").unwrap_or_else(|| DEFAULT_SITE_TITLE.to_string());
+        let site_description = trimmed_env("INKWELL_SITE_DESCRIPTION");
+        let site_author = trimmed_env("INKWELL_SITE_AUTHOR");
+        let custom_css_url = trimmed_env("INKWELL_CUSTOM_CSS_URL");
 
         Ok(Self {
             database_url,
@@ -144,6 +172,10 @@ impl Config {
             browser_login,
             write_rate_limit,
             trust_forwarded_headers,
+            site_title,
+            site_description,
+            site_author,
+            custom_css_url,
         })
     }
 }
@@ -241,6 +273,10 @@ mod tests {
             browser_login: false,
             write_rate_limit: DEFAULT_WRITE_RATE_LIMIT,
             trust_forwarded_headers: false,
+            site_title: DEFAULT_SITE_TITLE.to_string(),
+            site_description: None,
+            site_author: None,
+            custom_css_url: None,
         };
         let rendered = format!("{config:?}");
         assert!(!rendered.contains("sentinel-key-value"));
@@ -248,6 +284,33 @@ mod tests {
         assert!(!rendered.contains("sentinel-anthropic-value"));
         assert!(!rendered.contains("supersecret"));
         assert!(rendered.contains("<redacted>"));
+    }
+
+    #[test]
+    fn debug_includes_site_metadata_fields() {
+        let config = Config {
+            database_url: "postgres://localhost/db".to_string(),
+            host: "0.0.0.0".to_string(),
+            port: 3000,
+            api_key: None,
+            site_url: None,
+            voyage_api_key: None,
+            anthropic_api_key: None,
+            llm_model: DEFAULT_LLM_MODEL.to_string(),
+            webmention_send: false,
+            browser_login: false,
+            write_rate_limit: DEFAULT_WRITE_RATE_LIMIT,
+            trust_forwarded_headers: false,
+            site_title: "My Garden".to_string(),
+            site_description: Some("A digital garden.".to_string()),
+            site_author: Some("Alice".to_string()),
+            custom_css_url: Some("https://example.com/custom.css".to_string()),
+        };
+        let rendered = format!("{config:?}");
+        assert!(rendered.contains("My Garden"));
+        assert!(rendered.contains("A digital garden."));
+        assert!(rendered.contains("Alice"));
+        assert!(rendered.contains("custom.css"));
     }
 
     fn author_config(api_url: Option<&str>, host: &str, port: u16) -> AuthorConfig {

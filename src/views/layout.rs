@@ -1,9 +1,57 @@
+use crate::config::Config;
 use crate::domain::document::Document;
 use serde_json::json;
 
-pub const SITE_NAME: &str = "Inkwell";
+/// Fallback brand name used when `INKWELL_SITE_TITLE` is not set.
+pub const SITE_NAME: &str = crate::config::DEFAULT_SITE_TITLE;
 pub const DEFAULT_SITE_URL: &str = "http://localhost";
 pub const PAGE_SIZE: i64 = 10;
+
+/// Site-level metadata threaded through every public HTML page, feed, and
+/// JSON-LD block. Construct with [`SiteMeta::from_config`] in handlers; use
+/// [`SiteMeta::defaults`] in unit tests that don't need operator overrides.
+pub struct SiteMeta<'a> {
+    /// Brand/site title (e.g. "My Garden"). Used in the header, `<title>`,
+    /// og:site_name, and the feed title.
+    pub name: &'a str,
+    /// Optional site-level description for the index page and feed subtitle.
+    pub description: Option<&'a str>,
+    /// Optional default author inserted into JSON-LD and the Atom `<author>`
+    /// element when no document-level author is available.
+    pub author: Option<&'a str>,
+    /// Normalized base URL (no trailing slash). Use instead of calling
+    /// [`normalize_site_url`] in each view.
+    pub base_url: String,
+    /// Optional URL of an extra stylesheet injected via
+    /// `<link rel="stylesheet">` after the built-in styles. Allows operators
+    /// to apply a custom theme without modifying source code.
+    pub custom_css_url: Option<&'a str>,
+}
+
+impl<'a> SiteMeta<'a> {
+    /// Build from server [`Config`]. The primary constructor for handlers.
+    pub fn from_config(config: &'a Config) -> Self {
+        Self {
+            name: &config.site_title,
+            description: config.site_description.as_deref(),
+            author: config.site_author.as_deref(),
+            base_url: normalize_site_url(config.site_url.as_deref()),
+            custom_css_url: config.custom_css_url.as_deref(),
+        }
+    }
+
+    /// Construct a minimal default instance for unit tests. Uses "Inkwell" as
+    /// the name and `http://localhost` as the base URL; no description/author.
+    pub fn defaults() -> SiteMeta<'static> {
+        SiteMeta {
+            name: SITE_NAME,
+            description: None,
+            author: None,
+            base_url: DEFAULT_SITE_URL.to_string(),
+            custom_css_url: None,
+        }
+    }
+}
 
 pub struct HeadMeta<'a> {
     pub title: &'a str,
@@ -268,7 +316,7 @@ pub(crate) const BADGE_ICONS: [&str; 3] = [
 /// the bottom and cropped on the sides via `xMidYMax slice`.
 pub(crate) const BOTANICAL_BAND: &str = r##"<svg viewBox="0 0 1440 168" preserveAspectRatio="xMidYMax slice" fill="none" aria-hidden="true"><g stroke="#7a9a7c" stroke-width="3" stroke-linecap="round"><path d="M120 168V70"/><path d="M360 168V96"/><path d="M620 168V60"/><path d="M880 168V104"/><path d="M1120 168V78"/><path d="M1320 168V110"/></g><g fill="#9cba9c"><path d="M120 96c0-22-15-34-40-34 0 20 15 34 40 34Z"/><path d="M120 78c0-19 14-30 36-30 0 18-14 30-36 30Z"/><path d="M360 118c0-18-12-28-33-28 0 16 12 28 33 28Z"/><path d="M620 92c0-24-16-38-44-38 0 22 16 38 44 38Z"/><path d="M620 70c0-20 15-32 38-32 0 19-15 32-38 32Z"/><path d="M880 128c0-16-11-26-30-26 0 15 11 26 30 26Z"/><path d="M1120 104c0-22-15-34-40-34 0 20 15 34 40 34Z"/><path d="M1120 86c0-18 13-29 35-29 0 17-13 29-35 29Z"/><path d="M1320 132c0-16-11-25-29-25 0 14 11 25 29 25Z"/></g><g fill="#8aab8c"><path d="M120 96c0-20 14-32 38-32 0 19-14 32-38 32Z" opacity=".5"/><path d="M620 92c0-22 15-36 42-36 0 21-15 36-42 36Z" opacity=".5"/><path d="M1120 104c0-20 14-32 38-32 0 19-14 32-38 32Z" opacity=".5"/></g><g><g transform="translate(240 58)"><circle r="7" fill="#c56b47"/><g fill="#e6b7a4"><circle cx="0" cy="-12" r="6"/><circle cx="0" cy="12" r="6"/><circle cx="-12" cy="0" r="6"/><circle cx="12" cy="0" r="6"/></g><circle r="5" fill="#c56b47"/></g><g transform="translate(760 44) scale(.85)"><g fill="#eac24a"><circle cx="0" cy="-12" r="6"/><circle cx="0" cy="12" r="6"/><circle cx="-12" cy="0" r="6"/><circle cx="12" cy="0" r="6"/></g><circle r="5" fill="#c56b47"/></g><g transform="translate(1240 66) scale(.9)"><g fill="#e6b7a4"><circle cx="0" cy="-12" r="6"/><circle cx="0" cy="12" r="6"/><circle cx="-12" cy="0" r="6"/><circle cx="12" cy="0" r="6"/></g><circle r="5" fill="#c56b47"/></g></g></svg>"##;
 
-pub fn render_page(meta: HeadMeta<'_>, main: &str) -> String {
+pub fn render_page(site: &SiteMeta<'_>, meta: HeadMeta<'_>, main: &str) -> String {
     let mut tags = vec![
         r#"<meta charset="utf-8" />"#.to_string(),
         r#"<meta name="viewport" content="width=device-width, initial-scale=1" />"#.to_string(),
@@ -279,12 +327,12 @@ pub fn render_page(meta: HeadMeta<'_>, main: &str) -> String {
         ),
         format!(
             r#"<link rel="alternate" type="application/atom+xml" title="{}" href="/feed.xml" />"#,
-            escape_html(SITE_NAME)
+            escape_html(site.name)
         ),
         format!(r#"<meta property="og:type" content="{}" />"#, meta.og_type),
         format!(
             r#"<meta property="og:site_name" content="{}" />"#,
-            escape_html(SITE_NAME)
+            escape_html(site.name)
         ),
         format!(
             r#"<meta property="og:title" content="{}" />"#,
@@ -326,13 +374,24 @@ pub fn render_page(meta: HeadMeta<'_>, main: &str) -> String {
         ));
     }
 
+    let extra_css = site
+        .custom_css_url
+        .map(|url| {
+            format!(
+                r#"
+    <link rel="stylesheet" href="{}" />"#,
+                escape_html(url)
+            )
+        })
+        .unwrap_or_default();
+
     format!(
         r#"<!doctype html>
 <html lang="en">
   <head>
     {}
     <link rel="preload" href="/assets/fonts/nunito.woff2" as="font" type="font/woff2" crossorigin />
-    <style>{}</style>
+    <style>{}</style>{}
   </head>
   <body class="site-body">
     <div class="site-shell">
@@ -345,7 +404,7 @@ pub fn render_page(meta: HeadMeta<'_>, main: &str) -> String {
       <main class="site-main">
 {}
       </main>
-      <footer class="site-footer">Published with Inkwell.</footer>
+      <footer class="site-footer">Published with {}.</footer>
     </div>
     <div class="botanical-band" aria-hidden="true">{}</div>
   </body>
@@ -353,10 +412,12 @@ pub fn render_page(meta: HeadMeta<'_>, main: &str) -> String {
 "#,
         tags.join("\n    "),
         STYLES,
+        extra_css,
         LEAF_ICON,
-        escape_html(SITE_NAME),
+        escape_html(site.name),
         TAG_ICON,
         main,
+        escape_html(site.name),
         BOTANICAL_BAND
     )
 }
@@ -462,6 +523,7 @@ pub fn render_tag_chips(tags: &[String]) -> String {
     format!(r#"<ul class="tags">{}</ul>"#, items)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn json_ld_document(
     title: &str,
     description: Option<&str>,
@@ -469,6 +531,8 @@ pub fn json_ld_document(
     created: &str,
     updated: &str,
     tags: &[String],
+    site_name: &str,
+    author: Option<&str>,
 ) -> serde_json::Value {
     let mut value = json!({
         "@context": "https://schema.org",
@@ -478,11 +542,14 @@ pub fn json_ld_document(
         "dateModified": updated,
         "url": url,
         "mainEntityOfPage": { "@type": "WebPage", "@id": url },
-        "publisher": { "@type": "Organization", "name": SITE_NAME },
+        "publisher": { "@type": "Organization", "name": site_name },
         "inLanguage": "en"
     });
     if let Some(description) = description {
         value["description"] = serde_json::Value::String(description.to_string());
+    }
+    if let Some(author) = author {
+        value["author"] = json!({ "@type": "Person", "name": author });
     }
     if !tags.is_empty() {
         value["keywords"] = serde_json::Value::String(tags.join(", "));

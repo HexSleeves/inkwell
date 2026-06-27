@@ -1,17 +1,14 @@
 use crate::domain::document::Document;
 
-use super::layout::{
-    HeadMeta, SITE_NAME, escape_html, normalize_site_url, render_document_list, render_page,
-};
+use super::layout::{HeadMeta, SiteMeta, escape_html, render_document_list, render_page};
 
 pub fn render_search_page(
     query: &str,
     documents: &[Document],
     page: i64,
     total_pages: i64,
-    site_url: Option<&str>,
+    site: &SiteMeta<'_>,
 ) -> String {
-    let base = normalize_site_url(site_url);
     let trimmed = query.trim();
     let form = format!(
         r#"<form class="search" action="/search" method="get" role="search">
@@ -59,15 +56,16 @@ pub fn render_search_page(
         format!("{}{}", render_document_list(documents), pager)
     };
     let title = if trimmed.is_empty() {
-        format!("Search — {}", SITE_NAME)
+        format!("Search — {}", site.name)
     } else {
-        format!("Search: {} — {}", trimmed, SITE_NAME)
+        format!("Search: {} — {}", trimmed, site.name)
     };
     render_page(
+        site,
         HeadMeta {
             title: &title,
             description: Some("Search published documents."),
-            canonical_url: format!("{}/search", base),
+            canonical_url: format!("{}/search", site.base_url),
             og_type: "website",
             json_ld: None,
             csp_nonce: None,

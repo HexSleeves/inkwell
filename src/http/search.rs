@@ -10,7 +10,7 @@ use crate::domain::document::SearchOptions;
 use crate::http::AppState;
 use crate::http::api::resolve_visibility;
 use crate::http::cache;
-use crate::views::layout::{PAGE_SIZE, derive_excerpt};
+use crate::views::layout::{PAGE_SIZE, SiteMeta, derive_excerpt};
 use crate::views::search::render_search_page;
 
 #[derive(Default, serde::Deserialize)]
@@ -112,17 +112,12 @@ pub async fn search(
         };
         Json(payload).into_response()
     } else {
+        let site = SiteMeta::from_config(&state.config);
         cache::html_response(
             &headers,
             "search-html",
             StatusCode::OK,
-            render_search_page(
-                &raw_query,
-                &docs,
-                page,
-                total_pages,
-                state.config.site_url.as_deref(),
-            ),
+            render_search_page(&raw_query, &docs, page, total_pages, &site),
         )
     }
 }

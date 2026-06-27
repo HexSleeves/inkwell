@@ -1,11 +1,8 @@
 use crate::domain::document::{Document, TagCount};
 
-use super::layout::{
-    HeadMeta, SITE_NAME, escape_html, normalize_site_url, render_document_list, render_page,
-};
+use super::layout::{HeadMeta, SiteMeta, escape_html, render_document_list, render_page};
 
-pub fn render_tag_index_page(tags: &[TagCount], site_url: Option<&str>) -> String {
-    let base = normalize_site_url(site_url);
+pub fn render_tag_index_page(tags: &[TagCount], site: &SiteMeta<'_>) -> String {
     let body = if tags.is_empty() {
         r#"<p class="empty">No tags yet.</p>"#.to_string()
     } else {
@@ -29,10 +26,11 @@ pub fn render_tag_index_page(tags: &[TagCount], site_url: Option<&str>) -> Strin
         )
     };
     render_page(
+        site,
         HeadMeta {
-            title: &format!("Tags — {}", SITE_NAME),
+            title: &format!("Tags \u{2014} {}", site.name),
             description: Some("Browse published documents by tag."),
-            canonical_url: format!("{}/tags", base),
+            canonical_url: format!("{}/tags", site.base_url),
             og_type: "website",
             json_ld: None,
             csp_nonce: None,
@@ -46,9 +44,8 @@ pub fn render_tag_page(
     documents: &[Document],
     page: i64,
     total_pages: i64,
-    site_url: Option<&str>,
+    site: &SiteMeta<'_>,
 ) -> String {
-    let base = normalize_site_url(site_url);
     let list = if documents.is_empty() {
         r#"<p class="empty">No published documents with this tag.</p>"#.to_string()
     } else {
@@ -79,19 +76,28 @@ pub fn render_tag_page(
         String::new()
     };
     let title = if page > 1 {
-        format!("{} — {} — Page {}", tag, SITE_NAME, page)
+        format!("{} \u{2014} {} \u{2014} Page {}", tag, site.name, page)
     } else {
-        format!("{} — {}", tag, SITE_NAME)
+        format!("{} \u{2014} {}", tag, site.name)
     };
     let canonical = if page > 1 {
-        format!("{}/tags/{}/page/{}", base, urlencoding::encode(tag), page)
+        format!(
+            "{}/tags/{}/page/{}",
+            site.base_url,
+            urlencoding::encode(tag),
+            page
+        )
     } else {
-        format!("{}/tags/{}", base, urlencoding::encode(tag))
+        format!("{}/tags/{}", site.base_url, urlencoding::encode(tag))
     };
     render_page(
+        site,
         HeadMeta {
             title: &title,
-            description: Some(&format!("Published documents tagged “{}”.", tag)),
+            description: Some(&format!(
+                "Published documents tagged \u{201c}{}\u{201d}.",
+                tag
+            )),
             canonical_url: canonical,
             og_type: "website",
             json_ld: None,
