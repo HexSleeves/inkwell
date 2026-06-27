@@ -12,8 +12,8 @@ use crate::config::Config;
 use crate::http::AppState;
 
 use super::{
-    admin, ai, api, assets, auth_session, feed, media, pages, rate_limit, request_id, search,
-    security_headers, sitemap, webmention,
+    admin, ai, api, assets, auth_session, feed, media, pages, preview, rate_limit, request_id,
+    search, security_headers, sitemap, webmention,
 };
 
 pub fn build_router(config: Arc<Config>, pool: sqlx::PgPool) -> Router {
@@ -72,6 +72,15 @@ pub fn build_router_with_providers(
         )
         // `get(...)` so axum answers HEAD automatically.
         .route("/media/{id}", get(media::media_serve))
+        .route(
+            "/documents/{slug}/preview-tokens",
+            any(preview::preview_tokens),
+        )
+        .route(
+            "/documents/{slug}/preview-tokens/{prefix}",
+            any(preview::revoke_preview_token),
+        )
+        .route("/documents/{slug}/preview", any(preview::preview_document))
         .route("/admin/tokens", any(admin::tokens))
         .route("/admin/tokens/prune", any(admin::prune_tokens))
         .route("/admin/tokens/{prefix}/revoke", any(admin::revoke_token))

@@ -25,7 +25,7 @@ use crate::http::extractors::{parse_json_body, parse_non_negative_int, require_o
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct DocumentEnvelope {
+pub(crate) struct DocumentEnvelope {
     id: uuid::Uuid,
     slug: String,
     title: String,
@@ -880,7 +880,7 @@ pub(crate) async fn resolve_visibility(headers: &HeaderMap, state: &AppState) ->
 }
 
 /// Require the principal to hold `scope` (admin implies all). 403 otherwise.
-fn require_scope(principal: &Principal, scope: Scope) -> Result<(), AppError> {
+pub(crate) fn require_scope(principal: &Principal, scope: Scope) -> Result<(), AppError> {
     if principal.has(scope) {
         Ok(())
     } else {

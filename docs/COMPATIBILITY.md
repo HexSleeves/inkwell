@@ -28,6 +28,8 @@ All routes in the "HTTP surface" section of the README are stable:
 | Search | `GET /search` |
 | Media | `POST /media`, `GET /media/:id` |
 | Admin | `POST /admin/tokens`, `GET /admin/tokens`, `DELETE /admin/tokens/:id` |
+| Preview tokens | `GET /documents/:slug/preview-tokens`, `POST /documents/:slug/preview-tokens`, `DELETE /documents/:slug/preview-tokens/:prefix` |
+| Preview read | `GET /documents/:slug/preview` |
 | Health | `GET /health` |
 | Public HTML | `GET /`, `GET /page/:page`, `GET /:slug`, `GET /tags`, `GET /tags/:tag`, `GET /tags/:tag/page/:page` |
 | Feeds | `GET /feed.xml`, `GET /sitemap.xml` |
