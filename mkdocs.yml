@@ -19,7 +19,6 @@ theme:
     repo: fontawesome/brands/github
   features:
     - navigation.tabs
-    - navigation.tabs.sticky
     - navigation.sections
     - navigation.top
     - navigation.footer

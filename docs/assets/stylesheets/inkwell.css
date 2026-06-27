@@ -1,6 +1,6 @@
-/* Inkwell — Botanical Soft theme for MkDocs Material
-   Palette extracted from src/views/layout.rs ("Botanical Soft").
-   Forest-green headings, warm-clay links, sage accents. */
+/* Inkwell docs theme for MkDocs Material.
+   Palette follows src/views/layout.rs ("Botanical Soft"), adapted for a
+   quieter documentation shell with readable code and navigation density. */
 
 @font-face {
   font-family: Nunito;
@@ -10,71 +10,231 @@
   src: url(../fonts/nunito.woff2) format("woff2");
 }
 
-/* ── Color overrides for Material's custom primary/accent ── */
 [data-md-color-scheme="default"] {
-  /* Primary: forest green */
-  --md-primary-fg-color:              #2F5D45;
-  --md-primary-fg-color--light:       #3d7a5c;
-  --md-primary-fg-color--dark:        #1e3d2d;
-  --md-primary-bg-color:              #ffffff;
-  --md-primary-bg-color--light:       rgba(255,255,255,0.7);
+  --inkwell-cream:                    rgb(251 250 246);
+  --inkwell-paper:                    rgb(255 255 252);
+  --inkwell-paper-alt:                rgb(246 248 243);
+  --inkwell-forest:                   rgb(47 93 69);
+  --inkwell-forest-deep:              rgb(31 61 45);
+  --inkwell-sage:                     rgb(168 192 170);
+  --inkwell-sage-soft:                rgb(231 240 231);
+  --inkwell-clay:                     rgb(188 91 56);
+  --inkwell-ink:                      rgb(45 58 51);
+  --inkwell-muted:                    rgb(104 119 109);
+  --inkwell-rule:                     rgb(216 226 216);
 
-  /* Accent: warm clay */
-  --md-accent-fg-color:               #C56B47;
-  --md-accent-fg-color--transparent:  rgba(197,107,71,0.1);
-  --md-accent-bg-color:               #ffffff;
-  --md-accent-bg-color--light:        rgba(255,255,255,0.7);
+  --md-primary-fg-color:              var(--inkwell-cream);
+  --md-primary-fg-color--light:       var(--inkwell-paper);
+  --md-primary-fg-color--dark:        var(--inkwell-sage-soft);
+  --md-primary-bg-color:              var(--inkwell-forest);
+  --md-primary-bg-color--light:       rgba(47, 93, 69, 0.72);
 
-  /* Canvas: botanical cream */
-  --md-default-bg-color:              rgb(251 250 246);
-  --md-default-bg-color--light:       rgba(251,250,246,0.7);
-  --md-default-bg-color--lighter:     rgba(251,250,246,0.3);
-  --md-default-bg-color--lightest:    rgba(251,250,246,0.12);
+  --md-accent-fg-color:               var(--inkwell-clay);
+  --md-accent-fg-color--transparent:  rgba(188, 91, 56, 0.12);
+  --md-accent-bg-color:               var(--inkwell-paper);
+  --md-accent-bg-color--light:        rgba(255, 255, 252, 0.72);
 
-  /* Text */
-  --md-default-fg-color:              rgb(54 64 58);
-  --md-default-fg-color--light:       rgba(54,64,58,0.7);
-  --md-default-fg-color--lighter:     rgba(54,64,58,0.54);
-  --md-default-fg-color--lightest:    rgba(54,64,58,0.12);
+  --md-default-bg-color:              var(--inkwell-cream);
+  --md-default-bg-color--light:       rgba(251, 250, 246, 0.72);
+  --md-default-bg-color--lighter:     rgba(251, 250, 246, 0.36);
+  --md-default-bg-color--lightest:    rgba(251, 250, 246, 0.16);
 
-  /* Code */
-  --md-code-bg-color:                 rgb(43 53 47);
-  --md-code-fg-color:                 rgb(238 242 236);
-  --md-code-hl-color:                 rgba(168,192,170,0.2);
+  --md-default-fg-color:              var(--inkwell-ink);
+  --md-default-fg-color--light:       rgba(45, 58, 51, 0.72);
+  --md-default-fg-color--lighter:     rgba(45, 58, 51, 0.56);
+  --md-default-fg-color--lightest:    rgba(45, 58, 51, 0.16);
+
+  --md-code-bg-color:                 rgb(242 247 241);
+  --md-code-fg-color:                 rgb(38 52 45);
+  --md-code-hl-color:                 rgba(168, 192, 170, 0.28);
 }
 
-/* ── Typography: Nunito throughout ─────────────────────── */
 body,
 .md-typeset,
 .md-nav__title,
 .md-header__title,
 .md-footer,
 .md-search__input {
-  font-family: Nunito, Quicksand, ui-rounded, "SF Pro Rounded", system-ui, sans-serif;
+  font-family: Nunito, ui-rounded, "SF Pro Rounded", system-ui, -apple-system,
+    "Segoe UI", sans-serif;
 }
 
-/* ── Header ─────────────────────────────────────────────── */
+body {
+  background:
+    linear-gradient(180deg, rgb(247 250 245) 0, rgb(251 250 246) 17rem);
+}
+
+.md-grid {
+  max-width: 76rem;
+}
+
 .md-header {
-  background-color: var(--md-primary-fg-color);
-  border-top: 4px solid rgb(168 192 170);
-}
-.md-header__title {
-  font-weight: 800;
-  letter-spacing: -0.01em;
+  background: rgba(251, 250, 246, 0.96);
+  border-top: 4px solid var(--inkwell-sage);
+  border-bottom: 1px solid var(--inkwell-rule);
+  box-shadow: none;
+  color: var(--inkwell-forest);
+  backdrop-filter: blur(14px);
 }
 
-/* ── Navigation ──────────────────────────────────────────── */
+.md-header__inner {
+  min-height: 3.2rem;
+}
+
+.md-header__button,
+.md-header__title,
+.md-header__topic,
+.md-source {
+  color: var(--inkwell-forest);
+}
+
+.md-header__button:hover,
+.md-source:hover {
+  color: var(--inkwell-clay);
+  opacity: 1;
+}
+
+.md-header__title {
+  color: var(--inkwell-forest);
+  font-weight: 800;
+  letter-spacing: 0;
+}
+
+.md-header__topic:first-child {
+  font-weight: 900;
+}
+
+.md-search__form {
+  height: 2.35rem;
+  background: rgb(239 245 239);
+  border: 1px solid var(--inkwell-rule);
+  border-radius: 999px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72);
+}
+
+.md-search__form:hover,
+.md-search__form:focus-within {
+  background: var(--inkwell-paper);
+  border-color: var(--inkwell-sage);
+  box-shadow: 0 6px 18px rgba(47, 93, 69, 0.08);
+}
+
+.md-search__input,
+.md-search__icon {
+  color: var(--inkwell-ink);
+}
+
+.md-search__input::placeholder {
+  color: rgba(104, 119, 109, 0.82);
+}
+
+.md-tabs {
+  background: rgba(255, 255, 252, 0.9);
+  border-bottom: 1px solid var(--inkwell-rule);
+  box-shadow: none;
+}
+
+.md-tabs__list {
+  gap: 0.15rem;
+}
+
+.md-tabs__item {
+  height: 2.75rem;
+}
+
+.md-tabs__link {
+  display: inline-flex;
+  align-items: center;
+  height: 2.75rem;
+  margin-top: 0;
+  color: var(--inkwell-muted);
+  font-weight: 750;
+  opacity: 1;
+  padding: 0 0.15rem;
+  position: relative;
+}
+
+.md-tabs__link--active,
+.md-tabs__link:hover {
+  color: var(--inkwell-forest);
+}
+
+.md-tabs__link--active::after {
+  background: var(--inkwell-clay);
+  border-radius: 999px;
+  bottom: 0;
+  content: "";
+  height: 0.16rem;
+  left: 0;
+  position: absolute;
+  right: 0;
+}
+
+.md-main {
+  background: transparent;
+}
+
+.md-main__inner {
+  margin-top: 0;
+}
+
+.md-content {
+  min-width: 0;
+  overflow-wrap: break-word;
+}
+
+.md-content__inner {
+  padding-top: 1.35rem;
+}
+
+.md-content__inner::before {
+  height: 0;
+}
+
+.md-sidebar {
+  padding-top: 1.35rem;
+}
+
+.md-nav {
+  color: var(--inkwell-muted);
+  font-size: 0.76rem;
+  line-height: 1.45;
+}
+
+.md-nav__title {
+  color: var(--inkwell-ink);
+  font-weight: 850;
+  letter-spacing: 0;
+}
+
+.md-nav__link {
+  border-radius: 0.45rem;
+  margin-top: 0.08rem;
+  min-width: 0;
+  padding: 0.18rem 0.35rem;
+}
+
 .md-nav__link--active,
 .md-nav__link:hover {
-  color: var(--md-accent-fg-color);
+  color: var(--inkwell-forest);
 }
 
-/* Sidebar active item */
 .md-nav__item .md-nav__link--active {
-  font-weight: 700;
+  background: rgba(168, 192, 170, 0.18);
+  color: var(--inkwell-forest);
+  font-weight: 850;
 }
 
-/* ── Content typography ──────────────────────────────────── */
+.md-sidebar--secondary .md-nav__link--active {
+  color: var(--inkwell-forest);
+}
+
+.md-typeset {
+  color: var(--inkwell-ink);
+  font-size: 0.82rem;
+  line-height: 1.68;
+}
+
 .md-typeset h1,
 .md-typeset h2,
 .md-typeset h3,
@@ -82,74 +242,208 @@ body,
 .md-typeset h5,
 .md-typeset h6 {
   font-weight: 800;
-  letter-spacing: -0.01em;
-  color: var(--md-primary-fg-color);
+  letter-spacing: 0;
+  color: var(--inkwell-forest);
+}
+
+.md-typeset h1 {
+  font-size: 2rem;
+  margin: 0 0 1.1rem;
+}
+
+.md-typeset h2 {
+  border-bottom: 1px solid var(--inkwell-rule);
+  font-size: 1.42rem;
+  margin-top: 2.2rem;
+  padding-bottom: 0.35rem;
+}
+
+.md-typeset h3 {
+  font-size: 1.08rem;
+  margin-top: 1.55rem;
 }
 
 .md-typeset a {
-  color: var(--md-accent-fg-color);
+  color: var(--inkwell-clay);
+  text-decoration-thickness: 0.075em;
+  text-underline-offset: 0.2em;
 }
+
 .md-typeset a:hover {
-  color: rgb(176 90 56);
+  color: rgb(159 74 45);
 }
 
-/* ── Tabs ─────────────────────────────────────────────────── */
-.md-tabs {
-  background-color: var(--md-primary-fg-color--dark);
-}
-.md-tabs__link--active,
-.md-tabs__link:hover {
-  color: rgb(168 192 170);
+.md-typeset p,
+.md-typeset ul,
+.md-typeset ol {
+  max-width: 48rem;
 }
 
-/* ── Admonitions — Botanical palette ─────────────────────── */
+.md-typeset hr {
+  border-color: var(--inkwell-rule);
+}
+
 .md-typeset .admonition,
 .md-typeset details {
-  border-left-color: var(--md-primary-fg-color);
+  background: var(--inkwell-paper);
+  border-color: var(--inkwell-rule);
+  border-left-color: var(--inkwell-forest);
+  border-radius: 0.55rem;
+  box-shadow: none;
 }
+
 .md-typeset .admonition-title,
 .md-typeset summary {
   background-color: rgba(47, 93, 69, 0.08);
 }
 
-/* ── Cards grid (used on landing page) ─────────────────────── */
 .md-typeset .grid.cards > ul > li,
 .md-typeset .grid.cards > ol > li {
-  border: 1px solid rgb(201 219 203);
-  border-radius: 0.85rem;
-  background: #ffffff;
+  background: var(--inkwell-paper);
+  border: 1px solid var(--inkwell-rule);
+  border-radius: 0.65rem;
+  box-shadow: 0 1px 0 rgba(47, 93, 69, 0.04);
 }
+
 .md-typeset .grid.cards > ul > li:hover,
 .md-typeset .grid.cards > ol > li:hover {
-  box-shadow: 0 2px 12px rgba(47, 93, 69, 0.1);
+  box-shadow: 0 8px 24px rgba(47, 93, 69, 0.09);
   border-color: rgb(168 192 170);
 }
 
-/* ── Footer ─────────────────────────────────────────────────── */
 .md-footer {
-  background-color: var(--md-primary-fg-color--dark);
+  background-color: var(--inkwell-forest-deep);
 }
+
 .md-footer-meta {
-  background-color: rgba(0,0,0,0.15);
+  background-color: rgba(0, 0, 0, 0.14);
 }
 
-/* ── Search ─────────────────────────────────────────────────── */
-.md-search__form {
-  border-radius: 0.6rem;
+.md-typeset code {
+  background: rgb(235 242 235);
+  border: 1px solid rgb(216 226 216);
+  border-radius: 0.26rem;
+  color: rgb(35 77 55);
+  overflow-wrap: anywhere;
+  padding: 0.08em 0.32em;
 }
 
-/* ── Code blocks ──────────────────────────────────────────── */
+.md-typeset pre {
+  background: var(--md-code-bg-color);
+  border: 1px solid rgb(210 224 210);
+  border-radius: 0.55rem;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.64);
+}
+
 .md-typeset pre > code {
-  font-size: 0.85rem;
+  background: transparent;
+  border: 0;
+  color: var(--md-code-fg-color);
+  font-size: 0.76rem;
+  line-height: 1.58;
+  padding: 1rem 1.1rem;
 }
 
-/* ── Tables ──────────────────────────────────────────────── */
+.highlight .c,
+.highlight .c1,
+.highlight .cm,
+.highlight .cp {
+  color: rgb(102 121 105);
+  opacity: 1;
+}
+
+.highlight .s,
+.highlight .s1,
+.highlight .s2 {
+  color: rgb(159 74 45);
+}
+
+.highlight .k,
+.highlight .kd,
+.highlight .kn {
+  color: rgb(36 91 65);
+  font-weight: 800;
+}
+
+.highlight .na,
+.highlight .nb,
+.highlight .nc,
+.highlight .nf,
+.highlight .nt {
+  color: rgb(44 91 132);
+}
+
+.md-clipboard {
+  color: var(--inkwell-muted);
+}
+
+.md-clipboard:hover {
+  color: var(--inkwell-clay);
+}
+
 .md-typeset table:not([class]) th {
-  background-color: rgb(234 241 234);
-  color: var(--md-primary-fg-color);
+  background-color: rgb(232 241 232);
+  color: var(--inkwell-forest);
+  font-weight: 850;
 }
 
-/* ── Scrollbar ──────────────────────────────────────────── */
+.md-typeset table:not([class]) {
+  background: var(--inkwell-paper);
+  border: 1px solid var(--inkwell-rule);
+  border-radius: 0.55rem;
+}
+
+.md-typeset table:not([class]) th,
+.md-typeset table:not([class]) td {
+  overflow-wrap: anywhere;
+  vertical-align: top;
+}
+
+.md-typeset .md-typeset__scrollwrap {
+  max-width: 100%;
+}
+
+.md-top {
+  background: var(--inkwell-paper);
+  border: 1px solid var(--inkwell-rule);
+  border-radius: 999px;
+  box-shadow: 0 8px 24px rgba(47, 93, 69, 0.1);
+  color: var(--inkwell-forest);
+}
+
+@media screen and (max-width: 76.2344em) {
+  .md-header {
+    background: var(--inkwell-forest);
+    color: var(--inkwell-paper);
+  }
+
+  .md-header__button,
+  .md-header__title,
+  .md-header__topic {
+    color: var(--inkwell-paper);
+  }
+
+  .md-search__form {
+    border-radius: 0.55rem;
+  }
+}
+
+@media screen and (max-width: 44.9844em) {
+  .md-typeset {
+    font-size: 0.8rem;
+  }
+
+  .md-typeset h1 {
+    font-size: 1.42rem;
+    line-height: 1.2;
+    overflow-wrap: anywhere;
+  }
+
+  .md-typeset h2 {
+    font-size: 1.18rem;
+  }
+}
+
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: rgb(201 219 203); border-radius: 3px; }
