@@ -82,6 +82,7 @@ Then read this file fully before doing anything else in this session.
 - GitHub Actions deploy workflow: `.github/workflows/docs.yml` (deploys to GitHub Pages on push to main)
 - New docs: `docs/AUTHORING.md`, `docs/SITE-CONFIGURATION.md`, `docs/adr/index.md`
 - Stale-doc fixes: BACKUP-RESTORE, RELEASE-CHECKLIST, CLOSEOUT, COMPATIBILITY, QA-MATRIX, DEPLOYMENT, API.md, openapi.yaml
+- Docs visual theme polished: quiet cream header/tabs, denser nav, readable light code blocks, and mobile overflow fixes
 
 **Known issues:**
 
