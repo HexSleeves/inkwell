@@ -446,7 +446,10 @@ fn parse_archive_year(value: &str) -> Option<i32> {
 }
 
 fn parse_archive_month(value: &str) -> Option<i32> {
-    if value.is_empty() || value.len() > 2 || !value.chars().all(|c| c.is_ascii_digit()) {
+    // Require exactly two ASCII digits so `/archive/2026/06` is the only
+    // accepted form — single-digit variants (e.g. `/archive/2026/6`) return
+    // 404, keeping the canonical URL contract tight.
+    if value.len() != 2 || !value.chars().all(|c| c.is_ascii_digit()) {
         return None;
     }
     let m: i32 = value.parse().ok()?;

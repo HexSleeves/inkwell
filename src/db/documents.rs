@@ -816,8 +816,8 @@ pub async fn list_archive_months(pool: &PgPool) -> Result<Vec<ArchiveMonth>, sql
             count(*)::bigint                                        AS count
         FROM documents
         WHERE status = 'published'
-        GROUP BY year, month
-        ORDER BY year DESC, month DESC
+        GROUP BY 1, 2
+        ORDER BY 1 DESC, 2 DESC
         "#,
     )
     .fetch_all(pool)
