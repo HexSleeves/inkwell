@@ -16,7 +16,7 @@ edges:
     condition: when working on semantic search, RAG, embeddings, or the /ask endpoint
   - target: patterns/INDEX.md
     condition: when starting a task — check the pattern index for a matching pattern file
-last_updated: 2026-06-26
+last_updated: 2026-06-27
 ---
 
 # Session Bootstrap
@@ -58,6 +58,12 @@ Then read this file fully before doing anything else in this session.
 - Shareable draft preview links (CIL-129): `POST /documents/{slug}/preview-tokens` mints a `pvw_<prefix>_<secret>` token tied to one document (admin or owner with `write` scope); `GET /documents/{slug}/preview-tokens` lists tokens; `DELETE /documents/{slug}/preview-tokens/{prefix}` revokes. `GET /documents/{slug}/preview?token=<pvw_...>` renders the draft for any bearer of a valid non-expired non-revoked token — no auth header required. Any failure returns 401 (never 404) so the draft's existence is not leaked. Normal public routes unchanged. Migration 0022 (`preview_tokens` table, ON DELETE CASCADE). Tests: `tests/preview_contract.rs`.
 - Archive navigation (CIL-132): `GET /archive` lists year/month buckets of published documents; `GET /archive/{year}/{month}` shows a paginated doc list for that month; `GET /archive/{year}/{month}/page/{page}` for additional pages. All archive pages carry canonical metadata and `Cache-Control` headers via the shared `cache::html_response` helper. Document pages now render a `<nav class="doc-nav">` prev/next bar linking to the immediately-older and immediately-newer published documents (graceful degradation — query failure omits the bar, never 500s). `/archive` added to the sitemap (`render_small_sitemap`, `render_static_sitemap`). New domain types: `ArchiveMonth`, `AdjacentDoc`. New DB fns: `list_archive_months`, `count_documents_by_month`, `list_documents_by_month`, `get_adjacent_documents`. New view module `src/views/archive.rs`. Contract tests: `tests/archive_nav_contract.rs` + inline tests in `src/views/archive.rs` and `src/http/sitemap.rs`.
 - Configurable site metadata (CIL-131): `INKWELL_SITE_TITLE` (brand/title, default "Inkwell"), `INKWELL_SITE_DESCRIPTION` (index meta + feed subtitle), `INKWELL_SITE_AUTHOR` (JSON-LD author + Atom feed author), `INKWELL_CUSTOM_CSS_URL` (extra stylesheet link). `SiteMeta<'a>` struct in `src/views/layout.rs` carries these through all public HTML surfaces (layout, index, doc, tag, search) and the Atom feed. No DB migration.
+- Project closeout and next-roadmap handoff — `docs/CLOSEOUT.md` summarizes the
+  professionalization project through CIL-136, deferred work, roadmap themes,
+  and ADR/doc references (CIL-137, PR #45).
+- Compatibility contracts — `docs/COMPATIBILITY.md` defines stable vs flexible
+  public behavior before v0.2, with `tests/wire_format_contract.rs` covering
+  key JSON/error/health route contracts (CIL-136, PR #44).
 - Request correlation IDs — `X-Request-Id` middleware: span + response header +
   error-envelope `requestId` (CIL-125).
 - Pragmatic write rate limiting — `governor` GCRA middleware on mutations + `/ask`,
