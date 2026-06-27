@@ -88,6 +88,12 @@ pub fn build_router_with_providers(
         .route("/tags", get(pages::tags_index))
         .route("/tags/{tag}", get(pages::tag_page))
         .route("/tags/{tag}/page/{page}", get(pages::tag_page_numbered))
+        .route("/archive", get(pages::archive_index))
+        .route("/archive/{year}/{month}", get(pages::archive_month))
+        .route(
+            "/archive/{year}/{month}/page/{page}",
+            get(pages::archive_month_page),
+        )
         .route("/page/{page}", get(pages::index_page))
         .route("/{slug}", get(pages::document_page))
         .route("/", get(pages::index));

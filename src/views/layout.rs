@@ -245,6 +245,28 @@ const STYLES: &str = r#"
   nav.pager { display: flex; justify-content: space-between; gap: 1rem; margin-top: 2.5rem; }
   nav.pager a { text-decoration: none; color: rgb(197 107 71); font-weight: 700; }
   nav.pager .spacer { color: transparent; }
+  nav.doc-nav {
+    display: flex; justify-content: space-between; gap: 1rem;
+    margin-top: 3rem; padding-top: 1.5rem;
+    border-top: 1px solid rgb(224 232 224 / 0.8);
+    font-size: 0.9rem;
+  }
+  nav.doc-nav a { text-decoration: none; color: rgb(197 107 71); font-weight: 700; }
+  nav.doc-nav a:hover { color: rgb(176 90 56); }
+  nav.doc-nav .spacer { color: transparent; }
+  .doc-nav-prev { text-align: left; flex: 1; }
+  .doc-nav-next { text-align: right; flex: 1; }
+  .archive-back { font-size: 0.875rem; margin-bottom: 1.5rem; }
+  .archive-back a { color: rgb(197 107 71); font-weight: 600; }
+  .archive-year { margin-bottom: 2rem; }
+  .archive-year h2 { color: rgb(47 93 69); font-size: 1.4rem; margin-bottom: 0.5rem; }
+  ul.archive-months { list-style: none; padding: 0; margin: 0; display: grid; gap: 0.4rem; }
+  ul.archive-months li { margin: 0; }
+  ul.archive-months a {
+    color: rgb(197 107 71); text-decoration: none; font-size: 0.95rem; font-weight: 600;
+  }
+  ul.archive-months a:hover { color: rgb(176 90 56); text-decoration: underline; }
+  ul.archive-months .count { color: rgb(120 132 123); font-weight: 400; }
   .empty { color: rgb(120 132 123); font-style: italic; }
   /* Bubbly header: wordmark + nav as rounded pills with a leaf/tag glyph. */
   .site-brand {

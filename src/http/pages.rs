@@ -8,6 +8,7 @@ use crate::domain::document::{DocumentStatus, ListByTagOptions, ListOptions, Sta
 use crate::http::AppState;
 use crate::http::cache;
 use crate::http::security_headers::CspNonce;
+use crate::views::archive::{render_archive_index_page, render_archive_month_page};
 use crate::views::document::{render_document_page, render_not_found_page};
 use crate::views::index::render_index_page;
 use crate::views::layout::{PAGE_SIZE, SiteMeta};
@@ -60,6 +61,22 @@ pub async fn document_page(
             // stubs). Resolution is Public, exactly like the body and the panel
             // itself: a draft target stays an unresolved stub and never leaks.
             let snippet_links = resolve_snippet_links(&state.pool, &backlinks).await;
+            // Fetch adjacent published documents for prev/next navigation using
+            // the already-fetched id/created_at, avoiding a redundant SELECT.
+            // Degrade gracefully: a query failure omits the nav rather than 500ing.
+            let (prev, next) = match documents::get_adjacent_documents(
+                &state.pool,
+                document.id,
+                document.created_at,
+            )
+            .await
+            {
+                Ok(pair) => pair,
+                Err(error) => {
+                    tracing::warn!(%slug, %error, "adjacent-doc query failed; rendering note without prev/next nav");
+                    (None, None)
+                }
+            };
             let site = SiteMeta::from_config(&state.config);
             cache::html_response(
                 &headers,
@@ -71,6 +88,8 @@ pub async fn document_page(
                     &snippet_links,
                     &site,
                     csp_nonce.as_str(),
+                    prev.as_ref(),
+                    next.as_ref(),
                 ),
             )
         }
@@ -303,11 +322,138 @@ fn error_page(state: &AppState) -> Response {
         .into_response()
 }
 
+pub async fn archive_index(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    match documents::list_archive_months(&state.pool).await {
+        Ok(months) => {
+            let site = SiteMeta::from_config(&state.config);
+            cache::html_response(
+                &headers,
+                "archive-index",
+                StatusCode::OK,
+                render_archive_index_page(&months, &site),
+            )
+        }
+        Err(_) => error_page(&state),
+    }
+}
+
+pub async fn archive_month(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((year, month)): Path<(String, String)>,
+) -> Response {
+    render_archive_month_listing(&state, &headers, year, month, 1).await
+}
+
+pub async fn archive_month_page(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((year, month, page)): Path<(String, String, String)>,
+) -> Response {
+    let Some(page) = parse_page_number(&page) else {
+        return (
+            StatusCode::NOT_FOUND,
+            Html(render_not_found_page(state.config.site_url.as_deref())),
+        )
+            .into_response();
+    };
+    render_archive_month_listing(&state, &headers, year, month, page).await
+}
+
+async fn render_archive_month_listing(
+    state: &AppState,
+    headers: &HeaderMap,
+    year_str: String,
+    month_str: String,
+    page: i64,
+) -> Response {
+    let (Some(year), Some(month)) = (
+        parse_archive_year(&year_str),
+        parse_archive_month(&month_str),
+    ) else {
+        return (
+            StatusCode::NOT_FOUND,
+            Html(render_not_found_page(state.config.site_url.as_deref())),
+        )
+            .into_response();
+    };
+
+    if page < 1 {
+        return (
+            StatusCode::NOT_FOUND,
+            Html(render_not_found_page(state.config.site_url.as_deref())),
+        )
+            .into_response();
+    }
+
+    let total = match documents::count_documents_by_month(&state.pool, year, month).await {
+        Ok(n) => n,
+        Err(_) => return error_page(state),
+    };
+
+    if total == 0 {
+        return (
+            StatusCode::NOT_FOUND,
+            Html(render_not_found_page(state.config.site_url.as_deref())),
+        )
+            .into_response();
+    }
+
+    let total_pages = std::cmp::max(1, (total + PAGE_SIZE - 1) / PAGE_SIZE);
+    if page > total_pages {
+        return (
+            StatusCode::NOT_FOUND,
+            Html(render_not_found_page(state.config.site_url.as_deref())),
+        )
+            .into_response();
+    }
+
+    let docs = match documents::list_documents_by_month(
+        &state.pool,
+        year,
+        month,
+        PAGE_SIZE as u32,
+        ((page - 1) * PAGE_SIZE) as u32,
+    )
+    .await
+    {
+        Ok(docs) => docs,
+        Err(_) => return error_page(state),
+    };
+
+    let site = SiteMeta::from_config(&state.config);
+    let cache_key = format!("archive-{year}-{month:02}");
+    cache::html_response(
+        headers,
+        &cache_key,
+        StatusCode::OK,
+        render_archive_month_page(year, month, &docs, page, total_pages, &site),
+    )
+}
+
 fn parse_page_number(value: &str) -> Option<i64> {
     if value.is_empty() || value.starts_with('0') || !value.chars().all(|ch| ch.is_ascii_digit()) {
         return None;
     }
     value.parse().ok()
+}
+
+fn parse_archive_year(value: &str) -> Option<i32> {
+    if value.len() != 4 || !value.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    value.parse().ok()
+}
+
+fn parse_archive_month(value: &str) -> Option<i32> {
+    // Require exactly two ASCII digits so `/archive/2026/06` is the only
+    // accepted form — single-digit variants (e.g. `/archive/2026/6`) return
+    // 404, keeping the canonical URL contract tight.
+    if value.len() != 2 || !value.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    let m: i32 = value.parse().ok()?;
+    if (1..=12).contains(&m) { Some(m) } else { None }
 }
 
 fn is_valid_tag(tag: &str) -> bool {

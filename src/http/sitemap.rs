@@ -167,7 +167,8 @@ fn plan_sitemap_shape(document_count: i64, tag_count: i64) -> SitemapShape {
 }
 
 fn static_url_count(tag_count: i64) -> i64 {
-    1 + if tag_count > 0 { 1 } else { 0 }
+    // home + archive + optional tags index
+    2 + if tag_count > 0 { 1 } else { 0 }
 }
 
 fn sitemap_page_count(count: i64) -> u32 {
@@ -194,6 +195,7 @@ fn published_document_page_options(page: u32) -> ListOptions {
 fn render_small_sitemap(base: &str, documents: &[Document], tags: &[TagCount]) -> String {
     let mut entries = vec![render_home_url(base, documents.first())];
     entries.extend(render_document_urls(base, documents));
+    entries.push(render_plain_url(&format!("{}/archive", escape_xml(base))));
     if !tags.is_empty() {
         entries.push(render_plain_url(&format!("{}/tags", escape_xml(base))));
         entries.extend(render_tag_urls(base, tags));
@@ -202,7 +204,10 @@ fn render_small_sitemap(base: &str, documents: &[Document], tags: &[TagCount]) -
 }
 
 fn render_static_sitemap(base: &str, has_tags: bool) -> String {
-    let mut entries = vec![render_plain_url(&format!("{}/", escape_xml(base)))];
+    let mut entries = vec![
+        render_plain_url(&format!("{}/", escape_xml(base))),
+        render_plain_url(&format!("{}/archive", escape_xml(base))),
+    ];
     if has_tags {
         entries.push(render_plain_url(&format!("{}/tags", escape_xml(base))));
     }
@@ -337,7 +342,10 @@ mod tests {
 
     #[test]
     fn sitemap_stays_single_when_total_urls_fit_within_limit() {
-        assert_eq!(plan_sitemap_shape(9_997, 1), SitemapShape::Single);
+        // static_url_count now includes home + /archive (+ optional /tags), so
+        // the single-sitemap ceiling is 3 lower than before:
+        //   9_996 docs + 1 tag + static(1 tag)=3 = 10_000 → still Single.
+        assert_eq!(plan_sitemap_shape(9_996, 1), SitemapShape::Single);
     }
 
     #[test]
@@ -373,5 +381,23 @@ mod tests {
         assert!(xml.contains("<loc>https://example.com/sitemaps/documents/1</loc>"));
         assert!(xml.contains("<loc>https://example.com/sitemaps/documents/2</loc>"));
         assert!(xml.contains("<loc>https://example.com/sitemaps/tags/1</loc>"));
+    }
+
+    #[test]
+    fn small_sitemap_includes_archive_url() {
+        let xml = render_small_sitemap("https://example.com", &[], &[]);
+        assert!(
+            xml.contains("<loc>https://example.com/archive</loc>"),
+            "small sitemap must include /archive so crawlers discover date browsing"
+        );
+    }
+
+    #[test]
+    fn static_sitemap_includes_archive_url() {
+        let xml = render_static_sitemap("https://example.com", false);
+        assert!(
+            xml.contains("<loc>https://example.com/archive</loc>"),
+            "static sitemap must include /archive"
+        );
     }
 }
