@@ -93,6 +93,10 @@ pub fn test_config(database_url: String) -> Arc<Config> {
         write_rate_limit: 0,
         // Forwarded-header trust off in tests; IP keying uses the peer address.
         trust_forwarded_headers: false,
+        site_title: inkwell::config::DEFAULT_SITE_TITLE.to_string(),
+        site_description: None,
+        site_author: None,
+        custom_css_url: None,
     })
 }
 

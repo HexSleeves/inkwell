@@ -1,14 +1,13 @@
 use crate::domain::document::Document;
 
-use super::layout::{HeadMeta, SITE_NAME, normalize_site_url, render_document_list, render_page};
+use super::layout::{HeadMeta, SiteMeta, render_document_list, render_page};
 
 pub fn render_index_page(
     documents: &[Document],
     page: i64,
     total_pages: i64,
-    site_url: Option<&str>,
+    site: &SiteMeta<'_>,
 ) -> String {
-    let base = normalize_site_url(site_url);
     let list = if documents.is_empty() {
         r#"<p class="empty">No documents published yet.</p>"#.to_string()
     } else {
@@ -39,19 +38,25 @@ pub fn render_index_page(
         String::new()
     };
     let title = if page > 1 {
-        format!("{} — Page {}", SITE_NAME, page)
+        format!("{} — Page {}", site.name, page)
     } else {
-        SITE_NAME.to_string()
+        site.name.to_string()
     };
     let canonical = if page > 1 {
-        format!("{}/page/{}", base, page)
+        format!("{}/page/{}", site.base_url, page)
     } else {
-        format!("{}/", base)
+        format!("{}/", site.base_url)
     };
+    // Use the operator-configured site description when available, else the
+    // built-in fallback so the index meta is never empty.
+    let description = site
+        .description
+        .unwrap_or("An open, API-first Markdown publishing platform.");
     render_page(
+        site,
         HeadMeta {
             title: &title,
-            description: Some("An open, API-first Markdown publishing platform."),
+            description: Some(description),
             canonical_url: canonical,
             og_type: "website",
             json_ld: None,

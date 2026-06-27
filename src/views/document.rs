@@ -5,8 +5,8 @@ use crate::domain::document::{Document, GrowthStage, timestamp};
 use crate::rendering::wikilink::render_snippet_with_links;
 
 use super::layout::{
-    BADGE_ICONS, HeadMeta, SITE_NAME, SPROUT_ICON, date_line, derive_excerpt, escape_html,
-    json_ld_document, normalize_site_url, render_page, render_tag_chips, truncate_on_char_boundary,
+    BADGE_ICONS, HeadMeta, SITE_NAME, SPROUT_ICON, SiteMeta, date_line, derive_excerpt,
+    escape_html, json_ld_document, render_page, render_tag_chips, truncate_on_char_boundary,
 };
 
 /// Longest backlink context snippet (in bytes) shown before multibyte-safe
@@ -17,11 +17,10 @@ pub fn render_document_page(
     document: &Document,
     backlinks: &[Backlink],
     snippet_links: &HashSet<String>,
-    site_url: Option<&str>,
+    site: &SiteMeta<'_>,
     csp_nonce: &str,
 ) -> String {
-    let base = normalize_site_url(site_url);
-    let url = format!("{}/{}", base, urlencoding::encode(&document.slug));
+    let url = format!("{}/{}", site.base_url, urlencoding::encode(&document.slug));
     let description = derive_excerpt(document.body_markdown(), 160);
     let created = timestamp::serialize_to_string(&document.created_at);
     let updated = timestamp::serialize_to_string(&document.updated_at);
@@ -48,27 +47,27 @@ pub fn render_document_page(
         main,
         render_backlinks_panel(backlinks, snippet_links)
     );
+    let desc = if description.is_empty() {
+        None
+    } else {
+        Some(description.as_str())
+    };
     render_page(
+        site,
         HeadMeta {
-            title: &format!("{} — {}", document.title, SITE_NAME),
-            description: if description.is_empty() {
-                None
-            } else {
-                Some(&description)
-            },
+            title: &format!("{} — {}", document.title, site.name),
+            description: desc,
             canonical_url: url.clone(),
             og_type: "article",
             json_ld: Some(json_ld_document(
                 &document.title,
-                if description.is_empty() {
-                    None
-                } else {
-                    Some(&description)
-                },
+                desc,
                 &url,
                 &created,
                 &updated,
                 &document.tags,
+                site.name,
+                site.author,
             )),
             csp_nonce: Some(csp_nonce),
         },
@@ -153,12 +152,19 @@ fn render_backlinks_panel(backlinks: &[Backlink], snippet_links: &HashSet<String
 }
 
 pub fn render_not_found_page(site_url: Option<&str>) -> String {
-    let base = normalize_site_url(site_url);
+    let site = SiteMeta {
+        name: SITE_NAME,
+        description: None,
+        author: None,
+        base_url: super::layout::normalize_site_url(site_url),
+        custom_css_url: None,
+    };
     render_page(
+        &site,
         HeadMeta {
-            title: &format!("Not found — {}", SITE_NAME),
+            title: &format!("Not found — {}", site.name),
             description: None,
-            canonical_url: format!("{}/", base),
+            canonical_url: format!("{}/", site.base_url),
             og_type: "website",
             json_ld: None,
             csp_nonce: None,

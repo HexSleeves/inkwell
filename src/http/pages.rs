@@ -10,7 +10,7 @@ use crate::http::cache;
 use crate::http::security_headers::CspNonce;
 use crate::views::document::{render_document_page, render_not_found_page};
 use crate::views::index::render_index_page;
-use crate::views::layout::PAGE_SIZE;
+use crate::views::layout::{PAGE_SIZE, SiteMeta};
 use crate::views::tags::{render_tag_index_page, render_tag_page};
 
 pub async fn index(State(state): State<AppState>, headers: HeaderMap) -> Response {
@@ -60,6 +60,7 @@ pub async fn document_page(
             // stubs). Resolution is Public, exactly like the body and the panel
             // itself: a draft target stays an unresolved stub and never leaks.
             let snippet_links = resolve_snippet_links(&state.pool, &backlinks).await;
+            let site = SiteMeta::from_config(&state.config);
             cache::html_response(
                 &headers,
                 "document",
@@ -68,7 +69,7 @@ pub async fn document_page(
                     &document,
                     &backlinks,
                     &snippet_links,
-                    state.config.site_url.as_deref(),
+                    &site,
                     csp_nonce.as_str(),
                 ),
             )
@@ -137,12 +138,15 @@ async fn resolve_snippet_links(
 
 pub async fn tags_index(State(state): State<AppState>, headers: HeaderMap) -> Response {
     match documents::list_published_tags(&state.pool).await {
-        Ok(tags) => cache::html_response(
-            &headers,
-            "tags-index",
-            StatusCode::OK,
-            render_tag_index_page(&tags, state.config.site_url.as_deref()),
-        ),
+        Ok(tags) => {
+            let site = SiteMeta::from_config(&state.config);
+            cache::html_response(
+                &headers,
+                "tags-index",
+                StatusCode::OK,
+                render_tag_index_page(&tags, &site),
+            )
+        }
         Err(_) => error_page(&state),
     }
 }
@@ -214,11 +218,12 @@ async fn render_index(state: &AppState, headers: &HeaderMap, page: i64) -> Respo
         Err(_) => return error_page(state),
     };
 
+    let site = SiteMeta::from_config(&state.config);
     cache::html_response(
         headers,
         "index",
         StatusCode::OK,
-        render_index_page(&docs, page, total_pages, state.config.site_url.as_deref()),
+        render_index_page(&docs, page, total_pages, &site),
     )
 }
 
@@ -281,17 +286,12 @@ async fn render_tag_listing(
         Err(_) => return error_page(state),
     };
 
+    let site = SiteMeta::from_config(&state.config);
     cache::html_response(
         headers,
         "tag-page",
         StatusCode::OK,
-        render_tag_page(
-            &tag,
-            &docs,
-            page,
-            total_pages,
-            state.config.site_url.as_deref(),
-        ),
+        render_tag_page(&tag, &docs, page, total_pages, &site),
     )
 }
 

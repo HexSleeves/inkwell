@@ -149,6 +149,10 @@ fn browser_login_router(pool: sqlx::PgPool) -> axum::Router {
             browser_login: true,
             write_rate_limit: 0,
             trust_forwarded_headers: false,
+            site_title: inkwell::config::DEFAULT_SITE_TITLE.to_string(),
+            site_description: None,
+            site_author: None,
+            custom_css_url: None,
         }),
         pool,
     )

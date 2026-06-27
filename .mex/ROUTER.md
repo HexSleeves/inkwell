@@ -16,7 +16,7 @@ edges:
     condition: when working on semantic search, RAG, embeddings, or the /ask endpoint
   - target: patterns/INDEX.md
     condition: when starting a task — check the pattern index for a matching pattern file
-last_updated: 2026-06-25
+last_updated: 2026-06-26
 ---
 
 # Session Bootstrap
@@ -55,6 +55,7 @@ Then read this file fully before doing anything else in this session.
 
 **Recently shipped (this run):**
 
+- Configurable site metadata (CIL-131): `INKWELL_SITE_TITLE` (brand/title, default "Inkwell"), `INKWELL_SITE_DESCRIPTION` (index meta + feed subtitle), `INKWELL_SITE_AUTHOR` (JSON-LD author + Atom feed author), `INKWELL_CUSTOM_CSS_URL` (extra stylesheet link). `SiteMeta<'a>` struct in `src/views/layout.rs` carries these through all public HTML surfaces (layout, index, doc, tag, search) and the Atom feed. No DB migration.
 - Request correlation IDs — `X-Request-Id` middleware: span + response header +
   error-envelope `requestId` (CIL-125).
 - Pragmatic write rate limiting — `governor` GCRA middleware on mutations + `/ask`,
