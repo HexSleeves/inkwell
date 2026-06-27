@@ -90,6 +90,22 @@ Railway's managed PostgreSQL does not include pgvector by default. Provision a
 **Railway Postgres** service which does include it, or use a pgvector-enabled
 external database.
 
+### Media storage
+
+Uploaded images (`POST /media`, `inkwell author upload`) are stored as `bytea`
+rows in the `media` table (migration 0019). No separate filesystem or object
+storage is required for v1 — the database is the sole store.
+
+**Capacity planning:** each file is capped at 5 MiB. Database size grows with
+the number of uploaded assets. On Railway the managed Postgres volume expands
+automatically within the plan's limits; on self-hosted installs monitor the
+Postgres data directory. A typical photo-heavy garden (hundreds of images)
+will add a few GiB; a note-only garden adds nothing.
+
+**Backup:** media blobs are included automatically in every `pg_dump` backup.
+No extra steps are needed beyond the standard runbook in
+[`docs/BACKUP-RESTORE.md`](BACKUP-RESTORE.md).
+
 ---
 
 ## Deployment Paths
@@ -304,6 +320,7 @@ Migrations live in `migrations/` and are applied in ascending numeric order by
 0019_create_media
 0020_create_sessions
 0021_create_slug_aliases
+0022_create_preview_tokens
 ```
 
 **Always run `inkwell db migrate` before `inkwell serve`.**

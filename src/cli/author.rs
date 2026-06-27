@@ -294,6 +294,7 @@ pub async fn run(command: AuthorCommand) -> Result<()> {
         AuthorCommand::Push { file, server } => cmd_push(file, server).await,
         AuthorCommand::Publish { slug, server } => cmd_publish(slug, server).await,
         AuthorCommand::Unpublish { slug, server } => cmd_unpublish(slug, server).await,
+        AuthorCommand::Upload { file, server } => cmd_upload(file, server).await,
         AuthorCommand::Token { command } => run_token(command).await,
     }
 }
@@ -434,6 +435,40 @@ async fn cmd_unpublish(slug: String, server: Option<String>) -> Result<()> {
     let summary = client.unpublish(&slug).await?;
     println!("Unpublished {} (status: {})", summary.slug, summary.status);
     Ok(())
+}
+
+/// Upload a local image file and print its stable URL + a Markdown reference.
+async fn cmd_upload(path: PathBuf, server: Option<String>) -> Result<()> {
+    let content_type = mime_from_path(&path).ok_or_else(|| {
+        anyhow!(
+            "Cannot infer content type from {path:?}. \
+             Supported extensions: .png, .jpg / .jpeg, .gif, .webp"
+        )
+    })?;
+    let data = std::fs::read(&path).with_context(|| format!("reading {path:?}"))?;
+    let client = build_client(server.as_deref())?;
+    let (_id, url) = client.upload_media(content_type, data).await?;
+    println!("Uploaded  {url}");
+    println!("Markdown: ![]({url})");
+    Ok(())
+}
+
+/// Infer the MIME type from the file extension. Only the server's allowlist is
+/// covered — anything else returns `None` and the CLI reports a clear error
+/// before touching the network.
+fn mime_from_path(path: &std::path::Path) -> Option<&'static str> {
+    match path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_lowercase())
+        .as_deref()
+    {
+        Some("png") => Some("image/png"),
+        Some("jpg" | "jpeg") => Some("image/jpeg"),
+        Some("gif") => Some("image/gif"),
+        Some("webp") => Some("image/webp"),
+        _ => None,
+    }
 }
 
 /// Build an [`InkwellClient`] from the environment-derived config plus an
