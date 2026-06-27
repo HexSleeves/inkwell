@@ -55,25 +55,25 @@ are included here for archival completeness.
 
 | Issue | PR | What shipped |
 |-------|----|-------------|
-| [CIL-125](https://linear.app/hexsleeves/issue/CIL-125) | [#35](../../compare/HEAD) | Request correlation IDs — `X-Request-Id` middleware; every log line + error envelope carries `requestId` |
-| [CIL-128](https://linear.app/hexsleeves/issue/CIL-128) | [#36](../../compare/HEAD) | GCRA write rate limiting (`governor`) — mutations + `/ask`, keyed by principal/IP, `429 + Retry-After`, `INKWELL_WRITE_RATE_LIMIT` env |
+| [CIL-125](https://linear.app/hexsleeves/issue/CIL-125) | [#35](https://github.com/HexSleeves/inkwell/pull/35) | Request correlation IDs — `X-Request-Id` middleware; every log line + error envelope carries `requestId` |
+| [CIL-128](https://linear.app/hexsleeves/issue/CIL-128) | [#36](https://github.com/HexSleeves/inkwell/pull/36) | GCRA write rate limiting (`governor`) — mutations + `/ask`, keyed by principal/IP, `429 + Retry-After`, `INKWELL_WRITE_RATE_LIMIT` env |
 
 ### Wave A — Documentation and operations
 
 | Issue | PR | Document | Purpose |
 |-------|----|----------|---------|
-| [CIL-124](https://linear.app/hexsleeves/issue/CIL-124) | [#41](../../compare/HEAD) | [`docs/DEPLOYMENT.md`](DEPLOYMENT.md) | End-to-end production deployment guide for new operators |
-| [CIL-126](https://linear.app/hexsleeves/issue/CIL-126) | [#37](../../compare/HEAD) | [`docs/BACKUP-RESTORE.md`](BACKUP-RESTORE.md) | Backup cadence, restore procedures, migration compatibility |
-| [CIL-127](https://linear.app/hexsleeves/issue/CIL-127) | [#42](../../compare/HEAD) | [`docs/RELEASES.md`](RELEASES.md) | Version scheme, bump procedure, automated release workflow |
-| [CIL-133](https://linear.app/hexsleeves/issue/CIL-133) | [#40](../../compare/HEAD) | [`docs/API.md`](API.md) + [`docs/openapi.yaml`](openapi.yaml) | Authoritative HTTP API reference; machine-readable contract |
-| [CIL-134](https://linear.app/hexsleeves/issue/CIL-134) | [#39](../../compare/HEAD) | [`docs/QA-MATRIX.md`](QA-MATRIX.md) | v0.2 QA matrix and smoke-test checklist |
-| [CIL-135](https://linear.app/hexsleeves/issue/CIL-135) | [#38](../../compare/HEAD) | [`docs/RELEASE-CHECKLIST.md`](RELEASE-CHECKLIST.md) | Pre-release gate checklist for all production deployments |
+| [CIL-124](https://linear.app/hexsleeves/issue/CIL-124) | [#41](https://github.com/HexSleeves/inkwell/pull/41) | [`docs/DEPLOYMENT.md`](DEPLOYMENT.md) | End-to-end production deployment guide for new operators |
+| [CIL-126](https://linear.app/hexsleeves/issue/CIL-126) | [#37](https://github.com/HexSleeves/inkwell/pull/37) | [`docs/BACKUP-RESTORE.md`](BACKUP-RESTORE.md) | Backup cadence, restore procedures, migration compatibility |
+| [CIL-127](https://linear.app/hexsleeves/issue/CIL-127) | [#42](https://github.com/HexSleeves/inkwell/pull/42) | [`docs/RELEASES.md`](RELEASES.md) | Version scheme, bump procedure, automated release workflow |
+| [CIL-133](https://linear.app/hexsleeves/issue/CIL-133) | [#40](https://github.com/HexSleeves/inkwell/pull/40) | [`docs/API.md`](API.md) + [`docs/openapi.yaml`](openapi.yaml) | Authoritative HTTP API reference; machine-readable contract |
+| [CIL-134](https://linear.app/hexsleeves/issue/CIL-134) | [#39](https://github.com/HexSleeves/inkwell/pull/39) | [`docs/QA-MATRIX.md`](QA-MATRIX.md) | v0.2 QA matrix and smoke-test checklist |
+| [CIL-135](https://linear.app/hexsleeves/issue/CIL-135) | [#38](https://github.com/HexSleeves/inkwell/pull/38) | [`docs/RELEASE-CHECKLIST.md`](RELEASE-CHECKLIST.md) | Pre-release gate checklist for all production deployments |
 
 ### Wave B — Compatibility contracts
 
 | Issue | PR | Merge SHA | What shipped |
 |-------|----|-----------|-------------|
-| [CIL-136](https://linear.app/hexsleeves/issue/CIL-136) | [#44](../../compare/HEAD) | `1554c72` | [`docs/COMPATIBILITY.md`](COMPATIBILITY.md) — stable vs. flexible surface declaration; contract-test suite in `tests/` covering HTTP routes, document envelope, error envelope, and rendered HTML |
+| [CIL-136](https://linear.app/hexsleeves/issue/CIL-136) | [#44](https://github.com/HexSleeves/inkwell/pull/44) | `1554c72` | [`docs/COMPATIBILITY.md`](COMPATIBILITY.md) — stable vs. flexible surface declaration; contract-test suite in `tests/` covering HTTP routes, document envelope, error envelope, and rendered HTML |
 
 ---
 
