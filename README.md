@@ -5,7 +5,7 @@ Write notes in Markdown, link them with `[[wikilinks]]`, publish through a REST
 API or CLI, and browse the resulting digital garden at a public HTML site.
 
 **Documentation site:** [hexsleeves.github.io/inkwell](https://hexsleeves.github.io/inkwell/)
-(MkDocs Material — auto-deployed from `docs/` on every push to `main`).
+(MkDocs Material — auto-deployed when docs files change on `main`).
 Local preview: `pip install -r requirements-docs.txt && mkdocs serve`.
 
 ---
@@ -17,7 +17,7 @@ Local preview: `pip install -r requirements-docs.txt && mkdocs serve`.
 | **REST API** | Full document CRUD, publish/unpublish, slug rename with 301 redirect, optimistic concurrency (`If-Match`/`ETag`) |
 | **Digital garden** | `[[wikilinks]]` + `![[embeds]]`, backlinks panel, per-note graph, whole-garden graph, growth stage (seedling/budding/evergreen) |
 | **Full-text search** | `GET /search?q=…` — Postgres `search_vector` generated column; JSON or HTML response |
-| **AI / RAG** | `GET|POST /ask` — pgvector semantic retrieval + Claude synthesis; `GET /documents/{slug}/related` for similar notes |
+| **AI / RAG** | `GET or POST /ask` — pgvector semantic retrieval + Claude synthesis; `GET /documents/{slug}/related` for similar notes |
 | **MCP server** | `inkwell mcp` — 5 tools (`search_notes`, `read_note`, `list_notes`, `create_note`, `update_note`) over stdio; auth via scoped token |
 | **Author CLI** | `inkwell author` — `new`, `push`, `publish`, `unpublish`, `upload`; `inkwell import` for bulk Markdown import |
 | **Scoped tokens** | Per-author bearer tokens (`ink_<prefix>_<secret>`); scopes: `read`, `write`, `publish`, `admin`; `inkwell author token` CLI |
@@ -131,7 +131,7 @@ Route groups:
 | **State** | `POST /documents/{slug}/publish`, `POST /documents/{slug}/unpublish` |
 | **Linked surfaces** | `GET /documents/{slug}/backlinks`, `GET /documents/{slug}/graph`, `GET /graph` |
 | **Preview tokens** | `POST/GET /documents/{slug}/preview-tokens`, `DELETE /documents/{slug}/preview-tokens/{prefix}`, `GET /documents/{slug}/preview` |
-| **AI** | `GET|POST /ask`,`GET /documents/{slug}/related` |
+| **AI** | `GET or POST /ask`, `GET /documents/{slug}/related` |
 | **Search** | `GET /search` |
 | **Media** | `POST /media`, `GET /media/{id}` |
 | **Admin tokens** | `GET/POST /admin/tokens`, `POST /admin/tokens/{prefix}/revoke`, `POST /admin/tokens/prune` |
@@ -270,7 +270,7 @@ cargo build --release --bin inkwell
 
 Browsable docs live at
 [hexsleeves.github.io/inkwell](https://hexsleeves.github.io/inkwell/)
-(MkDocs Material — deployed via GitHub Actions on every push to `main`).
+(MkDocs Material — deployed via GitHub Actions when docs files change on `main`).
 
 To preview locally:
 

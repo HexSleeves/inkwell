@@ -3,7 +3,7 @@
    Forest-green headings, warm-clay links, sage accents. */
 
 @font-face {
-  font-family: "Nunito";
+  font-family: Nunito;
   font-style: normal;
   font-weight: 200 1000;
   font-display: swap;
@@ -50,7 +50,7 @@ body,
 .md-header__title,
 .md-footer,
 .md-search__input {
-  font-family: "Nunito", "Quicksand", ui-rounded, "SF Pro Rounded", system-ui, sans-serif;
+  font-family: Nunito, Quicksand, ui-rounded, "SF Pro Rounded", system-ui, sans-serif;
 }
 
 /* ── Header ─────────────────────────────────────────────── */

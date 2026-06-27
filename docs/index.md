@@ -54,7 +54,7 @@ or CLI, and let your readers browse a fast, public digital garden.
 | **REST API** | Full document CRUD, publish/unpublish, slug rename + 301 redirect, optimistic concurrency (`If-Match`/`ETag`) |
 | **Digital garden** | `[[wikilinks]]` + `![[embeds]]`, backlinks panel, per-note and whole-garden graph, growth stage labels |
 | **Full-text search** | Postgres `search_vector` — JSON or HTML response |
-| **AI / RAG** | `GET|POST /ask` — pgvector semantic retrieval + Claude synthesis; `/documents/{slug}/related` |
+| **AI / RAG** | `GET or POST /ask` — pgvector semantic retrieval + Claude synthesis; `/documents/{slug}/related` |
 | **MCP server** | 5 tools over stdio (`search_notes`, `read_note`, `list_notes`, `create_note`, `update_note`); auth via scoped token |
 | **Author CLI** | `inkwell author new/push/publish/unpublish/upload`; `inkwell import` for bulk Markdown |
 | **Scoped tokens** | Per-author `ink_<prefix>_<secret>` tokens; `read/write/publish/admin` scopes; full write audit |
@@ -78,8 +78,10 @@ cp .env.example .env   # edit INKWELL_API_KEY
 # 2. Start everything (migrate → seed → serve)
 docker compose up
 
-# 3. Open the garden
-open http://localhost:3000
+# 3. Visit the garden in your browser
+# macOS: open http://localhost:3000
+# Linux: xdg-open http://localhost:3000
+# Windows: start http://localhost:3000
 ```
 
 See [QUICKSTART.md](QUICKSTART.md) for the full walkthrough including MCP and AI setup.

@@ -234,7 +234,7 @@ Returns the service status and database connectivity. No authentication required
 
 ---
 
-### Documents — CRUD
+### Documents — CRUD { #documents-crud }
 
 #### `GET /documents`
 
@@ -397,7 +397,7 @@ Delete a document permanently. Requires the `write` scope. Non-owners receive
 
 ---
 
-### Documents — state transitions
+### Documents — state transitions { #documents-state-transitions }
 
 #### `POST /documents/{slug}/publish`
 
@@ -434,7 +434,7 @@ stubs.
 
 ---
 
-### Documents — preview tokens
+### Documents — preview tokens { #documents-preview-tokens }
 
 Preview tokens allow sharing a rendered draft with anyone who has the token URL,
 without exposing the full API. Any failure (expired, revoked, unknown) returns
@@ -544,7 +544,7 @@ Unauthorized` — the draft's existence is not revealed to anonymous callers.
 
 ---
 
-### Documents — linked surfaces
+### Documents — linked surfaces { #documents-linked-surfaces }
 
 #### `GET /documents/{slug}/backlinks`
 
@@ -613,7 +613,7 @@ bounded cap. Visibility-filtered.
 
 ---
 
-### AI — question answering
+### AI — question answering { #ai-question-answering }
 
 #### `GET /ask?q=<query>`
 #### `POST /ask`
@@ -667,7 +667,7 @@ The status is still `200`.
 
 ---
 
-### AI — related notes
+### AI — related notes { #ai-related-notes }
 
 #### `GET /documents/{slug}/related`
 
@@ -798,7 +798,7 @@ Serve a stored media file. Public (no auth). Also responds to `HEAD`.
 
 ---
 
-### Admin — token management
+### Admin — token management { #admin-token-management }
 
 All `/admin/*` endpoints require the `admin` scope (shared `INKWELL_API_KEY`
 or a token minted with `"scopes": ["admin"]`).

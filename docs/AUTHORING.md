@@ -149,6 +149,7 @@ export INKWELL_API_URL=https://blog.example.com
 inkwell author token create --name laptop --scopes read,write,publish
 # Prints: ink_abc123_secretvalue
 # Store this — it is shown exactly once.
+export INKWELL_AUTHOR_TOKEN=ink_<prefix>_<secret>
 ```
 
 Available scopes:
@@ -190,9 +191,11 @@ the scoped token.
 Share a rendered draft with anyone who has the link, before publishing:
 
 ```bash
+export INKWELL_AUTHOR_TOKEN=ink_<prefix>_<secret>
+
 # Mint a preview token (requires write scope or admin)
 curl -X POST https://blog.example.com/documents/my-draft/preview-tokens \
-  -H "X-Api-Key: $INKWELL_API_KEY" \
+  -H "X-Api-Key: $INKWELL_AUTHOR_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{}'
 # Returns: {"token":"pvw_abc123_secret","prefix":"abc123","expiresAt":null,...}
@@ -202,11 +205,11 @@ https://blog.example.com/documents/my-draft/preview?token=pvw_abc123_secret
 
 # List tokens for this document
 curl https://blog.example.com/documents/my-draft/preview-tokens \
-  -H "X-Api-Key: $INKWELL_API_KEY"
+  -H "X-Api-Key: $INKWELL_AUTHOR_TOKEN"
 
 # Revoke a token
 curl -X DELETE https://blog.example.com/documents/my-draft/preview-tokens/abc123 \
-  -H "X-Api-Key: $INKWELL_API_KEY"
+  -H "X-Api-Key: $INKWELL_AUTHOR_TOKEN"
 ```
 
 The preview URL renders the draft as a full HTML page. Any failure (expired,
@@ -217,7 +220,7 @@ Add an expiry:
 
 ```bash
 curl -X POST .../preview-tokens \
-  -H "X-Api-Key: $INKWELL_API_KEY" \
+  -H "X-Api-Key: $INKWELL_AUTHOR_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"expiresAt":"2026-12-31T23:59:59Z"}'
 ```
