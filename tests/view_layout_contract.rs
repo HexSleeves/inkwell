@@ -151,6 +151,8 @@ fn document_page_with_tags_has_no_literal_backslash_n() {
         &std::collections::HashSet::new(),
         &site,
         "nonce123",
+        None,
+        None,
     );
     assert!(
         html.contains(r#"<ul class="tags">"#),

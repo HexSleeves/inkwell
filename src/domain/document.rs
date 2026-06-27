@@ -167,6 +167,21 @@ pub struct TagCount {
     pub count: i64,
 }
 
+/// A year/month bucket of published documents, returned by `list_archive_months`.
+#[derive(Clone, Debug, sqlx::FromRow)]
+pub struct ArchiveMonth {
+    pub year: i32,
+    pub month: i32,
+    pub count: i64,
+}
+
+/// Lightweight slug+title pair used for previous/next document navigation.
+#[derive(Clone, Debug, sqlx::FromRow)]
+pub struct AdjacentDoc {
+    pub slug: String,
+    pub title: String,
+}
+
 pub mod timestamp {
     use serde::{Deserialize, Deserializer, Serializer};
     use time::OffsetDateTime;

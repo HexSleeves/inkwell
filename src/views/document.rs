@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use crate::db::links::Backlink;
-use crate::domain::document::{Document, GrowthStage, timestamp};
+use crate::domain::document::{AdjacentDoc, Document, GrowthStage, timestamp};
 use crate::rendering::wikilink::render_snippet_with_links;
 
 use super::layout::{
@@ -19,6 +19,8 @@ pub fn render_document_page(
     snippet_links: &HashSet<String>,
     site: &SiteMeta<'_>,
     csp_nonce: &str,
+    prev: Option<&AdjacentDoc>,
+    next: Option<&AdjacentDoc>,
 ) -> String {
     let url = format!("{}/{}", site.base_url, urlencoding::encode(&document.slug));
     let description = derive_excerpt(document.body_markdown(), 160);
@@ -43,9 +45,10 @@ pub fn render_document_page(
         document.rendered_html()
     );
     let main = format!(
-        "{}{}",
+        "{}{}{}",
         main,
-        render_backlinks_panel(backlinks, snippet_links)
+        render_backlinks_panel(backlinks, snippet_links),
+        render_adjacent_nav(prev, next),
     );
     let desc = if description.is_empty() {
         None
@@ -72,6 +75,39 @@ pub fn render_document_page(
             csp_nonce: Some(csp_nonce),
         },
         &main,
+    )
+}
+
+/// Render previous/next document navigation below the note body. Either
+/// neighbour may be absent (first or last published document). Returns an
+/// empty string when both are absent so no empty box is emitted.
+fn render_adjacent_nav(prev: Option<&AdjacentDoc>, next: Option<&AdjacentDoc>) -> String {
+    if prev.is_none() && next.is_none() {
+        return String::new();
+    }
+    let prev_html = match prev {
+        Some(doc) => format!(
+            r#"<a class="doc-nav-prev" rel="prev" href="/{}">&larr; {}</a>"#,
+            urlencoding::encode(&doc.slug),
+            escape_html(&doc.title),
+        ),
+        None => r#"<span class="spacer"></span>"#.to_string(),
+    };
+    let next_html = match next {
+        Some(doc) => format!(
+            r#"<a class="doc-nav-next" rel="next" href="/{}">{} &rarr;</a>"#,
+            urlencoding::encode(&doc.slug),
+            escape_html(&doc.title),
+        ),
+        None => r#"<span class="spacer"></span>"#.to_string(),
+    };
+    format!(
+        r#"
+        <nav class="doc-nav" aria-label="Previous and next document">
+          {}
+          {}
+        </nav>"#,
+        prev_html, next_html
     )
 }
 
