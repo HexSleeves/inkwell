@@ -37,6 +37,28 @@ Removed stale TypeScript-era plan files: 002, 003, 005, 008, 009, 011, and 013.
 | 024 | Use stored chunks for related-note retrieval | bug/perf | P1 | M | none | new @fef38ad | DONE |
 | 025 | Track embedding provider provenance | bug/architecture | P2 | L | none | new @fef38ad | DONE |
 | 026 | Harden the RAG prompt boundary | security/AI correctness | P2 | M | 023 | new @fef38ad | DONE |
+| 027 | Media upload UI (deferred design) | direction | P3 | M | none | new @ca174cc | TODO |
+| 028 | Harden security headers (TraceLayer URI, HSTS, img-src colons) | security | P1 | S | none | new @0819727 | TODO |
+| 029 | Remove `style-src 'unsafe-inline'` (nonce inline styles) | security | P2 | M | 028 | new @0819727 | TODO |
+| 030 | Webmention send timeout (investigate-then-fix) | security/reliability | P3 | S | none | new @0819727 | TODO |
+| 031 | spawn_blocking for Markdown render | perf | P1 | S | none | new @0819727 | TODO |
+| 032 | DocumentSummary list query (omit body) | perf | P2 | M | none | new @0819727 | TODO |
+| 033 | Vector ANN similarity threshold | perf/AI | P2 | S | none | new @0819727 | TODO |
+| 034 | Bound + concurrentize backfill fan-out | perf | P2 | M | 031 (rec) | new @0819727 | TODO |
+| 035 | Remove dead `syntect` dependency | tech-debt | P3 | S | none | new @0819727 | TODO |
+| 036 | Extract `DOCUMENT_COLUMNS` const | tech-debt | P3 | S | none | new @0819727 | TODO |
+| 037 | Move garden.rs raw queries into `src/db/` | tech-debt | P2 | M | none | new @0819727 | TODO |
+| 038 | Dedup `Visibility` SQL predicate | tech-debt | P2 | M | none | new @0819727 | TODO |
+| 039 | Split `api.rs` god module | tech-debt | P3 | L | 036, 037 (rec) | new @0819727 | TODO |
+| 040 | Populate AGENTS.md | dx | P1 | S | none | new @0819727 | TODO |
+| 041 | Renovate Cargo grouping | dx | P3 | S | none | new @0819727 | TODO |
+| 042 | Auth/preview/If-Match security tests | tests | P1 | M | none | new @0819727 | TODO |
+| 043 | Validation + backfill contract tests | tests | P2 | M | none | new @0819727 | TODO |
+| 044 | Docs accuracy fixes (revoke route, dead var, missing endpoints) | docs | P2 | M | none | new @0819727 | TODO |
+| 045 | Rate-limit preview-read endpoint | security | P3 | S | none | new @0819727 | TODO |
+| 046 | `document_not_found` helper dedup | tech-debt | P3 | S | coord 039 | new @0819727 | TODO |
+| 047 | Spike: browser login UI + flag graduation | direction | P2 | M | none | new @0819727 | TODO |
+| 048 | Spike: write-audit history API | direction | P3 | M | none | new @0819727 | TODO |
 | 002 | Enforce coverage gate in GitHub Actions CI | dx | - | S | - | obsolete Node/Vitest coverage plan | REJECTED: remove |
 | 003 | Fix README export-surface + env-var drift | docs | - | S | - | obsolete package-export docs plan | REJECTED: remove |
 | 005 | Dedupe `escapeXml` + `normalizeSiteUrl` | tech-debt | - | S | - | fixed by Rust layout helpers | REJECTED: remove |
@@ -240,3 +262,81 @@ Considered and rejected this pass:
   available; add CI advisory scanning only if the project wants that gate.
 - **Provider error bodies in logs** - noted as a future hardening candidate, but
   no code evidence showed secrets or note bodies being logged by providers.
+
+## Deep audit 2026-06-26 @0819727
+
+Scope: read-only deep fan-out across all nine categories after the
+professionalization run (through CIL-137) — preview links, archive nav,
+configurable site metadata, media upload API/CLI, rate limiting, request IDs,
+compatibility contracts. Eight parallel category subagents; every finding that
+earned a plan was re-opened and confirmed against the cited code by the advisor.
+Skipped `target/`, dependency internals, live-browser runtime, and production
+deployment beyond the checked Docker/CI/Railway files. **No source modified** —
+plans 028–048 are the deliverable.
+
+This pass produced plans **028–048** (21 plans). Numbering is monotonic; 027
+(media-upload-ui, deferred) was added to the status table for completeness.
+
+### Vetted findings → plans
+
+| Plan | Finding | Category | Impact | Effort | Risk | Confidence | Evidence |
+|---|---|---|---|---|---|---|---|
+| 028 | TraceLayer logs the full request URI; preview `?token=pvw_…` lands in every log line | security | Anyone with log access harvests live preview tokens → reads private drafts | S | LOW | HIGH | `src/http/router.rs:131` |
+| 028 | No `Strict-Transport-Security` header | security | Session cookie / API key capturable on a transient plain-HTTP connection | S | LOW | HIGH | `src/http/security_headers.rs:37-60` |
+| 028 | CSP `img-src 'self' http https` — scheme tokens missing colons | security | Invalid scheme-source; browsers block external images in author Markdown | S | LOW | HIGH | `src/http/security_headers.rs:54` |
+| 029 | CSP `style-src 'unsafe-inline'` | security | CSS-injection / attribute-oracle latent if any `<style>` ever carries user content | M | MED | HIGH | `src/http/security_headers.rs:54` |
+| 030 | Webmention SEND path timeout unconfirmed | security/reliability | A slow/hostile target could hold a detached send task open | S | LOW | MED | `src/http/webmention_send.rs:49-63` |
+| 031 | Comrak + Ammonia render runs inline on the async runtime (no `spawn_blocking`) | perf | Large/embed-heavy writes starve Tokio workers under concurrency | S | LOW | HIGH | `src/garden.rs:57` |
+| 032 | List/index/tag/search queries SELECT full `body_markdown`+`rendered_html` | perf | ~100 KB of body shipped per 20-doc page then discarded | M | MED | HIGH | `src/db/documents.rs:55,85,466,701` |
+| 033 | Vector ANN has no minimum-similarity threshold | perf/AI | Unrelated chunks padded into RAG context — wasted tokens, worse answers | S | LOW | HIGH | `src/db/chunks.rs:183-200` |
+| 034 | `rerender_sources` backfill is sequential + uncapped | perf | A 50-inbound-link hub blocks a write for 50 serial re-renders | M | MED | HIGH | `src/garden.rs:301-307` |
+| 035 | `syntect` declared but never imported (highlight is client-side `hljs`) | tech-debt | Dead compile/binary/supply-chain cost | S | LOW | HIGH | `Cargo.toml:26`, `src/rendering/highlight.rs` |
+| 036 | Document SELECT column list repeated 15× | tech-debt | A new column needs 15 synced edits | S | LOW | HIGH | `src/db/documents.rs:55…856` |
+| 037 | `garden.rs` runs 4 raw `sqlx::query_as` calls (violates DB-layer rule) | tech-debt | Untestable without a DB; precedent for more leakage | M | LOW | HIGH | `src/garden.rs:205,214,224,310` |
+| 038 | `Visibility` 3-arm SQL predicate repeated ~16× across db/ | tech-debt | New visibility mode = 16 edits; miss one = security gap | M | MED | HIGH | `src/db/links.rs:135-162`, `src/db/chunks.rs`, `src/db/documents.rs` |
+| 039 | `api.rs` is a ~983-line god module | tech-debt | Hard reviews; inconsistent new patterns | L | MED | HIGH | `src/http/api.rs` |
+| 040 | AGENTS.md is an empty template (the "read first" anchor) | dx | New contributors/agents learn nothing from the first-loaded file | S | LOW | HIGH | `AGENTS.md:4-32` |
+| 041 | Renovate doesn't group Cargo updates | dx | ~25 deps → per-crate PR noise | S | LOW | HIGH | `renovate.json` |
+| 042 | Preview expiry/revocation/wrong-doc, HTTP If-Match, cross-author isolation untested | tests | Silent regression in core access-control with no failing test | M | LOW | HIGH | `tests/preview_contract.rs`, `tests/scoped_tokens_slice3b.rs` |
+| 043 | Write-API validation (dup slug, oversize, invalid growth, empty slug) + backfill fan-out untested | tests | Regressions in validation codes / fan-out invisible | M | LOW | HIGH | `tests/api_contract.rs`, `tests/links_contract.rs` |
+| 044 | COMPATIBILITY.md wrong revoke route; `.env.example` dead `OPENAI_API_KEY`; API.md missing preview/archive/webmention | docs | Integrators code the wrong call; features undiscoverable | M | LOW | HIGH | `docs/COMPATIBILITY.md:30`, `.env.example:72`, `docs/API.md` |
+| 045 | Preview-read GET not rate-limited | security (defense-in-depth) | Unlimited probing of a known prefix (256-bit secret already infeasible) | S | LOW | MED | `src/http/rate_limit.rs:158-163` |
+| 046 | `NotFound("No document with slug …")` repeated 5× | tech-debt | Message drifts across handlers | S | LOW | HIGH | `src/http/api.rs:257,311,338,378,519` |
+| 047 | Browser login backend complete but no login page; flag has no graduation plan | direction | Blocks media-upload UI + admin UI; `INKWELL_BROWSER_LOGIN` is flag debt | M | LOW | HIGH | `src/http/auth_session.rs`, `src/http/router.rs:113`, migration 0020 |
+| 048 | `write_audit` trail captured + indexed but never readable | direction | Authors can't see note history / recover from deletes | M | LOW | HIGH | `migrations/0014_create_write_audit.sql`, `src/db/audit.rs` |
+
+### Recommended execution order
+
+1. **P1 quick wins (S):** 028 (security headers), 040 (AGENTS.md), 031 (spawn_blocking), 035 (remove syntect).
+2. **P1 tests:** 042 (auth/preview/If-Match) — these can reveal real bugs; run early.
+3. **P2:** 029 (after 028), 032, 033, 034 (after 031 recommended), 037, 038, 043, 044, 047.
+4. **P3:** 030, 036, 041, 045, 046, 048, then 039 (after 036+037).
+
+### Dependency notes
+
+- **029 depends on 028** — 028 fixes the `img-src` colons and adds HSTS in the same CSP/header file; 029 then swaps `style-src 'unsafe-inline'` for a nonce. Doing 028 first avoids two edits racing in `security_headers.rs`.
+- **034 recommended after 031** — both touch `garden.rs` render path; landing `spawn_blocking` first means the concurrent backfill wraps an already-correct render step.
+- **039 recommended after 036 + 037** — splitting `api.rs` is lower-conflict once the column const (036) and garden query extraction (037) have settled; 046 (`document_not_found`) should land before or be folded into 039 since 039 moves those NotFound sites.
+- **043's backfill test** locks in correctness that **034** must preserve — land 043 before/with 034 if both are selected.
+- **042's cross-author isolation test** guards the invariant that **038** and **039** refactor — keep it green through both.
+- **048 (history endpoint)** reuses ownership gating from `api.rs`; if **039** lands first, target the new module. If it becomes a stable surface, coordinate its docs with **044**.
+
+### Considered and rejected this pass (so they are not re-audited)
+
+- **SQLx offline cache / `SQLX_OFFLINE` for CI** (DX agents' top finding) — REJECTED, false premise. The repo uses **zero** compile-time `sqlx::query!`/`query_as!` macros (`grep` confirms); all queries are runtime turbofish / `QueryBuilder`. So `cargo check`/`clippy`/`build-release` need no DATABASE_URL — and CI's `fmt`/`clippy`/`build-release`/`test-fast` jobs already run with no Postgres service (`.github/workflows/ci.yml`). There is nothing to prepare.
+- **Webmention SSRF (unfiltered source fetch)** — REJECTED. The receive path validates `source` through `crate::federation::ssrf::validate_public_url` and fetches via the SSRF-guarded `federation::fetch` (scheme allowlist, private/loopback/link-local IP block, DNS pinning, redirect re-validation, size + 10 s timeout cap). Verified at `src/http/webmention.rs:27,49`.
+- **BM25 / FTS recall upgrade (replace ILIKE)** — REJECTED as already shipped. Search uses `websearch_to_tsquery('english', …)` against the `search_vector` generated column with `ts_rank` ordering (`src/db/documents.rs:572-618`); ILIKE is gone. TODOS.md item is stale.
+- **Session cookie missing `SameSite`** — REJECTED. The cookie is already `HttpOnly; Secure; SameSite=Strict` (`src/http/auth_session.rs:131`).
+- **`garden_graph` / `/graph` unbounded** — REJECTED. Capped at `MAX_GRAPH_NODES=500`, `MAX_GRAPH_EDGES=2000`, `MAX_GRAPH_DEPTH=1` (`src/db/links.rs:390-552`).
+- **Missing GIN index on `tags`** — REJECTED. `migrations/0003` already creates `documents_tags_idx USING gin (tags)`.
+- **No domain orchestration layer between handlers and db/** — REJECTED as by-design; handlers calling `src/db/` directly is the documented convention.
+- **Slug collisions return 500** — REJECTED. `map_duplicate_slug` maps the unique violation (23505) to `AppError::Conflict` → 409 (`src/db/documents.rs`). (A *test* for it is still missing → folded into plan 043.)
+- **Slug shadows `/admin` routes** — REJECTED. Axum static routes outrank the dynamic `/{slug}`; no evidence of a bypass.
+- **`tests/common` blanket `#![allow(dead_code)]`** — NOTED, not planned. It is justified (shared helpers used by a subset of test binaries) and documented in a comment at `tests/common/mod.rs:1-3`.
+- **`update_document` cyclomatic complexity** — NOTED, not separately planned. Real, but it overlaps the 039 split and the patch-parse extraction is better done within that restructuring than as a standalone churny refactor.
+- **`deny.toml` license list too restrictive / no `cargo deny` CI job** — NOTED, low signal. `security.yml` exists; add an advisories gate only if the team wants it. No standalone plan.
+- **Preview expiry `<` vs `<=` boundary; `hard_split` UTF-8 off-by-a-few; ETag `"0"` fallback; unknown-scope `filter_map` drop** — NOTED, not planned. All MED/LOW confidence, sub-second or impossible-condition edge cases or intentional graceful degradation; not worth churn.
+
+Verification this pass: read-only `grep`/`git`/file reads; no build run by the
+advisor (and none needed — see the SQLx rejection above). Trust the live code
+over plan excerpts and run each plan's drift check (`@0819727`) first.
