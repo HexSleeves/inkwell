@@ -16,7 +16,7 @@ edges:
     condition: when working on semantic search, RAG, embeddings, or the /ask endpoint
   - target: patterns/INDEX.md
     condition: when starting a task — check the pattern index for a matching pattern file
-last_updated: 2026-06-27
+last_updated: 2026-06-26
 ---
 
 # Session Bootstrap
@@ -49,7 +49,7 @@ Then read this file fully before doing anything else in this session.
 **Not yet built:**
 
 - Media upload UI — file-picker / drag-drop page that POSTs to `/media` and inserts
-  the returned URL (API shipped in #28; UI deferred — see `plans/027-media-upload-ui.md`)
+  the returned URL (API + CLI shipped in CIL-130; UI deferred — see `plans/027-media-upload-ui.md`)
 - Browser auth/login UI — the session backend shipped flag-gated (#29, ADR 0010,
   `INKWELL_BROWSER_LOGIN` default off); the actual login HTML page is still deferred
 
@@ -65,7 +65,7 @@ Then read this file fully before doing anything else in this session.
   429 + Retry-After; reads/public site unthrottled (CIL-128).
 - Slug rename + 301 alias redirect — mutable slug, owner-enforced, no draft leak
   (ADR 0011, migration 0021, PR #31).
-- Media upload/serve API — `POST /media` + `GET /media/{id}` (PR #28).
+- Media upload/serve API — `POST /media` + `GET /media/{id}` (PR #28); `inkwell author upload <file>` CLI command (CIL-130). Storage: PostgreSQL `bytea`, no external store, DB-level MIME+size constraints. Deployment/backup docs updated.
 - Owner-aware draft reads — slice 3b, completes ADR 0009 (PR #30).
 - Flag-gated browser session login — ADR 0010, default off (PR #29).
 

@@ -83,6 +83,17 @@ pub enum AuthorCommand {
         #[arg(long)]
         server: Option<String>,
     },
+    /// Upload a local image file and print the stable `/media/{id}` URL.
+    ///
+    /// The MIME type is inferred from the file extension (.png, .jpg/.jpeg,
+    /// .gif, .webp). The returned URL can be embedded in Markdown as
+    /// `![alt text](<url>)`.
+    Upload {
+        /// Path to the local image file to upload.
+        file: PathBuf,
+        #[arg(long)]
+        server: Option<String>,
+    },
     /// Manage scoped author tokens (admin only; uses INKWELL_API_KEY).
     Token {
         #[command(subcommand)]

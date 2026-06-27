@@ -265,7 +265,7 @@ and idempotent (already-applied ones are skipped).
   ```
   The highest `version` in the table should match the highest numbered file in
   `migrations/`. As of this writing, the latest migration is
-  `0021_create_slug_aliases.sql`.
+  `0022_create_preview_tokens.sql`.
 
 - **pgvector column:** Migration 0009 adds `note_chunks.embedding vector(1024)`.
   If `pg_restore` fails on this column, the pgvector extension was not installed
@@ -275,6 +275,11 @@ and idempotent (already-applied ones are skipped).
   A backup from before 0017 may contain rows with `NULL` owner_id. Migration 0017
   backfills these to the bootstrap admin ID — running `inkwell db migrate` after
   restore handles this automatically.
+
+- **Media blobs:** Migration 0019 creates the `media` table which stores image
+  bytes as `bytea`. These blobs are included automatically in `pg_dump` output —
+  no separate backup step is needed. Large media collections will increase dump
+  file size proportionally (each file up to 5 MiB).
 
 ---
 

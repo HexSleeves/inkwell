@@ -375,6 +375,44 @@ impl InkwellClient {
         Ok(notes)
     }
 
+    /// Upload raw image bytes and return `(id, url)` where `url` is the stable
+    /// public path (`/media/{id}`). `content_type` must be one of the server's
+    /// allowlisted MIME types (`image/png`, `image/jpeg`, `image/gif`,
+    /// `image/webp`); anything else returns a 400 from the server.
+    pub async fn upload_media(
+        &self,
+        content_type: &str,
+        data: Vec<u8>,
+    ) -> Result<(String, String)> {
+        let resp = self
+            .http
+            .post(self.url("/media"))
+            .header("x-api-key", &self.api_key)
+            .header("content-type", content_type)
+            .body(data)
+            .send()
+            .await
+            .with_context(|| format!("uploading media at {}", self.base_url))?;
+        match resp.status() {
+            StatusCode::CREATED => {
+                let json: serde_json::Value = resp
+                    .json()
+                    .await
+                    .context("decoding media upload response")?;
+                let id = json["id"]
+                    .as_str()
+                    .ok_or_else(|| anyhow!("media response missing \"id\""))?
+                    .to_string();
+                let url = json["url"]
+                    .as_str()
+                    .ok_or_else(|| anyhow!("media response missing \"url\""))?
+                    .to_string();
+                Ok((id, url))
+            }
+            status => Err(error_for(status, resp).await),
+        }
+    }
+
     /// Create a note, returning its summary (slug, status, version).
     pub async fn create_note(&self, doc: &DocumentInput) -> Result<DocumentSummary> {
         enforce_body_limit(&doc.body)?;
