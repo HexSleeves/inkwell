@@ -20,6 +20,11 @@ use uuid::Uuid;
 /// so anonymous and shared-key requests never pay a token lookup.
 pub const TOKEN_PREFIX: &str = "ink_";
 
+/// Marker that identifies a preview token on the wire and in storage (CIL-129).
+/// Distinct from `ink_` so the auth layer can quickly skip the preview-token DB
+/// path for all non-preview requests.
+pub const PREVIEW_TOKEN_PREFIX: &str = "pvw_";
+
 /// Hex length of a `prefix` (half a UUID's 32 hex chars). 48 bits is ample for a
 /// collision-resistant *handle* — it is not a secret, and the DB `UNIQUE`
 /// constraint is the real guarantee; mint retries on the astronomically rare clash.
@@ -57,6 +62,34 @@ pub fn generate() -> GeneratedToken {
 /// is not a well-formed `ink_<prefix>_<secret>` (empty prefix or secret fails).
 pub fn parse_prefix(token: &str) -> Option<&str> {
     let rest = token.strip_prefix(TOKEN_PREFIX)?;
+    let (prefix, secret) = rest.split_once('_')?;
+    if prefix.is_empty() || secret.is_empty() {
+        return None;
+    }
+    Some(prefix)
+}
+
+/// Mint a new preview token (`pvw_<prefix>_<secret>`, CIL-129).
+///
+/// Same format and entropy as [`generate`] but with a distinct `pvw_` wire
+/// prefix so the handler can distinguish preview tokens from scoped API tokens
+/// without a DB lookup.
+pub fn generate_preview() -> GeneratedToken {
+    let prefix = random_hex()[..PREFIX_HEX_LEN].to_string();
+    let secret = format!("{}{}", random_hex(), random_hex());
+    let token = format!("{PREVIEW_TOKEN_PREFIX}{prefix}_{secret}");
+    let token_hash = sha256_hex(&token);
+    GeneratedToken {
+        token,
+        prefix,
+        token_hash,
+    }
+}
+
+/// Extract the lookup `prefix` from a presented preview token, or `None` when
+/// the value is not a well-formed `pvw_<prefix>_<secret>`.
+pub fn parse_preview_prefix(token: &str) -> Option<&str> {
+    let rest = token.strip_prefix(PREVIEW_TOKEN_PREFIX)?;
     let (prefix, secret) = rest.split_once('_')?;
     if prefix.is_empty() || secret.is_empty() {
         return None;
