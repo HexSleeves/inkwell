@@ -74,6 +74,7 @@ body {
   border-bottom: 1px solid var(--inkwell-rule);
   box-shadow: none;
   color: var(--inkwell-forest);
+  -webkit-backdrop-filter: blur(14px);
   backdrop-filter: blur(14px);
 }
 
