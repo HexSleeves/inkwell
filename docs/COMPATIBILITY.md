@@ -32,6 +32,7 @@ All routes in the "HTTP surface" section of the README are stable:
 | Preview read | `GET /documents/:slug/preview` |
 | Health | `GET /health` |
 | Public HTML | `GET /`, `GET /page/:page`, `GET /:slug`, `GET /tags`, `GET /tags/:tag`, `GET /tags/:tag/page/:page` |
+| Archive | `GET /archive`, `GET /archive/:year/:month`, `GET /archive/:year/:month/page/:page` |
 | Feeds | `GET /feed.xml`, `GET /sitemap.xml` |
 | Webmention | `POST /webmention` |
 

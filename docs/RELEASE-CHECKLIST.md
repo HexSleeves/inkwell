@@ -67,7 +67,7 @@ strip it.
 ## Phase 2 — Migration and backup checks
 
 > The database backup and restore procedure is documented in
-> `docs/DB-BACKUP-RUNBOOK.md` (CIL-126). Read it before proceeding.
+> `docs/BACKUP-RESTORE.md` (CIL-126). Read it before proceeding.
 
 ### Verify pending migrations
 
@@ -88,7 +88,7 @@ this release. Each migration must be:
 ### Pre-deploy database backup
 
 Take a backup of production **before** triggering the deploy, using the procedure
-in `docs/DB-BACKUP-RUNBOOK.md`. Record the backup location and timestamp here:
+in `docs/BACKUP-RESTORE.md`. Record the backup location and timestamp here:
 
 ```
 Backup taken: <timestamp>
@@ -103,8 +103,8 @@ confirm the most recent backup is no older than 24 hours before deploying.
 
 ## Phase 3 — Docs review and API compatibility checks
 
-> The API reference is documented in `docs/API-REFERENCE.md` (CIL-133).
-> Breaking-change contracts are tracked in `docs/API-CONTRACTS.md` (CIL-136).
+> The API reference is documented in `docs/API.md` (CIL-133).
+> Breaking-change contracts are tracked in `docs/COMPATIBILITY.md` (CIL-136).
 
 ### Docs review
 
@@ -126,7 +126,7 @@ git diff <prev-tag>..HEAD -- src/http/
 For each changed endpoint, verify:
 
 - No change to a documented request/response shape without a version bump or
-  migration path (check `docs/API-CONTRACTS.md` when available).
+  migration path (check `docs/COMPATIBILITY.md` for stable contracts).
 - New optional fields are additive (existing clients ignore unknown JSON keys).
 - Removed fields or changed status codes are called out explicitly in release notes.
 - Auth requirements are unchanged or made strictly more permissive (never
@@ -254,7 +254,7 @@ railway redeploy <previous-deployment-id>
 
 Railway runs `inkwell db migrate` on each deploy. If the new migrations are not
 backwards-compatible, a rollback requires a database restore — see
-`docs/DB-BACKUP-RUNBOOK.md`.
+`docs/BACKUP-RESTORE.md`.
 
 ### Docker Compose (staging / self-hosted)
 
@@ -271,7 +271,7 @@ backup taken in Phase 2 before bringing up the old binary.
 
 ### Database restore
 
-Follow `docs/DB-BACKUP-RUNBOOK.md` exactly. Do not attempt a live migration rollback
+Follow `docs/BACKUP-RESTORE.md` exactly. Do not attempt a live migration rollback
 by hand-editing applied records in the `_sqlx_migrations` table — restore from backup
 instead.
 

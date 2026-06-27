@@ -1286,11 +1286,303 @@ paths:
               schema:
                 type: string
 
+  /documents/{slug}/preview-tokens:
+    parameters:
+      - in: path
+        name: slug
+        required: true
+        schema:
+          type: string
+
+    post:
+      summary: Mint a preview token for a draft document
+      operationId: createPreviewToken
+      tags: [Preview]
+      security:
+        - ApiKey: []
+      description: |
+        Mints a `pvw_<prefix>_<secret>` token tied to this document. The token
+        allows anonymous rendering of the draft via `GET /documents/{slug}/preview`.
+        Requires admin scope or document ownership with `write` scope.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                expiresAt:
+                  type: string
+                  format: date-time
+                  nullable: true
+                  description: Optional expiry in ISO 8601 UTC. Omit for a non-expiring token.
+            example: {}
+      responses:
+        "201":
+          description: Preview token created. The `token` secret is shown exactly once.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [token, prefix, slug, createdAt]
+                properties:
+                  token:
+                    type: string
+                    description: Full secret. Shown exactly once; store securely.
+                    example: "pvw_abc123_secretvalue"
+                  prefix:
+                    type: string
+                    example: "abc123"
+                  slug:
+                    type: string
+                    example: "my-draft"
+                  expiresAt:
+                    type: string
+                    format: date-time
+                    nullable: true
+                  createdAt:
+                    type: string
+                    format: date-time
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+    get:
+      summary: List preview tokens for a document
+      operationId: listPreviewTokens
+      tags: [Preview]
+      security:
+        - ApiKey: []
+      description: Lists all non-revoked preview tokens. Secrets are never returned.
+      responses:
+        "200":
+          description: Preview token metadata list.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [tokens]
+                properties:
+                  tokens:
+                    type: array
+                    items:
+                      type: object
+                      required: [prefix, slug, createdAt]
+                      properties:
+                        prefix:
+                          type: string
+                        slug:
+                          type: string
+                        expiresAt:
+                          type: string
+                          format: date-time
+                          nullable: true
+                        createdAt:
+                          type: string
+                          format: date-time
+                        revokedAt:
+                          type: string
+                          format: date-time
+                          nullable: true
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /documents/{slug}/preview-tokens/{prefix}:
+    delete:
+      summary: Revoke a preview token
+      operationId: revokePreviewToken
+      tags: [Preview]
+      security:
+        - ApiKey: []
+      parameters:
+        - in: path
+          name: slug
+          required: true
+          schema:
+            type: string
+        - in: path
+          name: prefix
+          required: true
+          schema:
+            type: string
+          example: "abc123"
+      responses:
+        "204":
+          description: Token revoked.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /documents/{slug}/preview:
+    get:
+      summary: Render a draft via a preview token (anonymous)
+      operationId: previewDocument
+      tags: [Preview]
+      description: |
+        Renders the draft document as HTML for any bearer of a valid, non-expired,
+        non-revoked preview token. No `X-Api-Key` header required. Any failure
+        (missing/invalid/expired/revoked token, unknown document) returns 401 — the
+        draft's existence is not leaked.
+      parameters:
+        - in: path
+          name: slug
+          required: true
+          schema:
+            type: string
+        - in: query
+          name: token
+          required: true
+          schema:
+            type: string
+          example: "pvw_abc123_secretvalue"
+          description: The full preview token value.
+      responses:
+        "200":
+          description: Draft rendered as HTML.
+          content:
+            text/html:
+              schema:
+                type: string
+        "401":
+          description: Token missing, invalid, expired, revoked, or document not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /webmention:
+    post:
+      summary: Receive a Webmention
+      operationId: receiveWebmention
+      tags: [Public]
+      description: |
+        Accepts an inbound Webmention from an external source. Always enabled
+        regardless of `INKWELL_WEBMENTION_SEND`. Validated per the W3C
+        Webmention specification.
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [source, target]
+              properties:
+                source:
+                  type: string
+                  format: uri
+                  description: URL of the linking page.
+                target:
+                  type: string
+                  format: uri
+                  description: URL of the mentioned page on this site.
+      responses:
+        "202":
+          description: Webmention accepted for processing.
+        "400":
+          description: Invalid source or target URL.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /archive:
+    get:
+      summary: Archive index — year/month buckets
+      operationId: archiveIndex
+      tags: [Public]
+      description: |
+        Lists all year/month buckets containing at least one published document,
+        ordered newest first. Included in the sitemap.
+      responses:
+        "200":
+          description: HTML archive index page.
+          content:
+            text/html:
+              schema:
+                type: string
+
+  /archive/{year}/{month}:
+    get:
+      summary: Monthly archive page
+      operationId: archiveMonth
+      tags: [Public]
+      parameters:
+        - in: path
+          name: year
+          required: true
+          schema:
+            type: integer
+          example: 2026
+        - in: path
+          name: month
+          required: true
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 12
+          example: 1
+      responses:
+        "200":
+          description: HTML page listing published documents for that month.
+          content:
+            text/html:
+              schema:
+                type: string
+        "404":
+          description: No documents exist for this month.
+
+  /archive/{year}/{month}/page/{page}:
+    get:
+      summary: Paginated monthly archive
+      operationId: archiveMonthPage
+      tags: [Public]
+      parameters:
+        - in: path
+          name: year
+          required: true
+          schema:
+            type: integer
+        - in: path
+          name: month
+          required: true
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 12
+        - in: path
+          name: page
+          required: true
+          schema:
+            type: integer
+            minimum: 1
+          example: 2
+      responses:
+        "200":
+          description: HTML page for the given archive page.
+          content:
+            text/html:
+              schema:
+                type: string
+        "404":
+          description: Page number out of range.
+
 tags:
   - name: Meta
     description: Health and service status
   - name: Documents
     description: Document CRUD, publish/unpublish, backlinks, and graph
+  - name: Preview
+    description: Draft preview tokens and anonymous preview rendering
   - name: AI
     description: Semantic question answering and related-note retrieval
   - name: Search
@@ -1300,4 +1592,4 @@ tags:
   - name: Admin
     description: Token management (admin scope required)
   - name: Public
-    description: Public XML feeds and sitemaps
+    description: Public HTML pages, XML feeds, sitemaps, and Webmention receiving

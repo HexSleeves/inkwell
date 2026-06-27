@@ -43,6 +43,10 @@ production without reading source code. For the one-command local demo, see
 | `INKWELL_WEBMENTION_SEND` | `false` | Set to `true` to send outbound Webmentions when a published note links to an external page. Receiving Webmentions (`POST /webmention`) is always on regardless of this setting. |
 | `INKWELL_BROWSER_LOGIN` | `false` | Set to `true` to enable browser session login (`/auth/login`, `/auth/logout`). Off by default; when off the routes return 404 and no cookie is ever consulted. See ADR 0010. |
 | `INKWELL_LLM_MODEL` | `claude-sonnet-4-6` | Claude model used for `/ask` synthesis. Change only if you need to pin a specific model version. |
+| `INKWELL_SITE_TITLE` | `Inkwell` | Brand name shown in the site header, `<title>`, Open Graph `og:site_name`, and the Atom feed title. |
+| `INKWELL_SITE_DESCRIPTION` | _(none)_ | Site-level description used on the index page `<meta name="description">` and as the Atom feed subtitle. |
+| `INKWELL_SITE_AUTHOR` | _(none)_ | Default author name injected into the Atom `<author>` element and JSON-LD `author` field when no per-document author is available. |
+| `INKWELL_CUSTOM_CSS_URL` | _(none)_ | URL of an extra stylesheet injected via `<link rel="stylesheet">` on every public HTML page. Allows custom branding without modifying source code. May be a relative or absolute URL. |
 
 ### Optional — AI / semantic layer
 

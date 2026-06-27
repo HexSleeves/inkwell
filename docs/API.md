@@ -17,17 +17,19 @@ read the source code or tests to integrate.
 - [Document object](#document-object)
 - [Endpoints](#endpoints)
   - [Health](#health)
-  - [Documents — CRUD](#documents--crud)
-  - [Documents — state transitions](#documents--state-transitions)
-  - [Documents — linked surfaces](#documents--linked-surfaces)
+  - [Documents — CRUD](#documents-crud)
+  - [Documents — state transitions](#documents-state-transitions)
+  - [Documents — preview tokens](#documents-preview-tokens)
+  - [Documents — linked surfaces](#documents-linked-surfaces)
   - [Garden graph](#garden-graph)
-  - [AI — question answering](#ai--question-answering)
-  - [AI — related notes](#ai--related-notes)
+  - [AI — question answering](#ai-question-answering)
+  - [AI — related notes](#ai-related-notes)
   - [Search](#search)
   - [Media](#media)
-  - [Admin — token management](#admin--token-management)
+  - [Admin — token management](#admin-token-management)
   - [Feed and sitemaps](#feed-and-sitemaps)
 - [Public HTML routes](#public-html-routes)
+  - [Archive navigation](#archive-navigation)
 
 ---
 
@@ -232,7 +234,7 @@ Returns the service status and database connectivity. No authentication required
 
 ---
 
-### Documents — CRUD
+### Documents — CRUD { #documents-crud }
 
 #### `GET /documents`
 
@@ -395,7 +397,7 @@ Delete a document permanently. Requires the `write` scope. Non-owners receive
 
 ---
 
-### Documents — state transitions
+### Documents — state transitions { #documents-state-transitions }
 
 #### `POST /documents/{slug}/publish`
 
@@ -432,7 +434,117 @@ stubs.
 
 ---
 
-### Documents — linked surfaces
+### Documents — preview tokens { #documents-preview-tokens }
+
+Preview tokens allow sharing a rendered draft with anyone who has the token URL,
+without exposing the full API. Any failure (expired, revoked, unknown) returns
+`401` — the draft's existence is never leaked.
+
+Token format: `pvw_<prefix>_<secret>`. Migration 0022 (`preview_tokens` table).
+
+---
+
+#### `POST /documents/{slug}/preview-tokens`
+
+Mint a new preview token tied to this document. Requires the `admin` scope or
+ownership with the `write` scope.
+
+**Request body:** empty (`{}`) or omitted. Optional fields:
+
+```json
+{ "expiresAt": "2026-12-31T23:59:59Z" }
+```
+
+| Field | Required | Notes |
+|-------|----------|-------|
+| `expiresAt` | No | ISO 8601 UTC expiry. Omit for a non-expiring token. |
+
+**Response `201 Created`:**
+
+```json
+{
+  "token": "pvw_abc123_secretvalue",
+  "prefix": "abc123",
+  "slug": "my-draft",
+  "expiresAt": null,
+  "createdAt": "2026-06-27T10:00:00Z"
+}
+```
+
+Store the `token` value — the secret is shown exactly once. Use the `prefix` to
+list or revoke.
+
+**Errors:**
+
+| Status | Cause |
+|--------|-------|
+| `401` | Missing or invalid `X-Api-Key` |
+| `403` | Token lacks required scope |
+| `404` | Document not found or not visible to caller |
+
+---
+
+#### `GET /documents/{slug}/preview-tokens`
+
+List all non-revoked preview tokens for this document. Secrets are never returned.
+
+**Response `200 OK`:**
+
+```json
+{
+  "tokens": [
+    {
+      "prefix": "abc123",
+      "slug": "my-draft",
+      "expiresAt": null,
+      "createdAt": "2026-06-27T10:00:00Z",
+      "revokedAt": null
+    }
+  ]
+}
+```
+
+**Errors:** same as mint (401/403/404).
+
+---
+
+#### `DELETE /documents/{slug}/preview-tokens/{prefix}`
+
+Revoke a preview token by its prefix. Revoked tokens return `401` immediately on
+any preview attempt.
+
+**Response `204 No Content`:** no body.
+
+**Errors:**
+
+| Status | Cause |
+|--------|-------|
+| `401` | Missing or invalid `X-Api-Key` |
+| `403` | Token lacks required scope |
+| `404` | No token with this prefix for this document |
+
+---
+
+#### `GET /documents/{slug}/preview?token=<pvw_...>`
+
+Render a draft document for any bearer of a valid, non-expired, non-revoked
+preview token. **No `X-Api-Key` header required.** Returns an HTML page
+identical to the published document page.
+
+Any failure (token invalid, expired, revoked, document not found) returns `401
+Unauthorized` — the draft's existence is not revealed to anonymous callers.
+
+**Response `200 OK`:** HTML page (same design as published document pages).
+
+**Errors:**
+
+| Status | Cause |
+|--------|-------|
+| `401` | Token missing, invalid, expired, or revoked; document not found |
+
+---
+
+### Documents — linked surfaces { #documents-linked-surfaces }
 
 #### `GET /documents/{slug}/backlinks`
 
@@ -501,7 +613,7 @@ bounded cap. Visibility-filtered.
 
 ---
 
-### AI — question answering
+### AI — question answering { #ai-question-answering }
 
 #### `GET /ask?q=<query>`
 #### `POST /ask`
@@ -555,7 +667,7 @@ The status is still `200`.
 
 ---
 
-### AI — related notes
+### AI — related notes { #ai-related-notes }
 
 #### `GET /documents/{slug}/related`
 
@@ -686,7 +798,7 @@ Serve a stored media file. Public (no auth). Also responds to `HEAD`.
 
 ---
 
-### Admin — token management
+### Admin — token management { #admin-token-management }
 
 All `/admin/*` endpoints require the `admin` scope (shared `INKWELL_API_KEY`
 or a token minted with `"scopes": ["admin"]`).
@@ -839,6 +951,47 @@ programmatic API but are included here for completeness.
 | `GET /tags/{tag}` | Notes tagged with `{tag}` |
 | `GET /tags/{tag}/page/{page}` | Paginated tag page |
 | `GET /search` | Full-text search HTML page |
+| `GET /archive` | Archive index — year/month buckets |
+| `GET /archive/{year}/{month}` | Monthly archive page |
+| `GET /archive/{year}/{month}/page/{page}` | Paginated monthly archive |
+
+### Archive navigation
+
+#### `GET /archive`
+
+Lists all year/month buckets that contain at least one published document. Returns
+an HTML page with one entry per non-empty month, ordered newest first. Included
+in the sitemap.
+
+**Response `200 OK`:** HTML page.
+
+---
+
+#### `GET /archive/{year}/{month}`
+
+Shows a paginated list of published documents for a given month (e.g.
+`/archive/2026/01`). Page size matches the site default.
+
+**Response `200 OK`:** HTML page. Returns `404` if no documents exist for
+that month.
+
+---
+
+#### `GET /archive/{year}/{month}/page/{page}`
+
+Additional pages of the archive month listing. `page` is 1-based.
+
+**Response `200 OK`:** HTML page. Returns `404` if the page number is out of
+range.
+
+---
+
+All archive routes carry canonical metadata and `Cache-Control` headers.
+Document pages carry a `<nav class="doc-nav">` prev/next bar linking to the
+immediately older and newer published documents (omitted gracefully if the
+query fails).
+
+---
 
 Optional (when `INKWELL_BROWSER_LOGIN=true`):
 
