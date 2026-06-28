@@ -16,7 +16,7 @@ edges:
     condition: when understanding how to use a technology in this codebase
   - target: context/ai.md
     condition: when working with Voyage AI or Anthropic API
-last_updated: 2026-06-23
+last_updated: 2026-06-28
 ---
 
 # Stack
@@ -33,7 +33,7 @@ last_updated: 2026-06-23
 
 - **`comrak`** (not pulldown-cmark) — Markdown → HTML; used in `src/rendering/markdown.rs`; Comrak chosen for CommonMark compliance + GitHub-flavored Markdown support
 - **`ammonia`** (not manual sanitization) — HTML sanitizer applied after Comrak render in `src/rendering/sanitize.rs`; prevents XSS from user-supplied Markdown
-- **`syntect`** — syntax highlighting for code blocks in `src/rendering/highlight.rs`
+- **highlight.js** (client-side) — syntax highlighting via CSS class names emitted by `src/rendering/highlight.rs`; no server-side rendering
 - **`rmcp`** — MCP (Model Context Protocol) server framework; `server`, `transport-io`, `macros` features; used in `src/mcp/mod.rs` with `#[tool_router]` / `#[tool]` macros
 - **`schemars`** — JSON Schema generation for MCP tool argument types; paired with `#[derive(JsonSchema)]`
 - **`thiserror`** — error type derivation; `DbError` in `src/db/documents.rs`, `AppError` in `src/error.rs`
