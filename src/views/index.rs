@@ -1,9 +1,9 @@
-use crate::domain::document::Document;
+use crate::domain::document::DocumentSummary;
 
 use super::layout::{HeadMeta, SiteMeta, render_document_list, render_page};
 
 pub fn render_index_page(
-    documents: &[Document],
+    documents: &[DocumentSummary],
     page: i64,
     total_pages: i64,
     site: &SiteMeta<'_>,

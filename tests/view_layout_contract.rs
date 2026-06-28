@@ -1,4 +1,4 @@
-use inkwell::domain::document::{Document, DocumentStatus, GrowthStage};
+use inkwell::domain::document::{Document, DocumentStatus, DocumentSummary, GrowthStage};
 use inkwell::views::document::render_document_page;
 use inkwell::views::index::render_index_page;
 use inkwell::views::layout::{HeadMeta, SiteMeta, derive_excerpt, render_page};
@@ -21,6 +21,25 @@ fn tagged_document() -> Document {
         growth: GrowthStage::Seedling,
         tags: vec!["rust".to_string(), "garden".to_string()],
         version: 1,
+        created_at: now,
+        updated_at: now,
+    }
+}
+
+fn tagged_document_summary() -> DocumentSummary {
+    summary_with_body("A first note with enough prose to derive a non-empty excerpt.")
+}
+
+fn summary_with_body(body_excerpt_source: &str) -> DocumentSummary {
+    let now = time::OffsetDateTime::now_utc();
+    DocumentSummary {
+        id: uuid::Uuid::nil(),
+        slug: "hello-world".to_string(),
+        title: "Hello World".to_string(),
+        body_excerpt_source: body_excerpt_source.to_string(),
+        tags: vec!["rust".to_string(), "garden".to_string()],
+        growth: GrowthStage::Seedling,
+        status: DocumentStatus::Published,
         created_at: now,
         updated_at: now,
     }
@@ -171,7 +190,7 @@ fn index_listing_with_tags_has_no_literal_backslash_n() {
     // The shared document list renders excerpts and tag chips for each entry;
     // both came from raw-string `\n` templates. Exercise the listing and assert
     // no literal backslash-n leaks into the rendered output.
-    let documents = vec![tagged_document()];
+    let documents = vec![tagged_document_summary()];
     let site = SiteMeta::defaults();
     let html = render_index_page(&documents, 1, 1, &site);
     assert!(
@@ -189,11 +208,31 @@ fn index_listing_with_tags_has_no_literal_backslash_n() {
 }
 
 #[test]
+fn index_listing_excerpts_strip_markdown_from_summary_source() {
+    let documents = vec![summary_with_body("**bold** and `code` plus more text")];
+    let site = SiteMeta::defaults();
+    let html = render_index_page(&documents, 1, 1, &site);
+    let excerpt = html
+        .split(r#"<p class="excerpt">"#)
+        .nth(1)
+        .and_then(|tail| tail.split("</p>").next())
+        .expect("excerpt paragraph must render");
+    assert!(
+        !excerpt.contains("**") && !excerpt.contains('`'),
+        "excerpt must be markdown-stripped: {excerpt}"
+    );
+    assert!(
+        excerpt.contains("bold and code"),
+        "excerpt should keep readable text after stripping markdown: {excerpt}"
+    );
+}
+
+#[test]
 fn search_results_pager_has_no_literal_backslash_n() {
     // The search pager template was built from a raw-string `\n` literal. It only
     // renders when there is more than one page, so drive `total_pages > 1` to
     // exercise the `<nav class="pager">` path that was fixed.
-    let documents = vec![tagged_document()];
+    let documents = vec![tagged_document_summary()];
     let site = SiteMeta::defaults();
     let html = render_search_page("hello", &documents, 1, 3, &site);
     assert!(
@@ -210,7 +249,7 @@ fn search_results_pager_has_no_literal_backslash_n() {
 fn tag_page_pager_has_no_literal_backslash_n() {
     // The per-tag pager template was likewise built from a raw-string `\n`
     // literal. Drive `total_pages > 1` so the `<nav class="pager">` path renders.
-    let documents = vec![tagged_document()];
+    let documents = vec![tagged_document_summary()];
     let site = SiteMeta::defaults();
     let html = render_tag_page("rust", &documents, 1, 3, &site);
     assert!(

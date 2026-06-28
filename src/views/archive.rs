@@ -1,4 +1,4 @@
-use crate::domain::document::{ArchiveMonth, Document};
+use crate::domain::document::{ArchiveMonth, DocumentSummary};
 
 use super::layout::{HeadMeta, SiteMeta, escape_html, render_document_list, render_page};
 
@@ -87,7 +87,7 @@ fn render_year_section(year: i32, items: &[String]) -> String {
 pub fn render_archive_month_page(
     year: i32,
     month: i32,
-    documents: &[Document],
+    documents: &[DocumentSummary],
     page: i64,
     total_pages: i64,
     site: &SiteMeta<'_>,

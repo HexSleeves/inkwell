@@ -1,12 +1,13 @@
 use crate::db::links::Visibility;
 use crate::domain::document::{
-    AdjacentDoc, ArchiveMonth, Document, DocumentPatch, DocumentStatus, ListByTagOptions,
-    ListOptions, NewDocument, SearchOptions, StatusFilter, TagCount,
+    AdjacentDoc, ArchiveMonth, Document, DocumentPatch, DocumentStatus, DocumentSummary,
+    ListByTagOptions, ListOptions, NewDocument, SearchOptions, StatusFilter, TagCount,
 };
 use sqlx::{PgPool, Postgres, QueryBuilder};
 use uuid::Uuid;
 
 const DOCUMENT_COLUMNS: &str = "id, slug, title, body_markdown, rendered_html, status, growth, tags, version, created_at, updated_at";
+const DOCUMENT_SUMMARY_COLUMNS: &str = "id, slug, title, LEFT(body_markdown, 320) AS body_excerpt_source, tags, growth, status, created_at, updated_at";
 const UNIQUE_VIOLATION: &str = "23505";
 
 #[derive(Debug, thiserror::Error)]
@@ -134,6 +135,25 @@ pub async fn list_documents(
 ) -> Result<Vec<Document>, sqlx::Error> {
     let mut builder =
         QueryBuilder::<Postgres>::new(format!("SELECT {DOCUMENT_COLUMNS} FROM documents"));
+    if let Some(status) = options.status {
+        builder.push(" WHERE status = ").push_bind(status.as_str());
+    }
+    builder.push(" ORDER BY created_at DESC, id DESC");
+    if let Some(limit) = options.limit {
+        builder.push(" LIMIT ").push_bind(limit as i64);
+    }
+    if let Some(offset) = options.offset {
+        builder.push(" OFFSET ").push_bind(offset as i64);
+    }
+    builder.build_query_as().fetch_all(pool).await
+}
+
+pub async fn list_document_summaries(
+    pool: &PgPool,
+    options: ListOptions,
+) -> Result<Vec<DocumentSummary>, sqlx::Error> {
+    let mut builder =
+        QueryBuilder::<Postgres>::new(format!("SELECT {DOCUMENT_SUMMARY_COLUMNS} FROM documents"));
     if let Some(status) = options.status {
         builder.push(" WHERE status = ").push_bind(status.as_str());
     }
@@ -528,6 +548,28 @@ pub async fn list_documents_by_tag(
     builder.build_query_as().fetch_all(pool).await
 }
 
+pub async fn list_documents_by_tag_summary(
+    pool: &PgPool,
+    tag: &str,
+    options: ListByTagOptions,
+) -> Result<Vec<DocumentSummary>, sqlx::Error> {
+    let mut builder = QueryBuilder::<Postgres>::new(format!(
+        "SELECT {DOCUMENT_SUMMARY_COLUMNS} FROM documents WHERE "
+    ));
+    builder.push_bind(tag).push(" = ANY(tags)");
+    if let Some(status) = options.status {
+        builder.push(" AND status = ").push_bind(status.as_str());
+    }
+    builder.push(" ORDER BY created_at DESC, id DESC");
+    if let Some(limit) = options.limit {
+        builder.push(" LIMIT ").push_bind(limit as i64);
+    }
+    if let Some(offset) = options.offset {
+        builder.push(" OFFSET ").push_bind(offset as i64);
+    }
+    builder.build_query_as().fetch_all(pool).await
+}
+
 pub async fn count_documents_by_tag(
     pool: &PgPool,
     tag: &str,
@@ -626,6 +668,33 @@ pub async fn search_documents(
 ) -> Result<Vec<Document>, sqlx::Error> {
     let mut builder = QueryBuilder::<Postgres>::new(format!(
         "SELECT {DOCUMENT_COLUMNS}
+         FROM documents
+         WHERE search_vector @@ websearch_to_tsquery('english', ",
+    ));
+    builder.push_bind(query).push(")");
+    builder.push(" AND ");
+    visibility.push_where(&mut builder);
+    builder
+        .push(" ORDER BY ts_rank(search_vector, websearch_to_tsquery('english', ")
+        .push_bind(query)
+        .push(")) DESC, created_at DESC, id DESC");
+    if let Some(limit) = options.limit {
+        builder.push(" LIMIT ").push_bind(limit as i64);
+    }
+    if let Some(offset) = options.offset {
+        builder.push(" OFFSET ").push_bind(offset as i64);
+    }
+    builder.build_query_as().fetch_all(pool).await
+}
+
+pub async fn search_documents_summary(
+    pool: &PgPool,
+    query: &str,
+    visibility: Visibility,
+    options: SearchOptions,
+) -> Result<Vec<DocumentSummary>, sqlx::Error> {
+    let mut builder = QueryBuilder::<Postgres>::new(format!(
+        "SELECT {DOCUMENT_SUMMARY_COLUMNS}
          FROM documents
          WHERE search_vector @@ websearch_to_tsquery('english', ",
     ));
@@ -842,6 +911,32 @@ pub async fn list_documents_by_month(
     sqlx::query_as::<Postgres, Document>(&format!(
         r#"
         SELECT {DOCUMENT_COLUMNS}
+        FROM documents
+        WHERE status = 'published'
+          AND EXTRACT(YEAR  FROM created_at AT TIME ZONE 'UTC')::int = $1
+          AND EXTRACT(MONTH FROM created_at AT TIME ZONE 'UTC')::int = $2
+        ORDER BY created_at DESC, id DESC
+        LIMIT $3 OFFSET $4
+        "#
+    ))
+    .bind(year)
+    .bind(month)
+    .bind(limit as i64)
+    .bind(offset as i64)
+    .fetch_all(pool)
+    .await
+}
+
+pub async fn list_documents_by_month_summary(
+    pool: &PgPool,
+    year: i32,
+    month: i32,
+    limit: u32,
+    offset: u32,
+) -> Result<Vec<DocumentSummary>, sqlx::Error> {
+    sqlx::query_as::<Postgres, DocumentSummary>(&format!(
+        r#"
+        SELECT {DOCUMENT_SUMMARY_COLUMNS}
         FROM documents
         WHERE status = 'published'
           AND EXTRACT(YEAR  FROM created_at AT TIME ZONE 'UTC')::int = $1

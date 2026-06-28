@@ -223,7 +223,7 @@ async fn render_index(state: &AppState, headers: &HeaderMap, page: i64) -> Respo
             .into_response();
     }
 
-    let docs = match documents::list_documents(
+    let docs = match documents::list_document_summaries(
         &state.pool,
         ListOptions {
             limit: Some(PAGE_SIZE as u32),
@@ -290,7 +290,7 @@ async fn render_tag_listing(
             .into_response();
     }
 
-    let docs = match documents::list_documents_by_tag(
+    let docs = match documents::list_documents_by_tag_summary(
         &state.pool,
         &tag,
         ListByTagOptions {
@@ -408,7 +408,7 @@ async fn render_archive_month_listing(
             .into_response();
     }
 
-    let docs = match documents::list_documents_by_month(
+    let docs = match documents::list_documents_by_month_summary(
         &state.pool,
         year,
         month,
