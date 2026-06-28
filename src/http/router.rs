@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use axum::Router;
+use axum::http::StatusCode;
 use axum::middleware;
 use axum::routing::{any, get};
 use tower_http::compression::CompressionLayer;
@@ -125,6 +126,7 @@ pub fn build_router_with_providers(
     if browser_login {
         router = router
             .route("/login", get(auth_session::login_page))
+            .route("/media/new", get(media::media_new_page))
             .route("/auth/login", any(auth_session::login))
             .route("/auth/logout", any(auth_session::logout))
             // Authoring web UI (CYP-42). Static segments, so matchit prefers the
@@ -134,6 +136,8 @@ pub fn build_router_with_providers(
             .route("/editor", get(editor::editor_list_page))
             .route("/editor/new", get(editor::editor_new_page))
             .route("/editor/{slug}", get(editor::editor_edit_page));
+    } else {
+        router = router.route("/media/new", get(|| async { StatusCode::NOT_FOUND }));
     }
 
     router

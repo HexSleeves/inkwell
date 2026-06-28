@@ -18,9 +18,9 @@
 
 use axum::Json;
 use axum::body::Bytes;
-use axum::extract::{Path, State};
+use axum::extract::{Extension, Path, State};
 use axum::http::{HeaderMap, Method, StatusCode};
-use axum::response::{IntoResponse, Response};
+use axum::response::{Html, IntoResponse, Response};
 use serde::Serialize;
 use uuid::Uuid;
 
@@ -29,6 +29,10 @@ use crate::domain::author::{Principal, Scope};
 use crate::error::AppError;
 use crate::http::AppState;
 use crate::http::auth::require_principal;
+use crate::http::auth_session::extract_session_cookie;
+use crate::http::security_headers::CspNonce;
+use crate::views::layout::SiteMeta;
+use crate::views::media::render_media_upload_page;
 
 /// Maximum upload size: 5 MiB.
 pub const MAX_MEDIA_BYTES: usize = 5 * 1024 * 1024;
@@ -62,6 +66,22 @@ pub async fn media_serve(
     Path(id): Path<Uuid>,
 ) -> Result<Response, AppError> {
     serve(state, id).await
+}
+
+/// `GET /media/new` — the browser upload page. Flag-gated in the router.
+pub async fn media_new_page(
+    State(state): State<AppState>,
+    Extension(csp_nonce): Extension<CspNonce>,
+    headers: HeaderMap,
+) -> Response {
+    let site = SiteMeta::from_config(&state.config);
+    let logged_in = extract_session_cookie(&headers).is_some();
+    Html(render_media_upload_page(
+        &site,
+        Some(csp_nonce.as_str()),
+        logged_in,
+    ))
+    .into_response()
 }
 
 async fn upload(state: AppState, headers: HeaderMap, body: Bytes) -> Result<Response, AppError> {

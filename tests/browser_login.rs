@@ -213,6 +213,33 @@ async fn flag_off_logout_is_404() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// With the flag off, the `/media/new` page route is not registered, so the
+/// request falls through to the dynamic `/media/{id}` serve route, whose
+/// `Path<Uuid>` extractor rejects "new" with 400 (not 404). Either way the
+/// upload page is absent when the flag is off.
+#[tokio::test]
+async fn flag_off_media_new_is_400() -> anyhow::Result<()> {
+    let _guard = db_guard().await;
+    let Some(router) = common::maybe_router().await? else {
+        return Ok(());
+    };
+
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/media/new")
+                .body(Body::empty())?,
+        )
+        .await?;
+    assert_eq!(
+        response.status(),
+        StatusCode::BAD_REQUEST,
+        "media upload page route is absent when flag is off; /media/new hits the /media/{{id}} Uuid extractor → 400"
+    );
+    Ok(())
+}
+
 /// With the flag off, the shared key still authenticates normally.
 #[tokio::test]
 async fn flag_off_existing_shared_key_auth_unchanged() -> anyhow::Result<()> {
@@ -244,6 +271,31 @@ async fn flag_off_existing_shared_key_auth_unchanged() -> anyhow::Result<()> {
 // ---------------------------------------------------------------------------
 // FLAG ON tests
 // ---------------------------------------------------------------------------
+
+/// With the flag on, /media/new renders the media-upload page.
+#[tokio::test]
+async fn flag_on_media_new_renders_upload_page() -> anyhow::Result<()> {
+    let _guard = db_guard().await;
+    let Some(pool) = common::maybe_pool().await? else {
+        return Ok(());
+    };
+    let router = browser_login_router(pool);
+
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/media/new")
+                .body(Body::empty())?,
+        )
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = body_bytes(response).await?;
+    let body = String::from_utf8(body)?;
+    assert!(body.contains("Upload media"));
+    Ok(())
+}
 
 /// Login with a valid scoped token sets a session cookie with the required
 /// security attributes: HttpOnly, Secure, SameSite=Strict.
