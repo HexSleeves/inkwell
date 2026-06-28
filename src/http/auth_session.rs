@@ -15,9 +15,9 @@
 //! clears the cookie.
 
 use axum::body::Bytes;
-use axum::extract::State;
+use axum::extract::{Extension, State};
 use axum::http::{HeaderMap, Method, StatusCode, header};
-use axum::response::{IntoResponse, Response};
+use axum::response::{Html, IntoResponse, Response};
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 use time::OffsetDateTime;
@@ -28,6 +28,9 @@ use crate::domain::token;
 use crate::error::AppError;
 use crate::http::AppState;
 use crate::http::extractors::{parse_json_body, require_object};
+use crate::http::security_headers::CspNonce;
+use crate::views::layout::SiteMeta;
+use crate::views::login::render_login_page;
 
 /// The cookie name used for browser sessions.
 pub(crate) const SESSION_COOKIE_NAME: &str = "inkwell_session";
@@ -131,6 +134,32 @@ pub async fn login(
         "{SESSION_COOKIE_NAME}={raw_session_token}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age={SESSION_TTL_SECS}"
     );
     Ok((StatusCode::OK, [(header::SET_COOKIE, cookie)]).into_response())
+}
+
+/// `GET /login` — render the server-side browser login page (ADR 0010).
+///
+/// Registered **only when `INKWELL_BROWSER_LOGIN` is on** (alongside the
+/// `POST /auth/login` / `POST /auth/logout` endpoints); with the flag off the
+/// route does not exist and the request falls through to a 404.
+///
+/// Returns an [`Html`] body so the `security_headers` middleware tags it as
+/// `text/html` and applies the nonce'd CSP — the inline form script embeds the
+/// same `csp_nonce` so it is not blocked. `logged_in` is derived solely from the
+/// presence of an `inkwell_session` cookie (the page just picks which UI to
+/// show; the cookie's validity is enforced on the protected actions, not here).
+pub async fn login_page(
+    State(state): State<AppState>,
+    Extension(csp_nonce): Extension<CspNonce>,
+    headers: HeaderMap,
+) -> Response {
+    let site = SiteMeta::from_config(&state.config);
+    let logged_in = extract_session_cookie(&headers).is_some();
+    Html(render_login_page(
+        &site,
+        Some(csp_nonce.as_str()),
+        logged_in,
+    ))
+    .into_response()
 }
 
 /// `POST /auth/logout` — delete the session and clear the cookie.
