@@ -630,18 +630,8 @@ pub async fn search_documents(
          WHERE search_vector @@ websearch_to_tsquery('english', ",
     ));
     builder.push_bind(query).push(")");
-    match visibility {
-        Visibility::Public => {
-            builder.push(" AND status = 'published'");
-        }
-        Visibility::Owner(owner_id) => {
-            builder
-                .push(" AND (status = 'published' OR owner_id = ")
-                .push_bind(owner_id)
-                .push(")");
-        }
-        Visibility::All => {}
-    }
+    builder.push(" AND ");
+    visibility.push_where(&mut builder);
     builder
         .push(" ORDER BY ts_rank(search_vector, websearch_to_tsquery('english', ")
         .push_bind(query)
@@ -667,18 +657,8 @@ pub async fn count_search_documents(
          WHERE search_vector @@ websearch_to_tsquery('english', ",
     );
     builder.push_bind(query).push(")");
-    match visibility {
-        Visibility::Public => {
-            builder.push(" AND status = 'published'");
-        }
-        Visibility::Owner(owner_id) => {
-            builder
-                .push(" AND (status = 'published' OR owner_id = ")
-                .push_bind(owner_id)
-                .push(")");
-        }
-        Visibility::All => {}
-    }
+    builder.push(" AND ");
+    visibility.push_where(&mut builder);
     builder.build_query_scalar().fetch_one(pool).await
 }
 
@@ -744,29 +724,8 @@ pub async fn list_documents_vis(
     offset: u32,
 ) -> Result<Vec<Document>, sqlx::Error> {
     let mut builder =
-        QueryBuilder::<Postgres>::new(format!("SELECT {DOCUMENT_COLUMNS} FROM documents"));
-    // Apply visibility base predicate.
-    match visibility {
-        Visibility::Public => {
-            builder.push(" WHERE status = 'published'");
-        }
-        Visibility::Owner(owner_id) => {
-            builder
-                .push(" WHERE (status = 'published' OR owner_id = ")
-                .push_bind(owner_id)
-                .push(")");
-        }
-        Visibility::All => {
-            if let Some(status) = extra_status {
-                builder.push(" WHERE status = ").push_bind(status.as_str());
-            }
-            builder.push(" ORDER BY created_at DESC, id DESC");
-            builder.push(" LIMIT ").push_bind(limit as i64);
-            builder.push(" OFFSET ").push_bind(offset as i64);
-            return builder.build_query_as().fetch_all(pool).await;
-        }
-    }
-    // For Public and Owner: optionally AND a user-supplied status filter.
+        QueryBuilder::<Postgres>::new(format!("SELECT {DOCUMENT_COLUMNS} FROM documents WHERE "));
+    visibility.push_where(&mut builder);
     if let Some(status) = extra_status {
         builder.push(" AND status = ").push_bind(status.as_str());
     }
@@ -783,24 +742,9 @@ pub async fn count_documents_vis(
     visibility: Visibility,
     extra_status: Option<DocumentStatus>,
 ) -> Result<i64, sqlx::Error> {
-    let mut builder = QueryBuilder::<Postgres>::new("SELECT count(*)::bigint FROM documents");
-    match visibility {
-        Visibility::Public => {
-            builder.push(" WHERE status = 'published'");
-        }
-        Visibility::Owner(owner_id) => {
-            builder
-                .push(" WHERE (status = 'published' OR owner_id = ")
-                .push_bind(owner_id)
-                .push(")");
-        }
-        Visibility::All => {
-            if let Some(status) = extra_status {
-                builder.push(" WHERE status = ").push_bind(status.as_str());
-            }
-            return builder.build_query_scalar().fetch_one(pool).await;
-        }
-    }
+    let mut builder =
+        QueryBuilder::<Postgres>::new("SELECT count(*)::bigint FROM documents WHERE ");
+    visibility.push_where(&mut builder);
     if let Some(status) = extra_status {
         builder.push(" AND status = ").push_bind(status.as_str());
     }

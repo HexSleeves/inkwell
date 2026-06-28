@@ -21,7 +21,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use sqlx::{PgPool, Postgres};
+use sqlx::{PgPool, Postgres, QueryBuilder};
 use uuid::Uuid;
 
 /// Read scope for any surface that can expose note content. Centralized so the
@@ -46,6 +46,29 @@ pub enum Visibility {
     Owner(Uuid),
     /// Admin (shared key or `admin` scope): every note regardless of status.
     All,
+}
+
+impl Visibility {
+    /// Push a visibility WHERE predicate onto a QueryBuilder.
+    ///
+    /// Call right after the builder has pushed `WHERE ` or `... AND `.
+    /// Emits unqualified column names (`status`, `owner_id`); only use at call
+    /// sites where `documents` is the sole table providing those columns.
+    pub fn push_where(&self, qb: &mut QueryBuilder<'_, Postgres>) {
+        match self {
+            Visibility::Public => {
+                qb.push("status = 'published'");
+            }
+            Visibility::Owner(id) => {
+                qb.push("(status = 'published' OR owner_id = ")
+                    .push_bind(*id)
+                    .push(")");
+            }
+            Visibility::All => {
+                qb.push("TRUE");
+            }
+        }
+    }
 }
 
 /// Whether an edge points at another note in this garden or an external URL.
@@ -764,6 +787,7 @@ pub async fn notes_to_rerender(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sqlx::Execute as _;
     use uuid::Uuid;
 
     #[test]
@@ -773,6 +797,36 @@ mod tests {
         assert_ne!(Visibility::Public, Visibility::Owner(id));
         assert_ne!(Visibility::All, Visibility::Owner(id));
         assert_eq!(Visibility::Owner(id), Visibility::Owner(id));
+    }
+
+    #[test]
+    fn visibility_push_where_emits_public_predicate() {
+        let mut builder = QueryBuilder::<Postgres>::new("SELECT 1 WHERE ");
+
+        Visibility::Public.push_where(&mut builder);
+
+        assert_eq!(builder.build().sql(), "SELECT 1 WHERE status = 'published'");
+    }
+
+    #[test]
+    fn visibility_push_where_emits_owner_predicate_with_bind() {
+        let mut builder = QueryBuilder::<Postgres>::new("SELECT 1 WHERE ");
+
+        Visibility::Owner(Uuid::nil()).push_where(&mut builder);
+
+        assert_eq!(
+            builder.build().sql(),
+            "SELECT 1 WHERE (status = 'published' OR owner_id = $1)"
+        );
+    }
+
+    #[test]
+    fn visibility_push_where_emits_all_predicate() {
+        let mut builder = QueryBuilder::<Postgres>::new("SELECT 1 WHERE ");
+
+        Visibility::All.push_where(&mut builder);
+
+        assert_eq!(builder.build().sql(), "SELECT 1 WHERE TRUE");
     }
 
     #[test]
