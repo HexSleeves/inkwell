@@ -534,7 +534,10 @@ pub async fn list_documents_by_tag(
 ) -> Result<Vec<Document>, sqlx::Error> {
     let mut builder =
         QueryBuilder::<Postgres>::new(format!("SELECT {DOCUMENT_COLUMNS} FROM documents WHERE "));
-    builder.push_bind(tag).push(" = ANY(tags)");
+    builder
+        .push("tags @> ARRAY[")
+        .push_bind(tag)
+        .push("]::text[]");
     if let Some(status) = options.status {
         builder.push(" AND status = ").push_bind(status.as_str());
     }
@@ -556,7 +559,10 @@ pub async fn list_documents_by_tag_summary(
     let mut builder = QueryBuilder::<Postgres>::new(format!(
         "SELECT {DOCUMENT_SUMMARY_COLUMNS} FROM documents WHERE "
     ));
-    builder.push_bind(tag).push(" = ANY(tags)");
+    builder
+        .push("tags @> ARRAY[")
+        .push_bind(tag)
+        .push("]::text[]");
     if let Some(status) = options.status {
         builder.push(" AND status = ").push_bind(status.as_str());
     }
@@ -577,7 +583,10 @@ pub async fn count_documents_by_tag(
 ) -> Result<i64, sqlx::Error> {
     let mut builder =
         QueryBuilder::<Postgres>::new("SELECT count(*)::bigint FROM documents WHERE ");
-    builder.push_bind(tag).push(" = ANY(tags)");
+    builder
+        .push("tags @> ARRAY[")
+        .push_bind(tag)
+        .push("]::text[]");
     if let Some(status) = filter.status {
         builder.push(" AND status = ").push_bind(status.as_str());
     }
@@ -881,22 +890,60 @@ pub async fn list_archive_months(pool: &PgPool) -> Result<Vec<ArchiveMonth>, sql
     .await
 }
 
+/// Compute the half-open UTC range `[month_start, next_month_start)` for the
+/// given calendar `year`/`month`.
+///
+/// Archive-by-month queries previously wrapped `created_at` in
+/// `EXTRACT(... AT TIME ZONE 'UTC')`, which is not sargable and forced a
+/// sequential scan. Comparing the raw `timestamptz` column against a precomputed
+/// UTC range instead lets the planner range-scan
+/// `documents_status_created_at_id_idx` (migrations/0004). Because both bounds
+/// are absolute instants, the result set is identical to the old EXTRACT
+/// predicate, including the December -> January year rollover.
+///
+/// Returns `None` when `month` is outside `1..=12` (or the date is otherwise
+/// invalid), in which case callers treat the bucket as empty — matching the old
+/// EXTRACT predicate, which simply matched zero rows for such inputs.
+fn month_utc_range(year: i32, month: i32) -> Option<(time::OffsetDateTime, time::OffsetDateTime)> {
+    let month_enum = u8::try_from(month)
+        .ok()
+        .and_then(|m| time::Month::try_from(m).ok())?;
+    let start = time::Date::from_calendar_date(year, month_enum, 1)
+        .ok()?
+        .midnight()
+        .assume_utc();
+    // `Month::next` wraps December -> January; bump the year on that wrap.
+    let next_year = if month_enum == time::Month::December {
+        year + 1
+    } else {
+        year
+    };
+    let end = time::Date::from_calendar_date(next_year, month_enum.next(), 1)
+        .ok()?
+        .midnight()
+        .assume_utc();
+    Some((start, end))
+}
+
 pub async fn count_documents_by_month(
     pool: &PgPool,
     year: i32,
     month: i32,
 ) -> Result<i64, sqlx::Error> {
+    let Some((start, end)) = month_utc_range(year, month) else {
+        return Ok(0);
+    };
     sqlx::query_scalar::<Postgres, i64>(
         r#"
         SELECT count(*)::bigint
         FROM documents
         WHERE status = 'published'
-          AND EXTRACT(YEAR  FROM created_at AT TIME ZONE 'UTC')::int = $1
-          AND EXTRACT(MONTH FROM created_at AT TIME ZONE 'UTC')::int = $2
+          AND created_at >= $1
+          AND created_at < $2
         "#,
     )
-    .bind(year)
-    .bind(month)
+    .bind(start)
+    .bind(end)
     .fetch_one(pool)
     .await
 }
@@ -908,19 +955,22 @@ pub async fn list_documents_by_month(
     limit: u32,
     offset: u32,
 ) -> Result<Vec<Document>, sqlx::Error> {
+    let Some((start, end)) = month_utc_range(year, month) else {
+        return Ok(Vec::new());
+    };
     sqlx::query_as::<Postgres, Document>(&format!(
         r#"
         SELECT {DOCUMENT_COLUMNS}
         FROM documents
         WHERE status = 'published'
-          AND EXTRACT(YEAR  FROM created_at AT TIME ZONE 'UTC')::int = $1
-          AND EXTRACT(MONTH FROM created_at AT TIME ZONE 'UTC')::int = $2
+          AND created_at >= $1
+          AND created_at < $2
         ORDER BY created_at DESC, id DESC
         LIMIT $3 OFFSET $4
         "#
     ))
-    .bind(year)
-    .bind(month)
+    .bind(start)
+    .bind(end)
     .bind(limit as i64)
     .bind(offset as i64)
     .fetch_all(pool)
@@ -934,19 +984,22 @@ pub async fn list_documents_by_month_summary(
     limit: u32,
     offset: u32,
 ) -> Result<Vec<DocumentSummary>, sqlx::Error> {
+    let Some((start, end)) = month_utc_range(year, month) else {
+        return Ok(Vec::new());
+    };
     sqlx::query_as::<Postgres, DocumentSummary>(&format!(
         r#"
         SELECT {DOCUMENT_SUMMARY_COLUMNS}
         FROM documents
         WHERE status = 'published'
-          AND EXTRACT(YEAR  FROM created_at AT TIME ZONE 'UTC')::int = $1
-          AND EXTRACT(MONTH FROM created_at AT TIME ZONE 'UTC')::int = $2
+          AND created_at >= $1
+          AND created_at < $2
         ORDER BY created_at DESC, id DESC
         LIMIT $3 OFFSET $4
         "#
     ))
-    .bind(year)
-    .bind(month)
+    .bind(start)
+    .bind(end)
     .bind(limit as i64)
     .bind(offset as i64)
     .fetch_all(pool)
