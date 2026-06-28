@@ -38,21 +38,21 @@ Removed stale TypeScript-era plan files: 002, 003, 005, 008, 009, 011, and 013.
 | 025 | Track embedding provider provenance | bug/architecture | P2 | L | none | new @fef38ad | DONE |
 | 026 | Harden the RAG prompt boundary | security/AI correctness | P2 | M | 023 | new @fef38ad | DONE |
 | 027 | Media upload UI (deferred design) | direction | P3 | M | none | new @ca174cc | TODO |
-| 028 | Harden security headers (TraceLayer URI, HSTS, img-src colons) | security | P1 | S | none | new @0819727 | IN PROGRESS · PR #55 (review ✓, unmerged) |
+| 028 | Harden security headers (TraceLayer URI, HSTS, img-src colons) | security | P1 | S | none | new @0819727 | DONE · PR #55 (merged) |
 | 029 | Remove `style-src 'unsafe-inline'` (nonce inline styles) | security | P2 | M | 028 | new @0819727 | TODO |
 | 030 | Webmention send timeout (investigate-then-fix) | security/reliability | P3 | S | none | new @0819727 | TODO |
-| 031 | spawn_blocking for Markdown render | perf | P1 | S | none | new @0819727 | IN PROGRESS · PR #54 (review ✓, unmerged) |
+| 031 | spawn_blocking for Markdown render | perf | P1 | S | none | new @0819727 | DONE · PR #54 (merged) |
 | 032 | DocumentSummary list query (omit body) | perf | P2 | M | none | new @0819727 | TODO |
 | 033 | Vector ANN similarity threshold | perf/AI | P2 | S | none | new @0819727 | TODO |
 | 034 | Bound + concurrentize backfill fan-out | perf | P2 | M | 031 (rec) | new @0819727 | TODO |
-| 035 | Remove dead `syntect` dependency | tech-debt | P3 | S | none | new @0819727 | IN PROGRESS · PR #56 (review ✓, unmerged) |
+| 035 | Remove dead `syntect` dependency | tech-debt | P3 | S | none | new @0819727 | DONE · PR #56 (merged) |
 | 036 | Extract `DOCUMENT_COLUMNS` const | tech-debt | P3 | S | none | new @0819727 | TODO |
 | 037 | Move garden.rs raw queries into `src/db/` | tech-debt | P2 | M | none | new @0819727 | TODO |
 | 038 | Dedup `Visibility` SQL predicate | tech-debt | P2 | M | none | new @0819727 | TODO |
 | 039 | Split `api.rs` god module | tech-debt | P3 | L | 036, 037 (rec) | new @0819727 | TODO |
-| 040 | Populate AGENTS.md | dx | P1 | S | none | new @0819727 | IN PROGRESS · PR #53 (review ✓, unmerged) |
+| 040 | Populate AGENTS.md | dx | P1 | S | none | new @0819727 | DONE · PR #53 (merged) |
 | 041 | Renovate Cargo grouping | dx | P3 | S | none | new @0819727 | TODO |
-| 042 | Auth/preview/If-Match security tests | tests | P1 | M | none | new @0819727 | IN PROGRESS · PR #57 (review ✓, unmerged) |
+| 042 | Auth/preview/If-Match security tests | tests | P1 | M | none | new @0819727 | DONE · PR #57 (merged) |
 | 043 | Validation + backfill contract tests | tests | P2 | M | none | new @0819727 | TODO |
 | 044 | Docs accuracy fixes (revoke route, dead var, missing endpoints) | docs | P2 | M | none | new @0819727 | TODO |
 | 045 | Rate-limit preview-read endpoint | security | P3 | S | none | new @0819727 | TODO |
@@ -379,3 +379,51 @@ and is held for maintainer review):**
 Worker local gates = `fmt`/`clippy`/`check` + non-DB tests (fresh worktrees have
 no Postgres); DB-backed contract tests validated by CI's `test-integration` job
 on each PR. Next: maintainer merges Wave 1 (or authorizes auto-land), then Wave 2.
+
+## Autonomous execution complete — 2026-06-28 (via Orca ship loop)
+
+All audited plans (028–048) executed end-to-end as an autonomous coordinator loop:
+isolated `codex` worktree per plan → implement → local gates (fmt/clippy/check + non-DB tests)
+→ PR → CI green (incl. DB-backed `test-integration`) + coordinator diff review → **squash-merged
+to `main` in dependency order** → worktree reaped. Prod auto-deployed on each push;
+final `GET /health` → **HTTP 200** (inkwell-production).
+
+**Final status (22 plans):**
+
+| Plan | PR | Status |
+|------|----|--------|
+| 028 security headers | #55 | DONE (merged) |
+| 029 externalize CSS / drop unsafe-inline | #63 | DONE (merged) |
+| 030 webmention send timeout | — | REJECTED — send path already timed via `guarded_get/post` |
+| 031 spawn_blocking render | #54 | DONE (merged) |
+| 032 DocumentSummary list query | #73 | DONE (merged) |
+| 033 ANN similarity threshold | #69 | DONE (merged) |
+| 034 bounded/concurrent backfill | #70 | DONE (merged) |
+| 035 remove dead syntect | #56 | DONE (merged) |
+| 036 DOCUMENT_COLUMNS const | #62 | DONE (merged) |
+| 037 garden→db query extraction | #68 | DONE (merged) |
+| 038 Visibility push_where dedup | #71 | DONE (merged) |
+| 039 split api.rs into modules | #74 | DONE (merged) |
+| 040 populate AGENTS.md | #53 | DONE (merged) |
+| 041 renovate Cargo grouping | #59 | DONE (merged) |
+| 042 auth/preview/If-Match tests | #57 | DONE (merged) |
+| 043 validation + backfill tests | #61 | DONE (merged) |
+| 044 docs accuracy fixes | #58 | DONE (merged) |
+| 045 rate-limit preview-read | #60 | DONE (merged) |
+| 046 not_found helper | #66 | DONE (merged) |
+| 047 spike: browser login UI (doc) | #67 | DONE (merged) |
+| 048 write-audit history endpoint | #72 | DONE (merged) |
+| 027 media upload UI | — | READY — rewritten as a full executable plan @ed97b6e (browser session-cookie auth resolved); awaiting execution |
+
+**Coordinator interventions during the loop (caught by CI + review, fixed at source):**
+- 043: backfill test asserted a *draft* target lights up a stub (false — wikilinks resolve at Public
+  visibility, stubs light up only on *publish*). Fixed the test to publish the target; patched plan 043.
+- 029: commit type `security(...)` rejected by the Semantic-PR gate → amended to `fix(...)`; patched plan 029.
+- 033: re-verification caught that adding a `Config` field breaks 6 `Config{...}` literals (E0063) and that
+  `related_notes_for_note` is a flat aggregate (not subquery) — both fixed in the plan before dispatch.
+- cargo-deny flaky infra fail (Docker registry timeout) on #58 → re-run, passed.
+
+20 merged, 1 rejected (030), 1 deferred (027). The 21-agent cold-review + re-verification passes before
+execution meant every dispatched plan was excerpt-accurate; the only in-flight failures were one real
+test-logic bug (043), one lint/title nit (029), and transient infra — all resolved without a single
+plan re-dispatch.
