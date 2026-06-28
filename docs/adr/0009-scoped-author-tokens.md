@@ -1,6 +1,6 @@
 # ADR 0009: Scoped Author Tokens and Write Audit
 
-Status: proposed
+Status: accepted (implemented in v0.2.0 — see docs/RELEASE-NOTES-v0.2.0.md)
 
 ## Context
 
