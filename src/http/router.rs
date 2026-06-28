@@ -128,7 +128,7 @@ pub fn build_router_with_providers(
                 tracing::info_span!(
                     "http_request",
                     method = %request.method(),
-                    uri = %request.uri(),
+                    uri = %request_span_uri(request),
                     %request_id,
                 )
             }),
@@ -147,4 +147,25 @@ pub fn build_router_with_providers(
         // other layer (notably TraceLayer) runs, and echo it on the response.
         .layer(middleware::from_fn(request_id::propagate_request_id))
         .with_state(state)
+}
+
+fn request_span_uri(request: &axum::extract::Request) -> &str {
+    request.uri().path()
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::body::Body;
+
+    use super::request_span_uri;
+
+    #[test]
+    fn request_span_uri_excludes_query_string() {
+        let request = axum::extract::Request::builder()
+            .uri("/documents/post/preview?token=pvw_secret")
+            .body(Body::empty())
+            .expect("request builds");
+
+        assert_eq!(request_span_uri(&request), "/documents/post/preview");
+    }
 }

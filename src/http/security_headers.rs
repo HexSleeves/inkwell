@@ -48,10 +48,14 @@ pub async fn apply_security_headers(mut request: Request, next: Next) -> Respons
             "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()",
         ),
     );
+    headers.insert(
+        HeaderName::from_static("strict-transport-security"),
+        HeaderValue::from_static("max-age=63072000; includeSubDomains"),
+    );
 
     if is_html {
         let policy = format!(
-            "default-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; img-src 'self' http https; style-src 'self' 'unsafe-inline'; script-src 'self' 'nonce-{}'",
+            "default-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; img-src 'self' http: https:; style-src 'self' 'unsafe-inline'; script-src 'self' 'nonce-{}'",
             nonce.as_str()
         );
         if let Ok(value) = HeaderValue::from_str(&policy) {

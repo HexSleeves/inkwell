@@ -25,6 +25,10 @@ fn permissions_policy() -> HeaderValue {
     )
 }
 
+fn hsts_policy() -> HeaderValue {
+    HeaderValue::from_static("max-age=63072000; includeSubDomains")
+}
+
 #[tokio::test]
 async fn html_responses_include_csp_and_hardening_headers() -> anyhow::Result<()> {
     let browser_runtime_src = browser_runtime_src();
@@ -48,7 +52,7 @@ async fn html_responses_include_csp_and_hardening_headers() -> anyhow::Result<()
     assert!(csp.contains("object-src 'none'"));
     assert!(csp.contains("base-uri 'self'"));
     assert!(csp.contains("frame-ancestors 'none'"));
-    assert!(csp.contains("img-src 'self' http https"));
+    assert!(csp.contains("img-src 'self' http: https:"));
     assert!(csp.contains("style-src 'self' 'unsafe-inline'"));
     assert!(csp.contains("script-src 'self' 'nonce-"));
     assert!(!csp.contains(&browser_runtime_src));
@@ -65,6 +69,10 @@ async fn html_responses_include_csp_and_hardening_headers() -> anyhow::Result<()
     assert_eq!(
         response.headers().get("permissions-policy"),
         Some(&permissions_policy())
+    );
+    assert_eq!(
+        response.headers().get("strict-transport-security"),
+        Some(&hsts_policy())
     );
 
     Ok(())
@@ -91,6 +99,32 @@ async fn json_responses_keep_hardening_headers_without_csp() -> anyhow::Result<(
         response.headers().get(header::X_CONTENT_TYPE_OPTIONS),
         Some(&header::HeaderValue::from_static("nosniff"))
     );
+    assert_eq!(
+        response.headers().get("strict-transport-security"),
+        Some(&hsts_policy())
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn html_csp_allows_external_image_schemes_with_colons() -> anyhow::Result<()> {
+    let app = Router::new()
+        .route("/", get(|| async { Html("<p>Hello</p>") }))
+        .layer(middleware::from_fn(apply_security_headers));
+
+    let response = app
+        .oneshot(Request::builder().uri("/").body(Body::empty())?)
+        .await?;
+
+    let csp = response
+        .headers()
+        .get(header::CONTENT_SECURITY_POLICY)
+        .and_then(|value| value.to_str().ok())
+        .expect("missing content-security-policy header");
+
+    assert!(csp.contains("img-src 'self' http: https:"));
+    assert!(!csp.contains("img-src 'self' http https"));
 
     Ok(())
 }
