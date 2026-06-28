@@ -27,7 +27,7 @@ All routes in the "HTTP surface" section of the README are stable:
 | AI | `GET /ask`, `POST /ask`, `GET /documents/:slug/related` |
 | Search | `GET /search` |
 | Media | `POST /media`, `GET /media/:id` |
-| Admin | `POST /admin/tokens`, `GET /admin/tokens`, `DELETE /admin/tokens/:id` |
+| Admin | `POST /admin/tokens`, `GET /admin/tokens`, `POST /admin/tokens/:prefix/revoke`, `POST /admin/tokens/prune` |
 | Preview tokens | `GET /documents/:slug/preview-tokens`, `POST /documents/:slug/preview-tokens`, `DELETE /documents/:slug/preview-tokens/:prefix` |
 | Preview read | `GET /documents/:slug/preview` |
 | Health | `GET /health` |
