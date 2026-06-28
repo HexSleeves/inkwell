@@ -19,7 +19,11 @@ use crate::db::links::{self, LinkType, NewLink, TargetKind, Visibility};
 use crate::domain::document::DocumentStatus;
 use crate::rendering::wikilink::{EmbedResolution, extract_wikilinks, render_markdown_with_embeds};
 use sqlx::PgPool;
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
+use tokio::sync::Semaphore;
 use uuid::Uuid;
 
 /// Maximum transclusion nesting depth. An embed chain `A → B → C → …` expands at
@@ -35,6 +39,9 @@ const MAX_EMBED_DEPTH: u32 = 3;
 /// collapses every further embed to a placeholder once the cap is hit, bounding
 /// total work exactly like the graph surface caps total nodes/edges.
 const MAX_EMBED_EXPANSIONS: u32 = 256;
+
+const MAX_BACKFILL: usize = 50;
+const BACKFILL_CONCURRENCY: usize = 4;
 
 /// A wikilink/embed reference after resolution against the live garden.
 #[derive(Clone, Debug)]
@@ -271,9 +278,39 @@ pub async fn affected_sources(pool: &PgPool, note_id: Uuid, slug: &str) -> Vec<U
 /// unpublished/deleted). Best-effort: a single note's failure is logged and the
 /// rest proceed — a stale stub self-heals on that note's next save.
 pub async fn rerender_sources(pool: &PgPool, ids: &[Uuid]) {
-    for &id in ids {
-        if let Err(error) = rerender_one(pool, id).await {
-            tracing::warn!(note_id = %id, %error, "re-render failed; stub may be stale until next save");
+    if ids.len() > MAX_BACKFILL {
+        tracing::warn!(
+            total = ids.len(),
+            cap = MAX_BACKFILL,
+            "backfill fan-out truncated"
+        );
+    }
+
+    let semaphore = Arc::new(Semaphore::new(BACKFILL_CONCURRENCY));
+    let mut handles = Vec::with_capacity(ids.len().min(MAX_BACKFILL));
+
+    for id in ids.iter().copied().take(MAX_BACKFILL) {
+        let pool = pool.clone();
+        let Ok(permit) = semaphore.clone().acquire_owned().await else {
+            tracing::warn!(note_id = %id, "backfill concurrency semaphore closed");
+            continue;
+        };
+
+        handles.push(tokio::spawn(async move {
+            let _permit = permit;
+            (id, rerender_one(&pool, id).await)
+        }));
+    }
+
+    for handle in handles {
+        match handle.await {
+            Ok((_id, Ok(()))) => {}
+            Ok((id, Err(error))) => {
+                tracing::warn!(note_id = %id, %error, "re-render failed; stub may be stale until next save");
+            }
+            Err(error) => {
+                tracing::warn!(%error, "backfill re-render task failed");
+            }
         }
     }
 }
