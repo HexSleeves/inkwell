@@ -107,11 +107,13 @@ pub fn build_router_with_providers(
         .route("/{slug}", get(pages::document_page))
         .route("/", get(pages::index));
 
-    // Register login/logout routes only when the flag is on. When off, any
-    // request to /auth/* hits the fallback and returns 404 — the routes do not
-    // exist, so no auth surface is exposed.
+    // Register the login page + login/logout routes only when the flag is on.
+    // When off, `/auth/*` hits the fallback and `/login` falls through to the
+    // `/{slug}` document route (a 404 unless a doc owns that slug) — no auth
+    // surface is exposed either way.
     if browser_login {
         router = router
+            .route("/login", get(auth_session::login_page))
             .route("/auth/login", any(auth_session::login))
             .route("/auth/logout", any(auth_session::logout));
     }
