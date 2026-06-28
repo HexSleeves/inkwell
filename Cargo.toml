@@ -47,7 +47,7 @@ urlencoding = "2"
 uuid = { version = "1", features = ["serde", "v4"] }
 
 [dependencies.sqlx]
-version  = "0.8"
+version  = "0.9"
 features = ["runtime-tokio-rustls", "postgres", "uuid", "time", "migrate"]
 
 [dev-dependencies]
