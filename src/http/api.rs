@@ -121,6 +121,32 @@ struct BacklinksResponse {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+struct AuditEntryEnvelope {
+    action: String,
+    actor_label: String,
+    #[serde(with = "crate::domain::document::timestamp")]
+    at: time::OffsetDateTime,
+}
+
+impl From<audit::AuditEntry> for AuditEntryEnvelope {
+    fn from(value: audit::AuditEntry) -> Self {
+        Self {
+            action: value.action,
+            actor_label: value.actor_label,
+            at: value.at,
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HistoryResponse {
+    slug: String,
+    history: Vec<AuditEntryEnvelope>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct GraphNodeEnvelope {
     slug: String,
     title: String,
@@ -180,6 +206,12 @@ pub struct ListQuery {
     limit: Option<String>,
     offset: Option<String>,
     status: Option<String>,
+}
+
+#[derive(Default, serde::Deserialize)]
+pub struct HistoryQuery {
+    limit: Option<String>,
+    offset: Option<String>,
 }
 
 pub async fn health(
@@ -268,6 +300,64 @@ pub async fn document_backlinks(
     let response = BacklinksResponse {
         backlinks: backlinks.into_iter().map(BacklinkEnvelope::from).collect(),
         mentions: mentions.into_iter().map(MentionEnvelope::from).collect(),
+    };
+    Ok((StatusCode::OK, Json(response)).into_response())
+}
+
+/// `GET /documents/{slug}/history` — append-only write-audit events for one
+/// document, newest first.
+///
+/// Unlike ordinary document reads, this surface is admin-or-owner only because
+/// it exposes actor labels. An unrelated author cannot read history for another
+/// author's published document even though they may read the document itself.
+pub async fn document_history(
+    State(state): State<AppState>,
+    Path(slug): Path<String>,
+    method: Method,
+    headers: HeaderMap,
+    query: Query<HistoryQuery>,
+) -> Result<Response, AppError> {
+    if method != Method::GET {
+        return Err(AppError::MethodNotAllowed(vec!["GET"]));
+    }
+
+    let Some(principal) = authenticate(&headers, &state.config, &state.pool).await else {
+        return Err(document_not_found(&slug));
+    };
+    let owner = if principal.has(Scope::Admin) {
+        None
+    } else if principal.has(Scope::Read) {
+        Some(principal.author_id.unwrap_or_else(uuid::Uuid::nil))
+    } else {
+        return Err(document_not_found(&slug));
+    };
+
+    let Some(document_id) = audit::resolve_history_document_id(&state.pool, &slug, owner).await?
+    else {
+        return Err(document_not_found(&slug));
+    };
+
+    let mut limit =
+        parse_non_negative_int(query.limit.as_deref(), "limit")?.unwrap_or(DEFAULT_LIMIT);
+    if limit < 1 {
+        return Err(AppError::BadRequest(
+            "Query param \"limit\" must be at least 1.".to_string(),
+        ));
+    }
+    if limit > MAX_LIMIT {
+        limit = MAX_LIMIT;
+    }
+    let offset = parse_non_negative_int(query.offset.as_deref(), "offset")?.unwrap_or(0);
+    let history = audit::list_audit_for_document(
+        &state.pool,
+        document_id,
+        i64::from(limit),
+        i64::from(offset),
+    )
+    .await?;
+    let response = HistoryResponse {
+        slug,
+        history: history.into_iter().map(AuditEntryEnvelope::from).collect(),
     };
     Ok((StatusCode::OK, Json(response)).into_response())
 }
