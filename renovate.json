@@ -7,6 +7,41 @@
     {
       "matchManagers": ["github-actions"],
       "groupName": "github-actions"
+    },
+    {
+      "matchManagers": ["cargo"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "groupName": "cargo minor and patch"
+    },
+    {
+      "matchManagers": ["cargo"],
+      "matchPackageNames": ["axum", "tower", "tower-http", "http"],
+      "groupName": "axum stack"
+    },
+    {
+      "matchManagers": ["cargo"],
+      "matchPackageNames": ["tokio", "futures-util", "async-trait"],
+      "groupName": "async runtime"
+    },
+    {
+      "matchManagers": ["cargo"],
+      "matchPackageNames": ["reqwest", "rmcp", "schemars"],
+      "groupName": "http and mcp clients"
+    },
+    {
+      "matchManagers": ["cargo"],
+      "matchPackageNames": ["serde", "serde_json", "time", "uuid"],
+      "groupName": "serde and core types"
+    },
+    {
+      "matchManagers": ["cargo"],
+      "matchPackageNames": ["tracing", "tracing-subscriber"],
+      "groupName": "tracing"
+    },
+    {
+      "matchManagers": ["cargo"],
+      "matchPackageNames": ["sqlx"],
+      "groupName": "sqlx (review major bumps carefully)"
     }
   ]
 }
