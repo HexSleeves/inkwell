@@ -153,13 +153,15 @@ pub async fn rate_limit(
 }
 
 /// Which requests the limiter governs: any non-idempotent mutation, plus `/ask`
-/// (which is `GET|POST` but drives two AI providers). Reads (`GET`/`HEAD`) and
-/// the public HTML site are deliberately excluded.
+/// (which is `GET|POST` but drives two AI providers), plus unauthenticated
+/// preview reads (which perform a secret comparison). Other reads (`GET`/`HEAD`)
+/// and the public HTML site are deliberately excluded.
 fn should_limit(method: &Method, path: &str) -> bool {
     matches!(
         *method,
         Method::POST | Method::PUT | Method::PATCH | Method::DELETE
     ) || path == "/ask"
+        || (*method == Method::GET && path.ends_with("/preview"))
 }
 
 /// Best-effort client IP. When `trust_forwarded` is set, prefers the platform
@@ -207,10 +209,16 @@ mod tests {
         assert!(should_limit(&Method::POST, "/media"));
         // `/ask` is throttled on any method — it is GET|POST and expensive.
         assert!(should_limit(&Method::GET, "/ask"));
+        // Preview-read is rate-limited because it performs a secret comparison.
+        assert!(should_limit(&Method::GET, "/documents/my-note/preview"));
         // Reads and the public HTML site stay unthrottled.
         assert!(!should_limit(&Method::GET, "/documents"));
         assert!(!should_limit(&Method::GET, "/"));
         assert!(!should_limit(&Method::GET, "/media/abc"));
+        assert!(!should_limit(
+            &Method::GET,
+            "/documents/my-note/preview-tokens"
+        ));
         assert!(!should_limit(&Method::HEAD, "/"));
     }
 
