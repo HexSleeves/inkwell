@@ -20,7 +20,7 @@ use crate::db::chunks;
 use crate::db::links::Visibility;
 use crate::error::AppError;
 use crate::http::AppState;
-use crate::http::api::resolve_visibility;
+use crate::http::auth::resolve_visibility;
 
 /// How many related notes a `/documents/{slug}/related` response returns.
 const RELATED_LIMIT: i64 = 5;

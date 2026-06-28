@@ -12,8 +12,8 @@ use crate::config::Config;
 use crate::http::AppState;
 
 use super::{
-    admin, ai, api, assets, auth_session, feed, media, pages, preview, rate_limit, request_id,
-    search, security_headers, sitemap, webmention,
+    admin, ai, assets, auth_session, documents, feed, graph, media, pages, preview, publish,
+    rate_limit, request_id, search, security_headers, sitemap, webmention,
 };
 
 pub fn build_router(config: Arc<Config>, pool: sqlx::PgPool) -> Router {
@@ -51,18 +51,27 @@ pub fn build_router_with_providers(
         llm,
     };
     let mut router = Router::new()
-        .route("/health", any(api::health))
+        .route("/health", any(documents::health))
         .route("/ask", any(ai::ask))
         .route("/webmention", any(webmention::webmention))
-        .route("/documents", any(api::documents))
-        .route("/documents/{slug}", any(api::document))
-        .route("/documents/{slug}/backlinks", any(api::document_backlinks))
-        .route("/documents/{slug}/graph", any(api::document_graph))
-        .route("/documents/{slug}/history", any(api::document_history))
+        .route("/documents", any(documents::documents))
+        .route("/documents/{slug}", any(documents::document))
+        .route(
+            "/documents/{slug}/backlinks",
+            any(graph::document_backlinks),
+        )
+        .route("/documents/{slug}/graph", any(graph::document_graph))
+        .route(
+            "/documents/{slug}/history",
+            any(documents::document_history),
+        )
         .route("/documents/{slug}/related", any(ai::document_related))
-        .route("/graph", any(api::graph))
-        .route("/documents/{slug}/publish", any(api::publish_document))
-        .route("/documents/{slug}/unpublish", any(api::unpublish_document))
+        .route("/graph", any(graph::graph))
+        .route("/documents/{slug}/publish", any(publish::publish_document))
+        .route(
+            "/documents/{slug}/unpublish",
+            any(publish::unpublish_document),
+        )
         // Raise the body limit on upload to MAX_MEDIA_BYTES; axum's default 2 MiB
         // `DefaultBodyLimit` would otherwise reject 2–5 MiB uploads before the
         // handler's own size check runs.

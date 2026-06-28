@@ -8,7 +8,7 @@ use crate::db::documents;
 use crate::db::links::Visibility;
 use crate::domain::document::SearchOptions;
 use crate::http::AppState;
-use crate::http::api::resolve_visibility;
+use crate::http::auth::resolve_visibility;
 use crate::http::cache;
 use crate::views::layout::{PAGE_SIZE, SiteMeta, derive_excerpt};
 use crate::views::search::render_search_page;

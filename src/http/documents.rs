@@ -9,7 +9,7 @@ use tokio::time::{Duration, timeout};
 
 use crate::db::audit::{self, AuditAction};
 use crate::db::documents;
-use crate::db::links::{self, Backlink, Graph, GraphEdge, GraphNode, Visibility};
+use crate::db::links::Visibility;
 use crate::domain::author::{Principal, Scope};
 use crate::domain::document::{
     DEFAULT_LIMIT, Document, DocumentPatch, DocumentStatus, GrowthStage, MAX_BODY_MARKDOWN_LENGTH,
@@ -20,12 +20,12 @@ use crate::domain::tags::normalize_tags;
 use crate::error::AppError;
 use crate::garden;
 use crate::http::AppState;
-use crate::http::auth::{authenticate, require_principal};
+use crate::http::auth::{authenticate, require_principal, require_scope, resolve_visibility};
 use crate::http::extractors::{parse_json_body, parse_non_negative_int, require_object};
 
 /// The canonical 404 for a document addressed by slug. Centralizes the message
 /// so every handler returns an identical not-found error.
-fn document_not_found(slug: &str) -> AppError {
+pub(crate) fn document_not_found(slug: &str) -> AppError {
     AppError::NotFound(format!("No document with slug \"{slug}\"."))
 }
 
@@ -78,49 +78,6 @@ struct ListResponse {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct BacklinkEnvelope {
-    slug: String,
-    title: String,
-    snippet: Option<String>,
-}
-
-impl From<Backlink> for BacklinkEnvelope {
-    fn from(value: Backlink) -> Self {
-        Self {
-            slug: value.source_slug,
-            title: value.source_title,
-            snippet: value.context_snippet,
-        }
-    }
-}
-
-/// A verified inbound Webmention surfaced alongside backlinks.
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct MentionEnvelope {
-    source_url: String,
-}
-
-impl From<crate::db::webmentions::Mention> for MentionEnvelope {
-    fn from(value: crate::db::webmentions::Mention) -> Self {
-        Self {
-            source_url: value.source_url,
-        }
-    }
-}
-
-/// The "linked from" surface as JSON: internal backlinks plus verified external
-/// Webmentions, both visibility-filtered identically (never a draft-targeting
-/// mention to the public).
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct BacklinksResponse {
-    backlinks: Vec<BacklinkEnvelope>,
-    mentions: Vec<MentionEnvelope>,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
 struct AuditEntryEnvelope {
     action: String,
     actor_label: String,
@@ -143,62 +100,6 @@ impl From<audit::AuditEntry> for AuditEntryEnvelope {
 struct HistoryResponse {
     slug: String,
     history: Vec<AuditEntryEnvelope>,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct GraphNodeEnvelope {
-    slug: String,
-    title: String,
-}
-
-impl From<GraphNode> for GraphNodeEnvelope {
-    fn from(value: GraphNode) -> Self {
-        Self {
-            slug: value.slug,
-            title: value.title,
-        }
-    }
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct GraphEdgeEnvelope {
-    source_slug: String,
-    target_slug: String,
-}
-
-impl From<GraphEdge> for GraphEdgeEnvelope {
-    fn from(value: GraphEdge) -> Self {
-        Self {
-            source_slug: value.source_slug,
-            target_slug: value.target_slug,
-        }
-    }
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct GraphEnvelope {
-    nodes: Vec<GraphNodeEnvelope>,
-    edges: Vec<GraphEdgeEnvelope>,
-}
-
-impl From<Graph> for GraphEnvelope {
-    fn from(value: Graph) -> Self {
-        Self {
-            nodes: value
-                .nodes
-                .into_iter()
-                .map(GraphNodeEnvelope::from)
-                .collect(),
-            edges: value
-                .edges
-                .into_iter()
-                .map(GraphEdgeEnvelope::from)
-                .collect(),
-        }
-    }
 }
 
 #[derive(Default, serde::Deserialize)]
@@ -270,40 +171,6 @@ pub async fn document(
     }
 }
 
-/// `GET /documents/{slug}/backlinks` — the "linked from" set as JSON: internal
-/// backlinks plus verified inbound Webmentions.
-///
-/// The target is resolved under the caller's visibility (authenticated ⇒ all
-/// statuses, else published-only), mirroring [`get_document`]: a target the
-/// caller cannot see 404s rather than leaking its existence. Both backlinks and
-/// mentions are fetched at the SAME visibility, so a public caller never sees a
-/// draft source nor a mention targeting a draft (the no-draft-leak invariant,
-/// enforced by the centralized [`Visibility`] predicate). GET only; 405 else.
-pub async fn document_backlinks(
-    State(state): State<AppState>,
-    Path(slug): Path<String>,
-    method: Method,
-    headers: HeaderMap,
-) -> Result<Response, AppError> {
-    if method != Method::GET {
-        return Err(AppError::MethodNotAllowed(vec!["GET"]));
-    }
-    let visibility = resolve_visibility(&headers, &state).await;
-    let Some(document) =
-        documents::get_document_by_slug_vis(&state.pool, &slug, visibility).await?
-    else {
-        return Err(document_not_found(&slug));
-    };
-    let backlinks = links::backlinks(&state.pool, document.id, visibility).await?;
-    let mentions =
-        crate::db::webmentions::verified_mentions(&state.pool, document.id, visibility).await?;
-    let response = BacklinksResponse {
-        backlinks: backlinks.into_iter().map(BacklinkEnvelope::from).collect(),
-        mentions: mentions.into_iter().map(MentionEnvelope::from).collect(),
-    };
-    Ok((StatusCode::OK, Json(response)).into_response())
-}
-
 /// `GET /documents/{slug}/history` — append-only write-audit events for one
 /// document, newest first.
 ///
@@ -360,124 +227,6 @@ pub async fn document_history(
         history: history.into_iter().map(AuditEntryEnvelope::from).collect(),
     };
     Ok((StatusCode::OK, Json(response)).into_response())
-}
-
-/// `GET /graph` — the whole garden's bounded link graph as JSON.
-///
-/// Visibility follows the same rule as [`get_document`]: an authenticated
-/// caller sees every note (`All`), an anonymous one only published notes
-/// (`Public`). The query itself enforces the no-draft-leak invariant — a public
-/// graph never returns a draft node nor an edge touching one — and is hard
-/// bounded by the node/edge caps in [`links`]. GET only; any other method 405s.
-pub async fn graph(
-    State(state): State<AppState>,
-    method: Method,
-    headers: HeaderMap,
-) -> Result<Response, AppError> {
-    if method != Method::GET {
-        return Err(AppError::MethodNotAllowed(vec!["GET"]));
-    }
-    let visibility = resolve_visibility(&headers, &state).await;
-    let graph = links::garden_graph(&state.pool, visibility).await?;
-    Ok((StatusCode::OK, Json(GraphEnvelope::from(graph))).into_response())
-}
-
-/// `GET /documents/{slug}/graph` — the one-hop neighborhood graph around a note.
-///
-/// Same visibility rule as [`graph`]/[`get_document`]: a note the caller cannot
-/// see 404s rather than leaking its existence, and the neighborhood is fetched
-/// at the SAME visibility so a public caller never sees a draft neighbor or an
-/// edge touching one. Bounded and depth-capped in [`links`]. GET only.
-pub async fn document_graph(
-    State(state): State<AppState>,
-    Path(slug): Path<String>,
-    method: Method,
-    headers: HeaderMap,
-) -> Result<Response, AppError> {
-    if method != Method::GET {
-        return Err(AppError::MethodNotAllowed(vec!["GET"]));
-    }
-    let visibility = resolve_visibility(&headers, &state).await;
-    if documents::get_document_by_slug_vis(&state.pool, &slug, visibility)
-        .await?
-        .is_none()
-    {
-        return Err(document_not_found(&slug));
-    }
-    let graph = links::note_neighborhood(&state.pool, &slug, visibility).await?;
-    Ok((StatusCode::OK, Json(GraphEnvelope::from(graph))).into_response())
-}
-
-pub async fn publish_document(
-    State(state): State<AppState>,
-    Path(slug): Path<String>,
-    method: Method,
-    headers: HeaderMap,
-) -> Result<Response, AppError> {
-    if method != Method::POST {
-        return Err(AppError::MethodNotAllowed(vec!["POST"]));
-    }
-    let principal = require_principal(&headers, &state.config, &state.pool).await?;
-    require_scope(&principal, Scope::Publish)?;
-    let Some(document) = documents::set_document_status(
-        &state.pool,
-        &slug,
-        DocumentStatus::Published,
-        owner_filter(&principal),
-    )
-    .await?
-    else {
-        return Err(document_not_found(&slug));
-    };
-    // Now publicly resolvable: upgrade stubs pointing at this slug.
-    garden::backfill_after_change(&state.pool, document.id, &document.slug).await;
-    // Opt-in Webmention send (default OFF): notify external targets this note
-    // links to. Fully inert unless INKWELL_WEBMENTION_SEND=true; always
-    // best-effort and detached, so it never blocks or fails the publish.
-    crate::http::webmention_send::maybe_send(&state, &document.slug, &document.body_markdown);
-    record_audit(
-        &state,
-        &principal,
-        AuditAction::Publish,
-        Some(document.id),
-        &document.slug,
-    )
-    .await;
-    Ok((StatusCode::OK, Json(DocumentEnvelope::from(document))).into_response())
-}
-
-pub async fn unpublish_document(
-    State(state): State<AppState>,
-    Path(slug): Path<String>,
-    method: Method,
-    headers: HeaderMap,
-) -> Result<Response, AppError> {
-    if method != Method::POST {
-        return Err(AppError::MethodNotAllowed(vec!["POST"]));
-    }
-    let principal = require_principal(&headers, &state.config, &state.pool).await?;
-    require_scope(&principal, Scope::Publish)?;
-    let Some(document) = documents::set_document_status(
-        &state.pool,
-        &slug,
-        DocumentStatus::Draft,
-        owner_filter(&principal),
-    )
-    .await?
-    else {
-        return Err(document_not_found(&slug));
-    };
-    // No longer publicly resolvable: downgrade links pointing at this slug to stubs.
-    garden::backfill_after_change(&state.pool, document.id, &document.slug).await;
-    record_audit(
-        &state,
-        &principal,
-        AuditAction::Unpublish,
-        Some(document.id),
-        &document.slug,
-    )
-    .await;
-    Ok((StatusCode::OK, Json(DocumentEnvelope::from(document))).into_response())
 }
 
 async fn create_document(
@@ -933,41 +682,6 @@ fn resolve_list_extra_status(
     }
 }
 
-/// Resolve the request's credentials to the correct [`Visibility`] for read
-/// surfaces (ADR 0009, slice 3b):
-///   - No credential / no `read` scope → [`Visibility::Public`]
-///   - Admin (`admin` scope or shared key) → [`Visibility::All`]
-///   - Non-admin with `read` scope + known author id → [`Visibility::Owner(id)`]
-///
-/// This is the SINGLE place read-visibility is derived for every API surface
-/// that exposes note content; callers must NOT re-derive this rule.
-/// `pub(crate)` so the AI handler module can share the same rule.
-pub(crate) async fn resolve_visibility(headers: &HeaderMap, state: &AppState) -> Visibility {
-    let Some(principal) = authenticate(headers, &state.config, &state.pool).await else {
-        return Visibility::Public;
-    };
-    if principal.has(Scope::Admin) {
-        return Visibility::All;
-    }
-    if principal.has(Scope::Read)
-        && let Some(author_id) = principal.author_id
-    {
-        return Visibility::Owner(author_id);
-    }
-    Visibility::Public
-}
-
-/// Require the principal to hold `scope` (admin implies all). 403 otherwise.
-pub(crate) fn require_scope(principal: &Principal, scope: Scope) -> Result<(), AppError> {
-    if principal.has(scope) {
-        Ok(())
-    } else {
-        Err(AppError::Forbidden(format!(
-            "This action requires the \"{scope}\" scope."
-        )))
-    }
-}
-
 /// The ownership constraint passed to a mutating DB query (ADR 0009 slice 3).
 /// `None` for an admin (the shared key) — no owner constraint. For a non-admin,
 /// the principal's author id, so the `UPDATE`/`DELETE` only matches a row that
@@ -978,7 +692,7 @@ pub(crate) fn require_scope(principal: &Principal, scope: Scope) -> Result<(), A
 ///
 /// `author_id` is always `Some` for a real principal; the `nil` fallback fails
 /// closed (matches no note) rather than degrading to "no constraint".
-fn owner_filter(principal: &Principal) -> Option<uuid::Uuid> {
+pub(crate) fn owner_filter(principal: &Principal) -> Option<uuid::Uuid> {
     if principal.has(Scope::Admin) {
         None
     } else {
@@ -997,7 +711,7 @@ fn owner_filter(principal: &Principal) -> Option<uuid::Uuid> {
 /// As of slice 2 the write is attributed to the resolved [`Principal`]: the
 /// owning author's id and label for a scoped token, or the bootstrap admin with
 /// `actor_label = "shared-key"`/`"mcp-key"` for a static key.
-async fn record_audit(
+pub(crate) async fn record_audit(
     state: &AppState,
     principal: &Principal,
     action: AuditAction,

@@ -49,8 +49,8 @@ use crate::domain::document::StatusFilter;
 use crate::domain::token::{generate_preview, parse_preview_prefix, sha256_hex};
 use crate::error::AppError;
 use crate::http::AppState;
-use crate::http::api::{DocumentEnvelope, require_scope, resolve_visibility};
-use crate::http::auth::require_principal;
+use crate::http::auth::{require_principal, require_scope, resolve_visibility};
+use crate::http::documents::DocumentEnvelope;
 
 /// Maximum length for an `expiresAt` ISO-8601 string in the request body.
 const MAX_EXPIRES_AT_LEN: usize = 64;
