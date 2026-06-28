@@ -378,26 +378,33 @@ pub async fn search_chunks(
     limit: i64,
     provider: &str,
     model: &str,
+    max_distance: f32,
 ) -> Result<Vec<RetrievedChunk>, sqlx::Error> {
     let embedding = vector_to_pg_text(query_embedding);
     let rows: Vec<(String, String, String, f64)> = match visibility {
         Visibility::Public => {
             sqlx::query_as::<Postgres, (String, String, String, f64)>(
                 r#"
-                SELECT documents.slug, documents.title, note_chunks.content,
-                       (note_chunks.embedding <=> $1::vector) AS distance
-                FROM note_chunks
-                JOIN documents ON documents.id = note_chunks.note_id
-                WHERE documents.status = 'published'
-                  AND note_chunks.embedding_provider = $2
-                  AND note_chunks.embedding_model = $3
-                ORDER BY distance ASC, documents.slug ASC, note_chunks.chunk_index ASC
-                LIMIT $4
+                SELECT slug, title, content, distance
+                FROM (
+                    SELECT documents.slug, documents.title, note_chunks.content,
+                           note_chunks.chunk_index,
+                           (note_chunks.embedding <=> $1::vector) AS distance
+                    FROM note_chunks
+                    JOIN documents ON documents.id = note_chunks.note_id
+                    WHERE documents.status = 'published'
+                      AND note_chunks.embedding_provider = $2
+                      AND note_chunks.embedding_model = $3
+                ) AS scored
+                WHERE distance <= $4
+                ORDER BY distance ASC, slug ASC, chunk_index ASC
+                LIMIT $5
                 "#,
             )
             .bind(&embedding)
             .bind(provider)
             .bind(model)
+            .bind(max_distance)
             .bind(limit)
             .fetch_all(pool)
             .await?
@@ -405,21 +412,27 @@ pub async fn search_chunks(
         Visibility::Owner(owner_id) => {
             sqlx::query_as::<Postgres, (String, String, String, f64)>(
                 r#"
-                SELECT documents.slug, documents.title, note_chunks.content,
-                       (note_chunks.embedding <=> $1::vector) AS distance
-                FROM note_chunks
-                JOIN documents ON documents.id = note_chunks.note_id
-                WHERE (documents.status = 'published' OR documents.owner_id = $2)
-                  AND note_chunks.embedding_provider = $3
-                  AND note_chunks.embedding_model = $4
-                ORDER BY distance ASC, documents.slug ASC, note_chunks.chunk_index ASC
-                LIMIT $5
+                SELECT slug, title, content, distance
+                FROM (
+                    SELECT documents.slug, documents.title, note_chunks.content,
+                           note_chunks.chunk_index,
+                           (note_chunks.embedding <=> $1::vector) AS distance
+                    FROM note_chunks
+                    JOIN documents ON documents.id = note_chunks.note_id
+                    WHERE (documents.status = 'published' OR documents.owner_id = $2)
+                      AND note_chunks.embedding_provider = $3
+                      AND note_chunks.embedding_model = $4
+                ) AS scored
+                WHERE distance <= $5
+                ORDER BY distance ASC, slug ASC, chunk_index ASC
+                LIMIT $6
                 "#,
             )
             .bind(&embedding)
             .bind(owner_id)
             .bind(provider)
             .bind(model)
+            .bind(max_distance)
             .bind(limit)
             .fetch_all(pool)
             .await?
@@ -427,19 +440,25 @@ pub async fn search_chunks(
         Visibility::All => {
             sqlx::query_as::<Postgres, (String, String, String, f64)>(
                 r#"
-                SELECT documents.slug, documents.title, note_chunks.content,
-                       (note_chunks.embedding <=> $1::vector) AS distance
-                FROM note_chunks
-                JOIN documents ON documents.id = note_chunks.note_id
-                WHERE note_chunks.embedding_provider = $2
-                  AND note_chunks.embedding_model = $3
-                ORDER BY distance ASC, documents.slug ASC, note_chunks.chunk_index ASC
-                LIMIT $4
+                SELECT slug, title, content, distance
+                FROM (
+                    SELECT documents.slug, documents.title, note_chunks.content,
+                           note_chunks.chunk_index,
+                           (note_chunks.embedding <=> $1::vector) AS distance
+                    FROM note_chunks
+                    JOIN documents ON documents.id = note_chunks.note_id
+                    WHERE note_chunks.embedding_provider = $2
+                      AND note_chunks.embedding_model = $3
+                ) AS scored
+                WHERE distance <= $4
+                ORDER BY distance ASC, slug ASC, chunk_index ASC
+                LIMIT $5
                 "#,
             )
             .bind(&embedding)
             .bind(provider)
             .bind(model)
+            .bind(max_distance)
             .bind(limit)
             .fetch_all(pool)
             .await?

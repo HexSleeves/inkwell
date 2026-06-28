@@ -145,6 +145,7 @@ fn browser_login_router(pool: sqlx::PgPool) -> axum::Router {
             voyage_api_key: None,
             anthropic_api_key: None,
             llm_model: inkwell::config::DEFAULT_LLM_MODEL.to_string(),
+            min_similarity: 0.0,
             webmention_send: false,
             browser_login: true,
             write_rate_limit: 0,
