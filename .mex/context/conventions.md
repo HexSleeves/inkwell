@@ -20,7 +20,7 @@ edges:
     condition: when the convention relates to updating Document structs and SELECT queries
   - target: patterns/debug-request-failures.md
     condition: when a convention was violated and caused a bug
-last_updated: 2026-06-23
+last_updated: 2026-06-28
 ---
 
 # Conventions
@@ -87,7 +87,7 @@ if let Err(error) = garden::persist_source_edges(&state.pool, document.id, &refs
 ## Verify Checklist
 
 Before presenting any code:
-- [ ] DB access only in `src/db/`, never in handlers or `src/garden.rs` (except `sqlx::query` in garden's internal helpers)
+- [ ] DB access only in `src/db/`, never in handlers or `src/garden.rs`
 - [ ] New handlers return `Result<Response, AppError>`, not `Result<Json<T>, StatusCode>`
 - [ ] Write endpoints call `require_principal`, then `require_scope` (create→`write`, publish→`publish`), then pass `owner_filter(&principal)` into the mutating query so ownership is enforced atomically (non-owner → 0 rows → 404; admin → `None` = no constraint) — no separate check-then-write; `create` stamps `owner_id`; audit with that principal
 - [ ] Read endpoints derive `Visibility` from `can_see_drafts` (requires the `read` scope; admin implies all; anonymous short-circuits without a DB hit) — not a bare `is_some()`

@@ -18,7 +18,7 @@ use crate::db::documents;
 use crate::db::links::{self, LinkType, NewLink, TargetKind, Visibility};
 use crate::domain::document::DocumentStatus;
 use crate::rendering::wikilink::{EmbedResolution, extract_wikilinks, render_markdown_with_embeds};
-use sqlx::{PgPool, Postgres};
+use sqlx::PgPool;
 use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
@@ -159,7 +159,9 @@ async fn resolve_embeds(
         *budget -= 1;
         // Fetch the target's status + body. A draft (under Public) or a missing
         // note yields a placeholder — never any of the target's content.
-        let Some((status, body)) = fetch_embed_target(pool, slug, visibility).await? else {
+        let Some((status, body)) =
+            documents::get_embed_target_by_slug(pool, slug, visibility).await?
+        else {
             out.insert(slug.clone(), EmbedResolution::Placeholder);
             continue;
         };
@@ -199,45 +201,6 @@ async fn resolve_embeds(
         out.insert(slug.clone(), EmbedResolution::Content(content));
     }
     Ok(out)
-}
-
-/// Fetch an embed target's `(status, body_markdown)` by slug at `visibility`.
-/// Under [`Visibility::Public`] a draft target is filtered out at the SQL level
-/// (returns `None`), so a draft can never reach the renderer as content.
-async fn fetch_embed_target(
-    pool: &PgPool,
-    slug: &str,
-    visibility: Visibility,
-) -> Result<Option<(DocumentStatus, String)>, sqlx::Error> {
-    match visibility {
-        Visibility::Public => {
-            sqlx::query_as::<Postgres, (DocumentStatus, String)>(
-                "SELECT status, body_markdown FROM documents \
-                 WHERE slug = $1 AND status = 'published'",
-            )
-            .bind(slug)
-            .fetch_optional(pool)
-            .await
-        }
-        Visibility::Owner(owner_id) => {
-            sqlx::query_as::<Postgres, (DocumentStatus, String)>(
-                "SELECT status, body_markdown FROM documents \
-                 WHERE slug = $1 AND (status = 'published' OR owner_id = $2)",
-            )
-            .bind(slug)
-            .bind(owner_id)
-            .fetch_optional(pool)
-            .await
-        }
-        Visibility::All => {
-            sqlx::query_as::<Postgres, (DocumentStatus, String)>(
-                "SELECT status, body_markdown FROM documents WHERE slug = $1",
-            )
-            .bind(slug)
-            .fetch_optional(pool)
-            .await
-        }
-    }
 }
 
 /// Replace `source_id`'s outbound edges with the given resolved references.
@@ -316,13 +279,7 @@ pub async fn rerender_sources(pool: &PgPool, ids: &[Uuid]) {
 }
 
 async fn rerender_one(pool: &PgPool, id: Uuid) -> Result<(), sqlx::Error> {
-    let Some((_slug, body_markdown)) = sqlx::query_as::<Postgres, (String, String)>(
-        "SELECT slug, body_markdown FROM documents WHERE id = $1",
-    )
-    .bind(id)
-    .fetch_optional(pool)
-    .await?
-    else {
+    let Some((_slug, body_markdown)) = documents::get_document_body_by_id(pool, id).await? else {
         return Ok(());
     };
     let (html, refs) = render_and_resolve(pool, &body_markdown).await?;

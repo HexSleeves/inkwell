@@ -80,6 +80,54 @@ pub async fn get_document_by_slug(
     }
 }
 
+pub async fn get_document_body_by_id(
+    pool: &PgPool,
+    id: Uuid,
+) -> Result<Option<(String, String)>, sqlx::Error> {
+    sqlx::query_as::<Postgres, (String, String)>(
+        "SELECT slug, body_markdown FROM documents WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await
+}
+
+pub async fn get_embed_target_by_slug(
+    pool: &PgPool,
+    slug: &str,
+    visibility: Visibility,
+) -> Result<Option<(DocumentStatus, String)>, sqlx::Error> {
+    match visibility {
+        Visibility::Public => {
+            sqlx::query_as::<Postgres, (DocumentStatus, String)>(
+                "SELECT status, body_markdown FROM documents \
+                 WHERE slug = $1 AND status = 'published'",
+            )
+            .bind(slug)
+            .fetch_optional(pool)
+            .await
+        }
+        Visibility::Owner(owner_id) => {
+            sqlx::query_as::<Postgres, (DocumentStatus, String)>(
+                "SELECT status, body_markdown FROM documents \
+                 WHERE slug = $1 AND (status = 'published' OR owner_id = $2)",
+            )
+            .bind(slug)
+            .bind(owner_id)
+            .fetch_optional(pool)
+            .await
+        }
+        Visibility::All => {
+            sqlx::query_as::<Postgres, (DocumentStatus, String)>(
+                "SELECT status, body_markdown FROM documents WHERE slug = $1",
+            )
+            .bind(slug)
+            .fetch_optional(pool)
+            .await
+        }
+    }
+}
+
 pub async fn list_documents(
     pool: &PgPool,
     options: ListOptions,
