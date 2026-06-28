@@ -58,6 +58,7 @@ pub fn build_router_with_providers(
         .route("/documents/{slug}", any(api::document))
         .route("/documents/{slug}/backlinks", any(api::document_backlinks))
         .route("/documents/{slug}/graph", any(api::document_graph))
+        .route("/documents/{slug}/history", any(api::document_history))
         .route("/documents/{slug}/related", any(ai::document_related))
         .route("/graph", any(api::graph))
         .route("/documents/{slug}/publish", any(api::publish_document))
