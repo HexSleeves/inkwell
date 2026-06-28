@@ -81,6 +81,7 @@ pub fn test_config(database_url: String) -> Arc<Config> {
         voyage_api_key: None,
         anthropic_api_key: None,
         llm_model: inkwell::config::DEFAULT_LLM_MODEL.to_string(),
+        min_similarity: 0.0,
         // Webmention send stays OFF in tests: the receive path and SSRF guard are
         // what we exercise; send is asserted inert separately.
         webmention_send: false,

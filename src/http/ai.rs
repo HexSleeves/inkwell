@@ -225,6 +225,11 @@ async fn retrieve_context(
         }
     };
     if let Some(embedding) = embeddings.first() {
+        let max_distance = if state.config.min_similarity > 0.0 {
+            1.0 - state.config.min_similarity
+        } else {
+            2.0
+        };
         let hits = chunks::search_chunks(
             &state.pool,
             embedding,
@@ -232,6 +237,7 @@ async fn retrieve_context(
             ASK_TOP_K,
             state.embedder.provider(),
             state.embedder.model(),
+            max_distance,
         )
         .await?;
         if !hits.is_empty() {
