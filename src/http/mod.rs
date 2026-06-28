@@ -12,6 +12,7 @@ pub mod auth;
 pub mod auth_session;
 pub mod cache;
 pub mod documents;
+pub mod editor;
 pub mod extractors;
 pub mod feed;
 pub mod graph;

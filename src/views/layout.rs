@@ -312,6 +312,49 @@ pub(crate) const STYLES: &str = r#"
       padding-bottom: 4rem;
     }
   }
+  /* Authoring web UI (CYP-42): rounded form controls, status badges, and a
+     two-column edit/preview grid that collapses to one column on narrow screens. */
+  .btn {
+    display: inline-flex; align-items: center; gap: 0.4rem; cursor: pointer;
+    padding: 0.55rem 1.05rem; font-size: 0.95rem; font-weight: 700; font-family: inherit;
+    border: 1px solid rgb(197 107 71); border-radius: 0.85rem;
+    background: rgb(197 107 71); color: #fff; text-decoration: none;
+  }
+  .btn:hover { background: rgb(176 90 56); border-color: rgb(176 90 56); color: #fff; }
+  .btn-secondary { background: #fff; color: rgb(166 87 53); }
+  .btn-secondary:hover { background: rgb(247 251 247); color: rgb(166 87 53); }
+  .btn-publish { background: rgb(61 110 78); border-color: rgb(61 110 78); }
+  .btn-publish:hover { background: rgb(47 93 69); border-color: rgb(47 93 69); }
+  .editor-actions { display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap; margin: 1.25rem 0; }
+  .editor-form { display: grid; gap: 0.35rem; }
+  .editor-form label { font-weight: 700; color: rgb(47 93 69); margin-top: 0.75rem; }
+  .editor-form .hint { font-weight: 400; color: rgb(120 132 123); font-size: 0.85rem; }
+  .editor-form input, .editor-form select, .editor-form textarea {
+    width: 100%; padding: 0.6rem 0.8rem; font-size: 1rem; font-family: inherit;
+    border: 1px solid rgb(206 220 208); border-radius: 0.7rem; background: #fff; color: inherit;
+  }
+  .editor-form textarea { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; line-height: 1.55; resize: vertical; }
+  .editor-statusline { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.5rem; font-size: 0.9rem; color: rgb(96 110 100); }
+  .badge {
+    display: inline-flex; align-items: center; min-height: 1.5rem; font-size: 0.72rem; font-weight: 700;
+    text-transform: lowercase; letter-spacing: 0.02em; padding: 0.2rem 0.6rem; border-radius: 999px;
+    color: rgb(120 132 123); background: rgb(238 240 238); border: 1px solid rgb(214 222 214);
+  }
+  .badge-published { color: rgb(61 110 78); background: rgb(228 240 230); border-color: rgb(198 222 202); }
+  .badge-draft { color: rgb(166 87 53); background: rgb(245 235 230); border-color: rgb(228 210 200); }
+  table.doc-list { border-collapse: collapse; width: 100%; font-size: 0.95rem; margin-top: 1rem; }
+  table.doc-list th, table.doc-list td { border-bottom: 1px solid rgb(224 232 224); padding: 0.6rem 0.7rem; text-align: left; }
+  table.doc-list th { color: rgb(47 93 69); font-weight: 800; }
+  table.doc-list .row-actions a { color: rgb(197 107 71); font-weight: 600; text-decoration: none; }
+  table.doc-list .row-actions a:hover { color: rgb(176 90 56); }
+  .editor-grid { display: grid; gap: 2rem; }
+  .preview { border-top: 1px solid rgb(224 232 224); padding-top: 1rem; }
+  .preview h2 { font-size: 1.2rem; color: rgb(47 93 69); margin-top: 0; }
+  .preview-body { min-height: 4rem; }
+  @media (min-width: 900px) {
+    .editor-grid { grid-template-columns: 1fr 1fr; align-items: start; }
+    .preview { border-top: none; border-left: 1px solid rgb(224 232 224); padding-top: 0; padding-left: 2rem; }
+  }
 "#;
 
 /// Leaf glyph for the wordmark pill.

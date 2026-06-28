@@ -68,7 +68,7 @@ Copy `.env.example` to `.env` before local development. `.env` is gitignored.
 | `INKWELL_WRITE_RATE_LIMIT` | `60` | Write rate limit (req/min). `0` disables. |
 | `INKWELL_TRUST_FORWARDED_HEADERS` | `false` | Trust `X-Forwarded-For` for IP keying (set `true` only behind a trusted proxy). |
 | `INKWELL_WEBMENTION_SEND` | `false` | Send outbound Webmentions on publish. |
-| `INKWELL_BROWSER_LOGIN` | `false` | Enable flag-gated browser session login (`/auth/*`). |
+| `INKWELL_BROWSER_LOGIN` | `false` | Enable flag-gated browser session login (`/auth/*`) and the authoring web UI (`/login`, `/editor`). |
 
 ### Optional — AI / semantic layer
 

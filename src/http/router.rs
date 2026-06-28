@@ -12,8 +12,8 @@ use crate::config::Config;
 use crate::http::AppState;
 
 use super::{
-    admin, ai, assets, auth_session, documents, feed, graph, media, pages, preview, publish,
-    rate_limit, request_id, search, security_headers, sitemap, webmention,
+    admin, ai, assets, auth_session, documents, editor, feed, graph, media, pages, preview,
+    publish, rate_limit, request_id, search, security_headers, sitemap, webmention,
 };
 
 pub fn build_router(config: Arc<Config>, pool: sqlx::PgPool) -> Router {
@@ -126,7 +126,14 @@ pub fn build_router_with_providers(
         router = router
             .route("/login", get(auth_session::login_page))
             .route("/auth/login", any(auth_session::login))
-            .route("/auth/logout", any(auth_session::logout));
+            .route("/auth/logout", any(auth_session::logout))
+            // Authoring web UI (CYP-42). Static segments, so matchit prefers the
+            // `/editor*` routes over the public `/{slug}` catch-all, and `/editor/new`
+            // over `/editor/{slug}`. The pages drive the existing `/documents` JSON
+            // API; auth/scope are enforced there, not by these HTML shells.
+            .route("/editor", get(editor::editor_list_page))
+            .route("/editor/new", get(editor::editor_new_page))
+            .route("/editor/{slug}", get(editor::editor_edit_page));
     }
 
     router

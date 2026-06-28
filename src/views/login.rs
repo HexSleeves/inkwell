@@ -26,6 +26,7 @@ pub fn render_login_page(site: &SiteMeta<'_>, csp_nonce: Option<&str>, logged_in
     let body = if logged_in {
         r#"<h1>Your account</h1>
         <p>You are signed in.</p>
+        <p><a class="btn" href="/editor">Open the editor</a></p>
         <button id="logout" type="button">Log out</button>
         <p id="status" role="status" aria-live="polite"></p>"#
             .to_string()

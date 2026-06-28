@@ -1,5 +1,6 @@
 pub mod archive;
 pub mod document;
+pub mod editor;
 pub mod index;
 pub mod layout;
 pub mod login;
