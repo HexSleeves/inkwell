@@ -82,7 +82,12 @@ pub async fn render_and_resolve(
     )
     .await?;
 
-    let html = render_markdown_with_embeds(markdown, &existing, &embeds);
+    let markdown = markdown.to_owned();
+    let html = tokio::task::spawn_blocking(move || {
+        render_markdown_with_embeds(&markdown, &existing, &embeds)
+    })
+    .await
+    .expect("markdown render task panicked");
 
     let out = refs
         .into_iter()
@@ -184,7 +189,11 @@ async fn resolve_embeds(
             budget,
         ))
         .await?;
-        let content = render_markdown_with_embeds(&body, &child_existing, &child_embeds);
+        let content = tokio::task::spawn_blocking(move || {
+            render_markdown_with_embeds(&body, &child_existing, &child_embeds)
+        })
+        .await
+        .expect("markdown render task panicked");
         visited.remove(slug);
 
         out.insert(slug.clone(), EmbedResolution::Content(content));
