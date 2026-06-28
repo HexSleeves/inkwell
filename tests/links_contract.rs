@@ -5,6 +5,8 @@
 
 mod common;
 
+use axum::body::{Body, to_bytes};
+use http::{Method, Request, StatusCode};
 use inkwell::db::documents::{
     create_document, get_document_by_slug, set_rendered_html, update_document_by_slug,
 };
@@ -19,9 +21,13 @@ use inkwell::garden::{
     affected_sources, backfill_after_change, persist_source_edges, render_and_resolve,
     rerender_sources,
 };
+use serde_json::json;
 use sqlx::Postgres;
 use std::sync::LazyLock;
 use tokio::sync::{Mutex, MutexGuard};
+use tower::ServiceExt;
+
+const SHARED_KEY: &str = "test-secret-key";
 
 /// These tests share one database and `maybe_pool` truncates it on entry, so
 /// they must not run concurrently (libtest runs a binary's tests on parallel
@@ -31,6 +37,38 @@ static DB_TEST_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
 async fn db_guard() -> MutexGuard<'static, ()> {
     DB_TEST_LOCK.lock().await
+}
+
+async fn post_document(
+    router: axum::Router,
+    payload: serde_json::Value,
+) -> anyhow::Result<http::Response<Body>> {
+    Ok(router
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/documents")
+                .header("content-type", "application/json")
+                .header("x-api-key", SHARED_KEY)
+                .body(Body::from(payload.to_string()))?,
+        )
+        .await?)
+}
+
+async fn get_document(router: axum::Router, slug: &str) -> anyhow::Result<serde_json::Value> {
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!("/documents/{slug}"))
+                .header("x-api-key", SHARED_KEY)
+                .body(Body::empty())?,
+        )
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = to_bytes(response.into_body(), usize::MAX).await?;
+    Ok(serde_json::from_slice(&body)?)
 }
 
 fn new_doc(slug: &str) -> NewDocument {
@@ -302,6 +340,76 @@ async fn backfill_lights_up_stub_when_target_appears() -> anyhow::Result<()> {
     .fetch_one(&pool)
     .await?;
     assert!(resolved, "edge is now resolved");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn publishing_target_fans_out_backfill_to_inbound_stubs() -> anyhow::Result<()> {
+    let _guard = db_guard().await;
+    let Some(pool) = common::maybe_pool().await? else {
+        return Ok(());
+    };
+    let router = common::router_for(pool);
+
+    let response = post_document(
+        router.clone(),
+        json!({
+            "title": "Source Fanout",
+            "slug": "source-fanout",
+            "bodyMarkdown": "see [[future-note]]"
+        }),
+    )
+    .await?;
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let source = get_document(router.clone(), "source-fanout").await?;
+    let html_before = source["renderedHtml"].as_str().unwrap();
+    assert!(
+        html_before.contains("href=\"/future-note\"") && html_before.contains("class=\"stub\""),
+        "source starts with an unresolved stub"
+    );
+
+    // Create the target as a DRAFT. Wikilinks resolve at PUBLIC visibility, so a
+    // draft target must NOT light up the stub yet.
+    let response = post_document(
+        router.clone(),
+        json!({
+            "title": "Future Note",
+            "slug": "future-note",
+            "bodyMarkdown": "target body"
+        }),
+    )
+    .await?;
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let source = get_document(router.clone(), "source-fanout").await?;
+    let html_draft = source["renderedHtml"].as_str().unwrap();
+    assert!(
+        html_draft.contains("class=\"stub\""),
+        "a draft target leaves the inbound link a stub (public resolution)"
+    );
+
+    // Publish the target → the publish route's backfill fan-out re-renders the
+    // inbound source so its stub becomes a resolved link.
+    let publish = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/documents/future-note/publish")
+                .header("x-api-key", SHARED_KEY)
+                .body(Body::empty())?,
+        )
+        .await?;
+    assert_eq!(publish.status(), StatusCode::OK);
+
+    let source = get_document(router, "source-fanout").await?;
+    let html_after = source["renderedHtml"].as_str().unwrap();
+    assert!(
+        html_after.contains("href=\"/future-note\"") && !html_after.contains("class=\"stub\""),
+        "publishing the target re-renders inbound stubs as resolved links"
+    );
 
     Ok(())
 }
