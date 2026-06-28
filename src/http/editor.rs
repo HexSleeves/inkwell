@@ -15,10 +15,10 @@
 //! independently (a forged or cookie-less request to the API still 401/403s).
 //! The cookie-presence check here is a UX convenience, nothing more.
 
+use axum::extract::Extension;
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{Html, IntoResponse, Response};
-use axum::extract::Extension;
 
 use crate::http::AppState;
 use crate::http::auth_session::extract_session_cookie;

@@ -60,7 +60,11 @@ async fn mint_token(router: &axum::Router, name: &str, scopes: &[&str]) -> anyho
                 .body(Body::from(serde_json::to_vec(&payload)?))?,
         )
         .await?;
-    assert_eq!(response.status(), StatusCode::CREATED, "mint should succeed");
+    assert_eq!(
+        response.status(),
+        StatusCode::CREATED,
+        "mint should succeed"
+    );
     let bytes = to_bytes(response.into_body(), usize::MAX).await?;
     let json: serde_json::Value = serde_json::from_slice(&bytes)?;
     Ok(json["token"].as_str().expect("token").to_string())
@@ -165,7 +169,12 @@ async fn flag_on_editor_pages_render_with_session() -> anyhow::Result<()> {
         return Ok(());
     };
     let router = browser_login_router(pool);
-    let token = mint_token(&router, "editor-pages-author", &["read", "write", "publish"]).await?;
+    let token = mint_token(
+        &router,
+        "editor-pages-author",
+        &["read", "write", "publish"],
+    )
+    .await?;
     let cookie = login_cookie(&router, &token).await?;
 
     for (uri, needle) in [
@@ -199,7 +208,10 @@ async fn flag_on_editor_pages_render_with_session() -> anyhow::Result<()> {
             .and_then(|v| v.to_str().ok())
             .unwrap_or_default()
             .to_string();
-        assert!(csp.contains("nonce-"), "{uri} CSP must carry a script nonce");
+        assert!(
+            csp.contains("nonce-"),
+            "{uri} CSP must carry a script nonce"
+        );
         let body = body_string(response).await?;
         assert!(body.contains(needle), "{uri} must contain {needle}");
     }
@@ -242,7 +254,10 @@ async fn editor_create_edit_publish_unpublish_round_trip() -> anyhow::Result<()>
     let version = created["version"].as_i64().expect("version");
     // The rendered HTML the preview pane shows is present on the envelope.
     assert!(
-        created["renderedHtml"].as_str().unwrap_or_default().contains("hello"),
+        created["renderedHtml"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("hello"),
         "create response must carry renderedHtml for the preview"
     );
 
@@ -308,6 +323,9 @@ async fn editor_create_edit_publish_unpublish_round_trip() -> anyhow::Result<()>
     assert_eq!(unpublish.status(), StatusCode::OK, "unpublish must 200");
     let back_to_draft: serde_json::Value =
         serde_json::from_slice(&to_bytes(unpublish.into_body(), usize::MAX).await?)?;
-    assert_eq!(back_to_draft["status"], "draft", "doc must be a draft again");
+    assert_eq!(
+        back_to_draft["status"], "draft",
+        "doc must be a draft again"
+    );
     Ok(())
 }
