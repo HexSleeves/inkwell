@@ -23,6 +23,12 @@ use crate::http::AppState;
 use crate::http::auth::{authenticate, require_principal};
 use crate::http::extractors::{parse_json_body, parse_non_negative_int, require_object};
 
+/// The canonical 404 for a document addressed by slug. Centralizes the message
+/// so every handler returns an identical not-found error.
+fn document_not_found(slug: &str) -> AppError {
+    AppError::NotFound(format!("No document with slug \"{slug}\"."))
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct DocumentEnvelope {
@@ -254,9 +260,7 @@ pub async fn document_backlinks(
     let Some(document) =
         documents::get_document_by_slug_vis(&state.pool, &slug, visibility).await?
     else {
-        return Err(AppError::NotFound(format!(
-            "No document with slug \"{slug}\"."
-        )));
+        return Err(document_not_found(&slug));
     };
     let backlinks = links::backlinks(&state.pool, document.id, visibility).await?;
     let mentions =
@@ -308,9 +312,7 @@ pub async fn document_graph(
         .await?
         .is_none()
     {
-        return Err(AppError::NotFound(format!(
-            "No document with slug \"{slug}\"."
-        )));
+        return Err(document_not_found(&slug));
     }
     let graph = links::note_neighborhood(&state.pool, &slug, visibility).await?;
     Ok((StatusCode::OK, Json(GraphEnvelope::from(graph))).into_response())
@@ -335,9 +337,7 @@ pub async fn publish_document(
     )
     .await?
     else {
-        return Err(AppError::NotFound(format!(
-            "No document with slug \"{slug}\"."
-        )));
+        return Err(document_not_found(&slug));
     };
     // Now publicly resolvable: upgrade stubs pointing at this slug.
     garden::backfill_after_change(&state.pool, document.id, &document.slug).await;
@@ -375,9 +375,7 @@ pub async fn unpublish_document(
     )
     .await?
     else {
-        return Err(AppError::NotFound(format!(
-            "No document with slug \"{slug}\"."
-        )));
+        return Err(document_not_found(&slug));
     };
     // No longer publicly resolvable: downgrade links pointing at this slug to stubs.
     garden::backfill_after_change(&state.pool, document.id, &document.slug).await;
@@ -516,9 +514,7 @@ async fn get_document(
             )
                 .into_response());
         }
-        return Err(AppError::NotFound(format!(
-            "No document with slug \"{slug}\"."
-        )));
+        return Err(document_not_found(&slug));
     };
     // Advertise the current version as an ETag so clients can echo it back as
     // `If-Match` on a conditional update. RFC 7232 requires the value to be a
@@ -634,9 +630,7 @@ async fn update_document(
             {
                 documents::ConditionalUpdate::Updated(document) => *document,
                 documents::ConditionalUpdate::NotFound => {
-                    return Err(AppError::NotFound(format!(
-                        "No document with slug \"{slug}\"."
-                    )));
+                    return Err(document_not_found(&slug));
                 }
                 documents::ConditionalUpdate::VersionMismatch { current } => {
                     return Err(AppError::Conflict(format!(
@@ -650,9 +644,7 @@ async fn update_document(
             let Some(document) =
                 documents::update_document_by_slug(&state.pool, &slug, patch, owner).await?
             else {
-                return Err(AppError::NotFound(format!(
-                    "No document with slug \"{slug}\"."
-                )));
+                return Err(document_not_found(&slug));
             };
             document
         }
@@ -718,17 +710,13 @@ async fn delete_document(
     let Some(document) =
         documents::get_document_by_slug(&state.pool, &slug, StatusFilter::default()).await?
     else {
-        return Err(AppError::NotFound(format!(
-            "No document with slug \"{slug}\"."
-        )));
+        return Err(document_not_found(&slug));
     };
     let affected = garden::affected_sources(&state.pool, document.id, &document.slug).await;
     // Ownership is enforced atomically by the owner-scoped delete: a non-owner
     // (or a slug that vanished) deletes nothing → 404, no TOCTOU window.
     if !documents::delete_document_by_slug(&state.pool, &slug, owner).await? {
-        return Err(AppError::NotFound(format!(
-            "No document with slug \"{slug}\"."
-        )));
+        return Err(document_not_found(&slug));
     }
     // Inbound edges now dangle; re-render those sources so they fall back to stubs.
     garden::rerender_sources(&state.pool, &affected).await;
