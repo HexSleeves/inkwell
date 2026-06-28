@@ -56,9 +56,11 @@ let result = tokio::task::spawn_blocking(move || {
 | Purpose   | Command                                  | Expected on success |
 |-----------|------------------------------------------|---------------------|
 | Typecheck | `cargo check --all-targets`              | exit 0, no errors   |
-| Tests     | `cargo nextest run --test links_contract` | all pass            |
-| All tests | `cargo nextest run`                       | all pass            |
+| Tests     | `DATABASE_URL=… cargo nextest run --test links_contract` | all pass |
+| All tests | `DATABASE_URL=… cargo nextest run`        | all pass            |
 | Lint      | `cargo clippy --all-targets -- -D warnings` | exit 0           |
+
+> Test DB note: `links_contract`/`api_contract`/`rendering_contract` are DB-backed and **silently skip** without `DATABASE_URL` (`tests/common/mod.rs:45-51`) — so a bare `cargo nextest run` can exit 0 having exercised none of the render path. Set `DATABASE_URL` (see `README.md:34`) or `INKWELL_REQUIRE_DB_TESTS=1` so the render path actually runs. `cargo check`/`clippy` are always valid signals.
 
 ## Scope
 
@@ -77,42 +79,45 @@ let result = tokio::task::spawn_blocking(move || {
 
 ## Steps
 
-### Step 1: Identify the exact call site to wrap
+### Step 1: Identify BOTH call sites and the real signature
 
-Read `src/garden.rs` and find the call to `render_markdown_with_embeds` (or equivalent rendering call). Note:
-- What are the inputs? They must be `'static + Send` to move into `spawn_blocking`.
-- What does it return? It must be `'static + Send` to come back from the closure.
+`render_markdown_with_embeds` is called at **two** places in `src/garden.rs`:
+- **Line ~85** — top-level, in `render_and_resolve` (the main write-path render).
+- **Line ~187** — inside `resolve_embeds`, the recursive embed expansion (renders each embedded note's body). The plan's motivation ("documents with deep embed trees") lives here, so this site must be wrapped too.
 
-In most cases the inputs are `String` (owned Markdown body) and `HashMap<String, String>` (embed bodies) — both `Send`. The output is `String` (rendered HTML) — also `Send`.
+The real signature (`src/rendering/wikilink.rs:254`) is:
+```rust
+pub fn render_markdown_with_embeds(
+    markdown: &str,
+    resolved: &HashSet<String>,
+    embeds: &HashMap<String, EmbedResolution>,
+) -> String
+```
+Three args (not two), and it returns `String` (not a `Result` and not a tuple — the `refs` come from the separate `extract_wikilinks` call, not from this function). All three inputs are owned/clonable (`String`, `HashSet<String>`, `HashMap<String, EmbedResolution>` — all `Send + 'static`), and the output `String` is `Send`. So both call sites are wrappable.
 
-**Verify**: You know the exact line and the types of all inputs/outputs.
+**Verify**: You have located both call sites (~85 and ~187) and confirmed the 3-arg signature.
 
-### Step 2: Wrap the rendering call
+### Step 2: Wrap each render call in spawn_blocking
 
-Extract the CPU-only rendering step into a `spawn_blocking` call. The DB I/O (embed fetches via `resolve_embeds`) must remain outside `spawn_blocking` because it is async. Pattern:
+For EACH of the two sites, keep the async DB work outside the closure and move only the synchronous render in. The owned inputs are built just before the call; move them into the closure:
 
 ```rust
-// DB calls first (async, must stay outside spawn_blocking):
-let embed_bodies: HashMap<String, String> = fetch_embed_bodies(pool, ...).await?;
-
-// CPU rendering (sync, wrap in spawn_blocking):
-let (rendered_html, refs) = tokio::task::spawn_blocking(move || {
-    render_markdown_with_embeds(&markdown, &embed_bodies)
+// inputs already owned at the call site: `body: String`, `existing: HashSet<String>`, `embeds: HashMap<String, EmbedResolution>`
+let html = tokio::task::spawn_blocking(move || {
+    render_markdown_with_embeds(&body, &existing, &embeds)
 })
 .await
-.unwrap_or_else(|e| panic!("render task panicked: {e}"));
+.expect("markdown render task panicked");
 ```
 
-If the rendering function returns a `Result`, handle the inner error before unwrapping the JoinHandle:
-```rust
-.await
-.expect("render task did not panic")  // JoinError: only on task panic
-?                                       // inner Result error
-```
+Notes:
+- `render_markdown_with_embeds` returns `String` directly (no inner `Result`), so the only failure is a `JoinError` on panic — `.expect(...)` is appropriate.
+- At line ~85, the bindings currently borrowed (`&body`, `&child_existing`/`existing`, `&embeds`) must be owned and `move`d in. If a binding is currently a borrow of a value still needed afterward, `.clone()` it before the closure.
+- At line ~187 (inside `resolve_embeds`), the render is interleaved with recursive async calls; wrap ONLY the `render_markdown_with_embeds(&body, &child_existing, &child_embeds)` line — the surrounding `visited.insert/remove` and recursion stay on the async task. `body`, `child_existing`, `child_embeds` are local owned values there, so move them in (clone if still referenced after).
 
-The function signature of `render_and_resolve` does not change — callers see the same interface.
+The signature of `render_and_resolve` does not change — callers see the same interface.
 
-**Verify**: `cargo check --all-targets` → exit 0
+**Verify**: `cargo check --all-targets` → exit 0; `grep -n "spawn_blocking" src/garden.rs` shows TWO occurrences.
 
 ### Step 3: Run all tests
 
@@ -128,8 +133,8 @@ No new tests needed — this is a correctness-preserving refactor. The existing 
 - [ ] `cargo clippy --all-targets -- -D warnings` exits 0
 - [ ] `cargo fmt --check` exits 0
 - [ ] `cargo nextest run` exits 0; all existing tests pass
-- [ ] `grep -n "render_markdown_with_embeds\|render_and_resolve" src/garden.rs` shows the rendering call is inside a `spawn_blocking` closure
-- [ ] No `spawn_blocking` is called for DB I/O (only for CPU work)
+- [ ] `grep -c "spawn_blocking" src/garden.rs` → 2 (both render sites at ~85 and ~187 are wrapped)
+- [ ] No `spawn_blocking` is called for DB I/O (only for the `render_markdown_with_embeds` CPU work)
 - [ ] `plans/README.md` status row updated
 
 ## STOP conditions

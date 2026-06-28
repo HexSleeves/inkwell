@@ -30,9 +30,9 @@ The SELECT column list `id, slug, title, body_markdown, rendered_html, status, g
 SELECT id, slug, title, body_markdown, rendered_html, status, growth, tags, version, created_at, updated_at
 ```
 
-This exact string appears at (at least): lines 55, 68, 85, 152, 217, 332, 415, 466, 579, 654, 664, 676, 701, 856, and in `list_documents_by_tag` and `list_documents_by_month`.
+This exact column list appears ~18 times: in `SELECT` clauses, in `QueryBuilder::new("SELECT ... FROM documents")` calls, AND in 5 `INSERT/UPDATE ... RETURNING` clauses (around lines 29, 152, 217, 332, 415).
 
-The DB query functions use a mix of `sqlx::query_as!` (compile-time macros), `sqlx::query_as::<Postgres, Document>(r#"..."#)` (runtime queries), and `QueryBuilder` with `.push("SELECT ... FROM documents")`. Only the non-macro forms can use a runtime const.
+**There are NO compile-time `sqlx::query!`/`query_as!` macros in this file** — `grep -nE 'sqlx::query_as!|sqlx::query!' src/db/documents.rs` returns nothing. Every occurrence is either a runtime `sqlx::query_as::<Postgres, Document>(r#"..."#)` / `sqlx::query::<...>(...)` call or a `QueryBuilder` `.new(...)`/`.push(...)` string. ALL of them can use the runtime const via `format!`. (One column list is deliberately DIFFERENT and must NOT be touched — see "Out of scope".)
 
 ## Commands you will need
 
@@ -48,8 +48,8 @@ The DB query functions use a mix of `sqlx::query_as!` (compile-time macros), `sq
 **In scope**:
 - `src/db/documents.rs` — extract const and replace all manual string occurrences
 
-**Out of scope**:
-- `sqlx::query_as!` macro calls (compile-time macros) — the column list inside macros cannot reference a runtime `const`; leave those unchanged
+**Out of scope** (do NOT replace these):
+- The **INSERT column list** at `src/db/documents.rs:22` — `INSERT INTO documents (slug, title, body_markdown, rendered_html, status, growth, tags, owner_id)`. This is a DIFFERENT list (no leading `id`, includes `owner_id`, omits `version`/`created_at`/`updated_at`). A literal const replace won't match it, but do not hand-edit it to use `DOCUMENT_COLUMNS`.
 - `src/domain/document.rs` — `Document` struct definition does not change
 
 ## Git workflow
@@ -87,9 +87,15 @@ QueryBuilder::<Postgres>::new(&format!("SELECT {DOCUMENT_COLUMNS} FROM documents
 
 Note: `QueryBuilder::new` takes `impl Into<String>`, so `&format!(…)` as `&str` works.
 
+**Also replace the 5 `RETURNING` clauses** (around lines 29, 152, 217, 332, 415) — these are INSERT/UPDATE statements that end with `RETURNING id, slug, title, body_markdown, rendered_html, status, growth, tags, version, created_at, updated_at`. They use the SAME list as the SELECTs, so interpolate the const there too:
+```rust
+&format!("... RETURNING {DOCUMENT_COLUMNS}")
+```
+If you only convert the SELECT/QueryBuilder forms and skip the RETURNING clauses, the done-criteria grep will still find ~6 matches and fail.
+
 Work through the file systematically from top to bottom. Run `cargo check` after every 3–4 substitutions to catch errors early.
 
-**Verify**: `grep -c "id, slug, title, body_markdown" src/db/documents.rs` returns a lower count than before (only macro calls remain, if any).
+**Verify**: `grep -c "id, slug, title, body_markdown, rendered_html, status, growth, tags, version" src/db/documents.rs` → 1 (only the `DOCUMENT_COLUMNS` const definition line still contains the literal list).
 
 ### Step 3: Verify all existing tests still pass
 
@@ -98,7 +104,7 @@ Work through the file systematically from top to bottom. Run `cargo check` after
 ## Done criteria
 
 - [ ] `const DOCUMENT_COLUMNS: &str = "..."` exists at the top of `src/db/documents.rs`
-- [ ] `grep -c "body_markdown, rendered_html, status, growth, tags, version" src/db/documents.rs` ≤ 3 (only `sqlx::query_as!` macro calls remain, which cannot use a runtime const)
+- [ ] `grep -c "body_markdown, rendered_html, status, growth, tags, version" src/db/documents.rs` → 1 (only the const definition line; SELECTs, QueryBuilders, and RETURNING clauses all interpolate it)
 - [ ] `cargo check --all-targets` exits 0
 - [ ] `cargo clippy --all-targets -- -D warnings` exits 0
 - [ ] `cargo fmt --check` exits 0
@@ -107,7 +113,7 @@ Work through the file systematically from top to bottom. Run `cargo check` after
 
 ## STOP conditions
 
-- A `sqlx::query_as!` macro (compile-time) uses the full column list — leave those unchanged; they're already checked at compile time.
+- A compile-time `sqlx::query_as!`/`query!` macro turns up using the full column list (none exist at `0819727`, but if the codebase added one, its column list can't reference a runtime const — leave it and report).
 - `format!` with the const produces a string that SQLx's runtime parser rejects. Report the specific query.
 
 ## Maintenance notes

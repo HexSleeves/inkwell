@@ -145,9 +145,11 @@ headers.insert(
 
 **Verify**: `cargo check --all-targets` → exit 0
 
-### Step 4: Update security header contract tests
+### Step 4: Update the existing CSP assertion, then add new tests
 
-Open `tests/security_headers_contract.rs` and verify the existing tests still pass. Then add:
+**First, fix the existing test that Step 2 will break.** `tests/security_headers_contract.rs:51` currently asserts the CSP contains `img-src 'self' http https` (no colons). After Step 2 changes the policy, that assertion fails. Update line 51's expected substring from `img-src 'self' http https` to `img-src 'self' http: https:` (with colons).
+
+Then add:
 
 1. A test asserting `Strict-Transport-Security: max-age=63072000; includeSubDomains` is present on both HTML and JSON responses.
 2. A test asserting `Content-Security-Policy` on an HTML response contains `img-src 'self' http: https:` (with colons).
@@ -173,6 +175,7 @@ Follow the pattern of existing tests in `tests/security_headers_contract.rs`.
 - [ ] `src/http/router.rs` TraceLayer span logs `uri.path()` not `uri()`
 - [ ] `src/http/security_headers.rs` CSP string contains `http: https:` (with colons)
 - [ ] `src/http/security_headers.rs` includes HSTS unconditionally
+- [ ] `tests/security_headers_contract.rs` line ~51 asserts `img-src 'self' http: https:` (with colons), not the old `http https`
 - [ ] No files outside the in-scope list are modified (`git status`)
 - [ ] `plans/README.md` status row updated
 

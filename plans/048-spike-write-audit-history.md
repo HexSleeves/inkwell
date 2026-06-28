@@ -60,7 +60,7 @@ CREATE INDEX IF NOT EXISTS write_audit_document_id_at_idx ON write_audit (docume
 ## Scope
 
 **In scope**:
-- `docs/spikes/0NN-write-audit-history.md` (NEW — next spike number) — design doc
+- `docs/spikes/NNN-write-audit-history.md` (NEW — next spike number) — design doc
 - `src/db/audit.rs` — add `list_audit_for_document` read function
 - `src/http/api.rs` (or a small new `src/http/history.rs`) — add `GET /documents/{slug}/history` handler
 - `src/http/router.rs` — register the route
@@ -75,9 +75,9 @@ CREATE INDEX IF NOT EXISTS write_audit_document_id_at_idx ON write_audit (docume
 
 ### Step 1: Write the design doc
 
-Create `docs/spikes/0NN-write-audit-history.md`:
+Create `docs/spikes/NNN-write-audit-history.md`:
 1. **What the endpoint returns** — a list of audit events `{ action, actorLabel, at }` for a document, newest first, paginated.
-2. **Auth/visibility decision** — pick one of the options above and justify it. **Recommended**: admin + owner (the owner sees their own note's history; admin sees all). This matches the ownership model in ADR 0009.
+2. **Auth/visibility decision** — pick one of the options above and justify it. **Recommended**: admin + owner (the owner sees their own note's history; admin sees all). This matches the ownership model in ADR 0009 (`docs/adr/0009-scoped-author-tokens.md`).
 3. **Lookup by slug vs id** — the audit row stores `document_id` and a `slug` snapshot; the public API addresses documents by slug. Decide: resolve slug → current document_id then query by `document_id` (misses history from before a slug rename unless you also match the `slug` snapshot). Document the tradeoff; recommend querying by the document's current `id` (simplest; rename history is an edge case).
 4. **Pagination** — `?limit=&offset=` with a default and `MAX_LIMIT` cap (reuse `MAX_LIMIT = 100` from `src/domain/document.rs`).
 5. **Deleted documents** — audit rows survive deletes (no FK). Decide whether `GET /documents/{slug}/history` 404s once the document is gone (recommended: yes — the slug no longer resolves) and note that a future admin-only "all audit" endpoint could expose deleted-document history.
@@ -151,7 +151,7 @@ Create `tests/audit_history_contract.rs` (model structure on `tests/scoped_token
 
 ## Done criteria
 
-- [ ] `docs/spikes/0NN-write-audit-history.md` exists with auth model, lookup strategy, pagination decided
+- [ ] `docs/spikes/NNN-write-audit-history.md` exists with auth model, lookup strategy, pagination decided
 - [ ] `list_audit_for_document` added to `src/db/audit.rs`
 - [ ] `GET /documents/{slug}/history` handler + route registered
 - [ ] Visibility enforced: non-owner non-admin → 404

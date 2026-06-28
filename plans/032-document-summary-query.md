@@ -57,16 +57,21 @@ pub async fn list_documents(pool: &PgPool, options: ListOptions) -> Result<Vec<D
 ## Scope
 
 **In scope**:
+This change touches ~9 files (counted, not estimated) — `render_document_list` is the shared seam but each wrapper view takes a concrete `&[Document]`:
 - `src/domain/document.rs` — add `DocumentSummary` struct
-- `src/db/documents.rs` — add summary-only query variants
-- `src/http/pages.rs` — switch list handlers to use summary queries
-- `src/http/search.rs` — switch to summary query (if excerpt can be stored or derived differently)
-- `src/views/` — update view functions to accept `&DocumentSummary` instead of `&Document` for list rendering
+- `src/db/documents.rs` — add summary-only query variants for `list_documents`, `list_documents_by_tag`, `list_documents_by_month`, `search_documents`
+- `src/http/pages.rs` — switch index/tag/archive handlers to the summary queries
+- `src/http/search.rs` — switch the HTML search path to the summary query
+- `src/views/layout.rs` — `render_document_list(&[Document])` → `render_document_list(&[DocumentSummary])`
+- `src/views/index.rs` — `render_index_page` param `&[Document]` → `&[DocumentSummary]`
+- `src/views/tags.rs` — `render_tag_page` param → `&[DocumentSummary]`
+- `src/views/search.rs` — `render_search_page` param → `&[DocumentSummary]`
+- `src/views/archive.rs` — `render_archive_month_page` param → `&[DocumentSummary]`
 
 **Out of scope** (keep using full `Document`):
 - `GET /documents/{slug}` — single-document detail fetch; body is needed
 - `PATCH /documents/{slug}`, `PUT /documents/{slug}` — write paths; body is needed
-- `src/http/api.rs` `GET /documents` list — this returns JSON; whether to add `body` to the JSON response or not is a separate API decision; for now leave it returning `Document` (the JSON API is separate from the HTML path)
+- `src/http/api.rs` `GET /documents` JSON list (`list_documents_vis`) — returns JSON; whether to drop `body` from the JSON response is a separate API/compat decision. **Do NOT touch `list_documents_vis`** (the panel flagged this as a likely mis-target). Leave the JSON list on `Document`.
 - `src/db/links.rs`, `src/db/chunks.rs` — those have their own narrow selects
 
 ## Git workflow
@@ -78,19 +83,22 @@ pub async fn list_documents(pool: &PgPool, options: ListOptions) -> Result<Vec<D
 
 ### Step 1: Decide what DocumentSummary needs
 
-Read `src/http/pages.rs` and `src/views/` to determine exactly which fields list-rendering uses. Likely needed:
-- `id: Uuid` (for links and edge queries)
+`render_document_list` (`src/views/layout.rs:488`) is the shared list renderer. It currently calls `derive_excerpt(doc.body_markdown(), 160)` per item — and `derive_excerpt` (`layout.rs:447`) **strips markdown** (```` ``` ````, `` ` ``, `**`, `__`, `*_~`, leading `#`) and collapses whitespace. **The excerpt MUST keep going through `derive_excerpt`** or list pages will show raw markdown — a visible regression the existing `view_layout_contract` test (which only checks the `<p class="excerpt">` element exists) would NOT catch.
+
+So `DocumentSummary` carries a **raw** body slice (not a finished excerpt), and `render_document_list` runs `derive_excerpt` over it exactly as today. Fields:
+- `id: Uuid` (used by callers for links/edge queries)
 - `slug: String`
 - `title: String`
-- `excerpt: Option<String>` — either stored or derived from `body_markdown`. **Important**: If `derive_excerpt` in `src/views/layout.rs` reads `doc.body_markdown()`, then `DocumentSummary` must either store the first N chars of body (pre-excerpted in SQL) or include a truncated `body_snippet` column. **Recommended**: add `excerpt: String` computed in SQL as `LEFT(body_markdown, 320)` so the DB ships only the first 320 chars instead of the full body.
+- `body_excerpt_source: String` — `LEFT(body_markdown, 320)` from SQL (first 320 chars; enough for a 160-char stripped excerpt). This is RAW markdown, fed to `derive_excerpt`; it is NOT the final excerpt.
 - `tags: Vec<String>`
 - `growth: GrowthStage`
 - `status: DocumentStatus`
-- `version: i64` (needed for If-Match on list? — probably not; omit if unused in list views)
 - `created_at: OffsetDateTime`
 - `updated_at: OffsetDateTime`
 
-**Verify**: You have a confirmed field list.
+(Omit `version` and `rendered_html` — list views don't use them.)
+
+**Verify**: You have confirmed `render_document_list` uses `derive_excerpt` and the field list above.
 
 ### Step 2: Add DocumentSummary to src/domain/document.rs
 
@@ -102,7 +110,7 @@ pub struct DocumentSummary {
     pub id: uuid::Uuid,
     pub slug: String,
     pub title: String,
-    pub excerpt: String,   // pre-sliced from body_markdown in SQL
+    pub body_excerpt_source: String,  // LEFT(body_markdown, 320) — raw, fed to derive_excerpt
     pub tags: Vec<String>,
     pub growth: GrowthStage,
     pub status: DocumentStatus,
@@ -111,7 +119,7 @@ pub struct DocumentSummary {
 }
 ```
 
-Match the `sqlx::FromRow` derive pattern used by `Document`. Match the `serde` attributes used on `Document`.
+Match the `sqlx::FromRow` derive pattern used by `Document`. Match the `serde` attributes used on `Document`. Note: `Document` may not derive `sqlx::FromRow` (the repo uses positional `query_as::<Postgres, Document>`); if `FromRow` causes a column-name mismatch with the `LEFT(...) AS body_excerpt_source` alias, drop the derive and map rows manually in Step 3 (see STOP conditions).
 
 **Verify**: `cargo check --all-targets` → exit 0
 
@@ -125,50 +133,52 @@ pub async fn list_document_summaries(
     options: ListOptions,
 ) -> Result<Vec<DocumentSummary>, sqlx::Error> {
     let mut builder = QueryBuilder::<Postgres>::new(
-        "SELECT id, slug, title, LEFT(body_markdown, 320) AS excerpt, \
+        "SELECT id, slug, title, LEFT(body_markdown, 320) AS body_excerpt_source, \
          status, growth, tags, created_at, updated_at FROM documents",
     );
     // same WHERE/ORDER/LIMIT/OFFSET logic as list_documents
 }
 ```
 
-Add similar variants for `list_documents_vis` (visibility-aware), `list_documents_by_tag`, `list_documents_by_month` (archive).
+Add `_summary` variants for the **in-scope** list functions only: `list_documents`, `list_documents_by_tag`, `list_documents_by_month`, and `search_documents`. **Do NOT add a variant for `list_documents_vis`** (that backs the JSON `GET /documents`, which stays on `Document` — out of scope).
 
 Naming convention: append `_summary` to the existing function name.
 
 **Verify**: `cargo check --all-targets` → exit 0
 
-### Step 4: Switch HTML list handlers to summary queries
+### Step 4: Switch HTML list handlers + views to summaries
 
-In `src/http/pages.rs`, replace calls to `list_documents(…)` (and other full-body list functions) with `list_document_summaries(…)` for the index, tag, and archive handlers.
+1. In `src/http/pages.rs`: index, tag, and archive handlers call `list_documents`/`list_documents_by_tag`/`list_documents_by_month` → switch to the `_summary` variants.
+2. In `src/http/search.rs`: the HTML path calls `search_documents` then `derive_excerpt(doc.body_markdown(), 160)` → switch to `search_documents_summary` and call `derive_excerpt(&summary.body_excerpt_source, 160)`.
+3. In `src/views/layout.rs`: change `render_document_list(documents: &[Document])` to `&[DocumentSummary]`, and its per-item call from `derive_excerpt(doc.body_markdown(), 160)` to `derive_excerpt(&doc.body_excerpt_source, 160)`. Everything else in that function (title, slug, date_line, tag chips) reads fields present on `DocumentSummary`.
+4. In `src/views/index.rs`, `tags.rs`, `search.rs`, `archive.rs`: change each wrapper's `&[Document]` parameter to `&[DocumentSummary]`.
 
-In `src/http/search.rs`, the `derive_excerpt` call currently reads `doc.body_markdown()`. Change search to use a summary query and read `summary.excerpt` instead.
+The detail view (`src/views/document.rs`) keeps using `&Document` — do not change it.
 
-Update view function signatures in `src/views/` as needed to accept `&DocumentSummary` instead of `&Document` for list-rendering functions. The detail view (`src/views/document.rs` or equivalent) keeps using `&Document`.
-
-**Verify**: `cargo check --all-targets` → exit 0; `cargo nextest run` → all pass
+**Verify**: `cargo check --all-targets` → exit 0; `DATABASE_URL=… cargo nextest run` → all pass
 
 ## Test plan
 
-No new tests needed — this is a query refactor, not a behaviour change. The existing `tests/api_contract.rs`, `tests/view_layout_contract.rs`, and `tests/archive_nav_contract.rs` exercise the affected handlers.
-
-If any test asserts on `body_markdown` or `rendered_html` in a list response, update it — those fields are intentionally removed from list queries.
+This is intended as a behaviour-preserving refactor — BUT the excerpt path is the risk. Add/keep a guard:
+- Because `render_document_list` still calls `derive_excerpt` (now over `body_excerpt_source`), list excerpts stay markdown-stripped. Add one assertion to `tests/view_layout_contract.rs`: a doc whose body starts with `**bold** and \`code\`` renders a `<p class="excerpt">` whose text does NOT contain `**` or backticks (proves the strip still runs). This is the regression guard for the excerpt change.
+- Existing `tests/api_contract.rs`, `tests/view_layout_contract.rs`, `tests/archive_nav_contract.rs` exercise the affected handlers; if any asserts on `body_markdown`/`rendered_html` in an HTML list response, update it.
 
 ## Done criteria
 
 - [ ] `cargo check --all-targets` exits 0
 - [ ] `cargo clippy --all-targets -- -D warnings` exits 0
 - [ ] `cargo fmt --check` exits 0
-- [ ] `cargo nextest run` exits 0
-- [ ] `grep -n "body_markdown, rendered_html" src/db/documents.rs | wc -l` count is smaller than the original 15 (remaining occurrences are detail-view queries only)
-- [ ] Index page, tag pages, and archive pages load correctly (verified by running `cargo nextest run --test view_layout_contract`)
+- [ ] `DATABASE_URL=… cargo nextest run` exits 0 (DB-backed list tests skip without it)
+- [ ] `grep -c "body_markdown, rendered_html" src/db/documents.rs` is below the baseline of **18** (the in-scope list queries no longer select both body columns; detail/write queries still do)
+- [ ] Excerpt regression guard test added and passing (`view_layout_contract`): list excerpt is markdown-stripped
+- [ ] `list_documents_vis` is unchanged (`git diff` shows the JSON list query untouched)
 - [ ] `plans/README.md` status row updated
 
 ## STOP conditions
 
-- A list view actually renders `body_html` (e.g., it shows full document preview). If so, that view must keep using `Document`; exclude it from the switch and report.
-- `sqlx::FromRow` derive fails for `DocumentSummary` due to the computed `LEFT(…) AS excerpt` column. If so, use `sqlx::query_as` with a manual row mapping.
-- The change requires modifying more than 6 files — report scope creep and stop.
+- A list view actually renders `body_html` (full preview). If so, that view keeps `Document`; exclude it and report.
+- `sqlx::FromRow` derive fails for `DocumentSummary` (column/alias mismatch). Fall back to `sqlx::query_as::<Postgres, (Uuid, String, String, String, DocumentStatus, GrowthStage, Vec<String>, OffsetDateTime, OffsetDateTime)>` with a manual map into `DocumentSummary`, matching the positional style already used for `Document` in this file.
+- The change requires modifying **more than 10** files — report scope creep and stop. (Expected set is 9, enumerated in Scope.)
 
 ## Maintenance notes
 

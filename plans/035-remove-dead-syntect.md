@@ -57,7 +57,7 @@ No `use syntect` in any file under `src/`.
 - `.mex/context/stack.md` — update the "Key Libraries" section to remove the syntect entry and update the note about highlighting
 
 **Out of scope**:
-- `src/rendering/highlight.rs` — keep this file; `highlight_classes()` is used by the rendering pipeline to emit CSS class names for client-side highlighting; no change needed
+- `src/rendering/highlight.rs` — leave this file as-is. (Note: `highlight_classes()` is currently only *defined*, not called from anywhere — `grep -rn "highlight_classes" src/` shows the definition only. It is dead too, but removing it is a separate cleanup, NOT part of removing the `syntect` dependency. Do not delete it here; just do not let its presence stop you.)
 - `Cargo.lock` — it updates automatically when you run `cargo check`
 
 ## Git workflow

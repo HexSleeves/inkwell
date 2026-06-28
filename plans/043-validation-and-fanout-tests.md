@@ -39,7 +39,7 @@ pub const MAX_REQUEST_BODY_BYTES: usize = 1_000_000;
 
 **Slug collision** — handled in `src/db/documents.rs`: `map_duplicate_slug` maps the Postgres unique violation (`23505`) to a `DbError` ("A document with slug ... already exists.") which converts to `AppError::Conflict` → **409** (not 500). The create handler relies on the unique index, not a check-then-insert.
 
-**Growth parsing** — `src/domain/document.rs:63-70`: `GrowthStage::parse(value) -> Option<Self>` returns `None` for unknown values. **You must read the create/update handler in `src/http/api.rs` to determine what happens when `growthStage` is an unknown string** — does it 400, or silently default to `seedling`? The test asserts the *intended* contract (400); if it currently silently defaults, that is a finding — STOP and report (see STOP conditions).
+**Growth parsing** — the create handler reads the JSON field **`growth`** (NOT `growthStage`), via `resolve_growth` (`src/http/api.rs:813`). The existing test in `tests/api_contract.rs:93` sends `"growth": "evergreen"`. `resolve_growth` returns a `400 BadRequest` for a present-but-unknown `growth` string (verified), so the intended assertion below is correct **as long as the field is named `growth`**. Do NOT use `growthStage` — that field is ignored and the request would succeed with the default `seedling`, producing a false "validation gap".
 
 **Backfill** — `src/garden.rs:327-329`:
 ```rust
@@ -99,10 +99,9 @@ To build a long string: `"a".repeat(501)` and `"a".repeat(300_000)`.
 
 ### Step 3: Invalid growth-stage test
 
-First read the create handler in `src/http/api.rs` to find how `growthStage` is handled.
-- Add a test: `POST /documents` with `{ "title": "G", "bodyMarkdown": "x", "growthStage": "cursed" }`
-- Assert `StatusCode::BAD_REQUEST` (the intended contract).
-- **If the handler currently returns 201 (silently defaulting the invalid value)**: that is a validation gap — STOP and report it; do not force the test to pass by asserting 201.
+- Add a test: `POST /documents` with `{ "title": "G", "bodyMarkdown": "x", "growth": "cursed" }` (the field is `growth`, NOT `growthStage`).
+- Assert `StatusCode::BAD_REQUEST` (verified contract: `resolve_growth` at `src/http/api.rs:813` rejects an unknown value with 400).
+- Sanity guard: if you accidentally send `growthStage`, the request returns 201 because the field is ignored — that is a test bug, not a validation gap. Use `growth`.
 
 **Verify**: `cargo check --all-targets` → exit 0
 
@@ -123,7 +122,7 @@ In `tests/links_contract.rs`, add a test that proves a create/publish triggers r
 2. Create note B with slug `future-note`.
 3. `GET /documents/{slug_a}` and assert A's `rendered_html` now contains a *resolved* link to `future-note` (the stub lit up via backfill).
 
-Model the stub/resolved assertions on the existing wikilink tests already in `tests/links_contract.rs` — find an existing test that checks rendered link markup and reuse its assertion strings.
+The stub marker is `class="stub"` (`src/rendering/wikilink.rs:227,322`; asserted in `tests/links_contract.rs:237`) — a resolved link lacks that class. Model the stub/resolved assertions on the existing wikilink tests in `tests/links_contract.rs` (the one near line 237) and reuse its exact assertion strings.
 
 **Verify**: `cargo check --all-targets` → exit 0; (with DB) `cargo nextest run --test links_contract` → all pass
 

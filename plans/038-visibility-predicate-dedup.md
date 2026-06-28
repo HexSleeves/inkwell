@@ -20,7 +20,11 @@
 
 ## Why this matters
 
-The `Visibility` enum (`Public` / `Owner(i64)` / `All`) drives a `match` block that produces a different SQL `WHERE` fragment across 16+ sites in `src/db/documents.rs`, `src/db/links.rs`, and `src/db/chunks.rs`. Every site repeats the same three-arm match. Adding a new visibility mode (e.g., team-level access) requires updating 16+ independent SQL branches with no single point of change, and missing one site creates a security gap.
+The `Visibility` enum (`Public` / `Owner(Uuid)` / `All`, defined at `src/db/links.rs:41-49`) drives a `match` block that produces a different SQL `WHERE` fragment across many sites in `src/db/documents.rs`, `src/db/links.rs`, and `src/db/chunks.rs`. Every site repeats the same three-arm match. Adding a new visibility mode requires updating each independent SQL branch, and missing one creates a security gap.
+
+**Scope reality (read before planning):** the sites split into two kinds, and only one kind is cleanly dedupable:
+- **`QueryBuilder`-based sites** (in `src/db/documents.rs`) build the WHERE incrementally and CAN use a `push_where` helper. These are the in-scope target.
+- **Raw `sqlx::query_as`/`query_scalar` sites with hand-numbered positional params** (ALL of `src/db/chunks.rs`, plus a couple in `documents.rs` and `links.rs`) bind `$1..$N` by position, and the numbering SHIFTS between arms (e.g. in `chunks.rs` the provider bind is `$3` for Public/All but `$4` for Owner). A `QueryBuilder` helper cannot be applied to these without first rewriting them as `QueryBuilder` queries — out of scope here. This plan therefore targets the `QueryBuilder` sites only and explicitly leaves the raw-positional sites as a documented follow-up.
 
 ## Current state
 
@@ -65,52 +69,33 @@ The pattern: three separate query paths, each with an inline SQL string. For `Qu
 ## Scope
 
 **In scope**:
-- `src/db/links.rs` — add helper method to `Visibility` enum
-- `src/db/documents.rs` — use the helper in `QueryBuilder`-based queries
-- `src/db/chunks.rs` — use the helper in ANN queries
+- `src/db/links.rs` — add the `push_where` helper method to `Visibility`
+- `src/db/documents.rs` — use the helper in the 4 `QueryBuilder`-based queries (the WHERE-fragment three-arm matches at approximately lines 585, 622, 706, 744)
 
-**Out of scope**:
-- `src/http/` — callers of db functions; no change
-- `src/domain/` — the `Visibility` type is in `db/links.rs` per current code
-- Queries that use the three-way match and cannot be restructured (e.g., those that must use entirely different SQL per variant) — leave those as-is; document them as intentional exceptions
+**Out of scope** (raw positional-param queries — the helper does not apply):
+- `src/db/chunks.rs` — ALL visibility matches here are raw `sqlx::query_as` with hand-numbered `$1..$N` binds whose numbering shifts between arms; there are ZERO `QueryBuilder` blocks (`grep "QueryBuilder" src/db/chunks.rs` returns nothing). Converting them to `QueryBuilder` first is a larger, separate effort — leave them and note as a follow-up.
+- The two raw `query_as`/`query_scalar` sites in `documents.rs` (the slug-alias lookup ~line 377 and `get_document_by_slug_vis` ~line 652) — also positional-param, not QueryBuilder. Leave them.
+- The `resolve_slug_ids`/`resolve_existing_slugs` matches in `links.rs` — positional-param. Leave them.
+- `src/http/` callers; `src/domain/` — no change.
 
 ## Git workflow
 
 - Branch: `advisor/038-visibility-predicate-dedup`
-- Commit: `refactor(db): add Visibility::status_sql_fragment helper, deduplicate predicates`
+- Commit: `refactor(db): add Visibility::push_where helper, dedup documents.rs predicates`
 
 ## Steps
 
-### Step 1: Add a SQL fragment helper to Visibility
+### Step 1: Add a `push_where` helper to Visibility
 
-In `src/db/links.rs`, add a method to the `Visibility` enum that returns the SQL `WHERE` fragment and the optional owner bind value:
-
-```rust
-impl Visibility {
-    /// Returns the SQL WHERE fragment for filtering by visibility, and
-    /// the optional owner_id to bind when the variant is Owner(id).
-    ///
-    /// Callers append this to their WHERE clause and bind the optional
-    /// owner_id as the next positional parameter.
-    pub fn status_sql_fragment(&self) -> (&'static str, Option<i64>) {
-        match self {
-            Visibility::Public => ("status = 'published'", None),
-            Visibility::Owner(id) => ("(status = 'published' OR owner_id = $__owner__)", Some(*id)),
-            Visibility::All => ("TRUE", None),
-        }
-    }
-}
-```
-
-NOTE: The `$__owner__` placeholder is a sentinel — callers replace it with the actual positional parameter number (e.g., `$2`, `$3`). Alternatively, use `QueryBuilder` push_bind API which handles positional numbering automatically. See Step 2 for the preferred approach.
-
-**Preferred approach** (avoids positional parameter complexity): For `QueryBuilder`-based queries, add a helper that pushes the predicate directly:
+`Visibility::Owner` holds a `Uuid` (not `i64`). The helper pushes the visibility predicate onto a `QueryBuilder`, binding the `Uuid` via `push_bind` (which handles positional numbering automatically — no `$N` bookkeeping). In `src/db/links.rs`:
 
 ```rust
 impl Visibility {
     /// Push a visibility WHERE predicate onto a QueryBuilder.
-    /// Call after `WHERE ` or `AND ` has been pushed.
-    pub fn push_where<'qb>(&self, qb: &mut QueryBuilder<'qb, Postgres>) {
+    /// Call right after the builder has pushed `WHERE ` or `... AND `.
+    /// Emits UNQUALIFIED column names (`status`, `owner_id`); only use at call
+    /// sites where `documents` is the sole table providing those columns.
+    pub fn push_where(&self, qb: &mut QueryBuilder<'_, Postgres>) {
         match self {
             Visibility::Public => { qb.push("status = 'published'"); }
             Visibility::Owner(id) => {
@@ -122,15 +107,15 @@ impl Visibility {
 }
 ```
 
-This approach integrates naturally with `QueryBuilder` and handles positional parameters automatically.
+(Do NOT add a `status_sql_fragment(&self) -> (&str, Option<i64>)` variant — `Owner` is a `Uuid`, and the sentinel-placeholder approach is brittle. `push_where` is the only helper this plan adds.)
+
+Add a `#[cfg(test)]` unit test exercising each arm if a `QueryBuilder` can be cheaply constructed in a test; otherwise rely on the integration tests in Step 4.
 
 **Verify**: `cargo check --all-targets` → exit 0
 
-### Step 2: Replace three-way matches in QueryBuilder queries
+### Step 2: Replace the three-way matches in the documents.rs QueryBuilder queries
 
-In `src/db/documents.rs` and `src/db/chunks.rs`, find every `match visibility { Visibility::Public => { … QueryBuilder … }, Visibility::Owner => { … }, Visibility::All => { … } }` block where the three arms differ only in the WHERE predicate.
-
-Replace with a single `QueryBuilder` block using `visibility.push_where(&mut builder)`:
+In `src/db/documents.rs` only, find the `QueryBuilder` queries whose visibility handling is a three-arm `match` differing only in the WHERE predicate (≈ lines 585, 622, 706, 744). Replace each with a single `QueryBuilder` block using `visibility.push_where(&mut builder)`:
 ```rust
 let mut builder = QueryBuilder::<Postgres>::new("SELECT ... FROM documents WHERE ");
 visibility.push_where(&mut builder);
@@ -138,9 +123,9 @@ builder.push(" AND ...other conditions...");
 // rest of query
 ```
 
-Work file by file. Run `cargo check` after each file.
+Do NOT touch `chunks.rs` or the raw positional-param sites (see Out of scope) — they are not `QueryBuilder`-based and `push_where` cannot apply. Run `cargo check` after each conversion.
 
-**Verify after each file**: `cargo check --all-targets` → exit 0
+**Verify after each conversion**: `cargo check --all-targets` → exit 0
 
 ### Step 3: Leave non-reducible matches as-is
 
@@ -158,12 +143,13 @@ No new tests — this is a refactor. Existing integration tests across `tests/sc
 
 ## Done criteria
 
-- [ ] `Visibility::push_where` (or equivalent helper) defined in `src/db/links.rs`
-- [ ] `grep -c "Visibility::Public =>" src/db/documents.rs` count significantly reduced (goal: ≤ 3 remaining, for genuinely structure-varying matches)
+- [ ] `Visibility::push_where` defined in `src/db/links.rs` (binds the `Uuid` owner via `push_bind`)
+- [ ] `grep -c "Visibility::Public =>" src/db/documents.rs` reduced from 6 (baseline) to ≤ 3 (the 4 QueryBuilder sites converted; the 2 raw positional-param sites remain by design)
+- [ ] `src/db/chunks.rs` is unchanged (out of scope) — `git diff --stat` shows no chunks.rs change
 - [ ] `cargo check --all-targets` exits 0
 - [ ] `cargo clippy --all-targets -- -D warnings` exits 0
 - [ ] `cargo fmt --check` exits 0
-- [ ] `cargo nextest run` exits 0
+- [ ] `DATABASE_URL=… cargo nextest run` exits 0 (visibility tests are DB-backed; set `DATABASE_URL` or they skip — see `tests/common/mod.rs`)
 - [ ] `plans/README.md` status row updated
 
 ## STOP conditions

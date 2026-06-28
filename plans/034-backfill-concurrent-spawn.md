@@ -135,15 +135,11 @@ Key changes:
 
 **Verify**: `cargo check --all-targets` → exit 0
 
-### Step 2: Verify backfill_after_change call sites
+### Step 2: Confirm backfill_after_change call sites are unaffected
 
-Run: `grep -n "backfill_after_change" src/http/api.rs`
+`backfill_after_change` returns `()` (not a `Result`), and its three call sites (`src/http/api.rs:343, 383, 455`) simply `.await` it with no error handling — so its error behaviour cannot change a response, and this concurrency change is internal to the function. Run `grep -n "backfill_after_change" src/http/api.rs` to confirm the three `.await` call sites are unchanged by your edit (you are only editing `src/garden.rs`).
 
-Confirm the call is best-effort (either `tokio::spawn`'d or the result is not propagated to the response). If it is awaited and its error would fail the response: **STOP and report** — the plan's concurrency change could change error behaviour.
-
-If call sites are `if let Err(e) = garden::backfill_after_change(…).await { warn!… }` or similar: no change needed. Continue.
-
-**Verify**: Confirmed call pattern.
+**Verify**: `grep -n "backfill_after_change" src/http/api.rs` shows the three call sites untouched.
 
 ### Step 3: Run all tests
 
@@ -165,7 +161,7 @@ The existing `tests/links_contract.rs` tests exercise backfill behaviour (stub �
 
 ## STOP conditions
 
-- `backfill_after_change` call sites in `api.rs` propagate the error to the response (not best-effort). Changing to concurrent would need the call site restructured too.
+- `backfill_after_change`'s signature has changed to return a `Result` that a caller propagates to the response (it currently returns `()` — if that changed, the concurrency edit could alter error behaviour). Report and stop.
 - `PgPool` is not `Clone` (it is — this is just a safety check).
 - `tokio::sync::Semaphore` is not available (it is in the `tokio` crate with `sync` feature — `rt-multi-thread` implies it).
 

@@ -22,11 +22,11 @@
 
 ## Why this matters
 
-The exact error construction `AppError::NotFound(format!("No document with slug \"{slug}\"."))` is repeated at 5 sites in `src/http/api.rs` (lines 257, 311, 338, 378, 519). If the message wording or error shape ever changes, all five must change in lockstep; missing one yields inconsistent client-facing errors. A single helper makes the message canonical.
+The exact error construction `AppError::NotFound(format!("No document with slug \"{slug}\"."))` is repeated at **9 sites** in `src/http/api.rs` (the message string is at lines 258, 312, 339, 379, 520, 638, 654, 722, 730; each `AppError::NotFound(format!(` opener is one line above its message). If the message wording or error shape ever changes, all nine must change in lockstep; missing one yields inconsistent client-facing errors. A single helper makes the message canonical.
 
 ## Current state
 
-**`src/http/api.rs`** — the repeated pattern (5 occurrences, lines 257-258, 311-312, 338-339, 378-379, 519-520):
+**`src/http/api.rs`** — the repeated pattern (9 occurrences; message lines 258, 312, 339, 379, 520, 638, 654, 722, 730 — the last four are in the `update_document` If-Match match arms and the `delete_document` handler):
 ```rust
 return Err(AppError::NotFound(format!(
     "No document with slug \"{slug}\"."
@@ -45,10 +45,13 @@ There is no existing constructor helper on `AppError`. The cleanest home is a sm
 
 | Purpose   | Command                                                       | Expected on success |
 |-----------|--------------------------------------------------------------|---------------------|
-| Count before | `grep -c "No document with slug" src/http/api.rs`         | 5                   |
+| Count before | `grep -c "No document with slug" src/http/api.rs`         | 9                   |
 | Typecheck | `cargo check --all-targets`                                  | exit 0              |
-| Tests     | `cargo nextest run`                                          | all pass            |
+| Fmt       | `cargo fmt --check`                                          | exit 0              |
+| Tests     | `DATABASE_URL=… cargo nextest run` (DB-backed; see note)    | all pass            |
 | Lint      | `cargo clippy --all-targets -- -D warnings`                 | exit 0              |
+
+> Test DB note: the integration suite is DB-backed and **silently skips** without `DATABASE_URL` (`tests/common/mod.rs`). This refactor is message-identical, so `cargo check` + `cargo clippy` are the real signals here; run the suite with `DATABASE_URL` set (see `README.md`) for full confidence.
 
 ## Scope
 
@@ -79,7 +82,7 @@ fn document_not_found(slug: &str) -> AppError {
 
 **Verify**: `cargo check --all-targets` → exit 0
 
-### Step 2: Replace the 5 call sites
+### Step 2: Replace all 9 call sites
 
 Replace each occurrence of:
 ```rust
@@ -92,7 +95,7 @@ with:
 return Err(document_not_found(&slug));
 ```
 
-Note: confirm the local variable is named `slug` at each site (it is, per the excerpts). If a site has the slug under a different binding, pass that binding.
+There are **9** sites (message lines 258, 312, 339, 379, 520, 638, 654, 722, 730). Confirm the local variable is named `slug` at each (it is at all 9, including the two in the `update_document` If-Match match arms and the two in `delete_document`). If a site binds the slug under a different name, pass that binding.
 
 **Verify**: `grep -c "No document with slug" src/http/api.rs` → 1 (only the helper's `format!` remains)
 
@@ -107,7 +110,7 @@ No new tests — the message is unchanged, so existing tests that assert on the 
 ## Done criteria
 
 - [ ] `grep -c "No document with slug" src/http/api.rs` → 1
-- [ ] `document_not_found` helper exists and is used at all 5 former sites
+- [ ] `document_not_found` helper exists and is used at all 9 former sites
 - [ ] `cargo check --all-targets` exits 0
 - [ ] `cargo clippy --all-targets -- -D warnings` exits 0
 - [ ] `cargo fmt --check` exits 0
@@ -116,7 +119,7 @@ No new tests — the message is unchanged, so existing tests that assert on the 
 
 ## STOP conditions
 
-- The number of `NotFound(format!("No document with slug ...` sites is not 5 (drift, or 039 moved them). Find them all (`grep -rn "No document with slug" src/`), and replace every one; report the actual count.
+- The number of `NotFound(format!("No document with slug ...` sites is not 9 (drift, or 039 moved them). Find them all (`grep -rn "No document with slug" src/`), and replace every one; report the actual count.
 - A call site is in a different module after the 039 split — apply the helper in whichever module now owns the document handlers.
 
 ## Maintenance notes

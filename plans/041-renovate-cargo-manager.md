@@ -70,13 +70,20 @@ The dependencies (from `Cargo.toml`): `ammonia`, `anyhow`, `async-trait`, `axum`
 
 ### Step 1: Add Cargo grouping packageRules
 
-Replace the `packageRules` array in `renovate.json` with the following (keep the existing github-actions rule, add the Cargo rules):
+Replace the `packageRules` array in `renovate.json` with the following (keep the existing github-actions rule, add the Cargo rules).
+
+**Ordering is load-bearing.** Renovate evaluates `packageRules` top-to-bottom and the LAST matching rule wins for a given setting (`groupName` is a plain string that later rules overwrite). So the broad catch-all must come **FIRST**, and the specific family rules **AFTER** it, so a family rule overrides the catch-all for its packages. (Getting this backwards — catch-all last — would funnel every crate's minor/patch bump into the generic group and the family/sqlx groups would only ever catch major bumps.)
 
 ```json
   "packageRules": [
     {
       "matchManagers": ["github-actions"],
       "groupName": "github-actions"
+    },
+    {
+      "matchManagers": ["cargo"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "groupName": "cargo minor and patch"
     },
     {
       "matchManagers": ["cargo"],
@@ -107,16 +114,11 @@ Replace the `packageRules` array in `renovate.json` with the following (keep the
       "matchManagers": ["cargo"],
       "matchPackageNames": ["sqlx"],
       "groupName": "sqlx (review major bumps carefully)"
-    },
-    {
-      "matchManagers": ["cargo"],
-      "matchUpdateTypes": ["minor", "patch"],
-      "groupName": "cargo minor and patch"
     }
   ]
 ```
 
-Rationale for the executor: the last rule sweeps any remaining crate's minor/patch updates into one PR; the specific rules above pull named crate families into focused PRs; SQLx is isolated because a major SQLx bump can require query/migration changes.
+Rationale for the executor: the catch-all (first) sweeps every cargo crate's minor/patch updates into one group as a baseline; each later family rule re-groups its named packages (for ALL update types, including minor/patch) because it matches last and wins. SQLx is isolated last because a major SQLx bump can require query/migration changes.
 
 **Verify**: `python3 -m json.tool renovate.json > /dev/null` → exit 0
 
@@ -134,6 +136,8 @@ No code tests. The config is validated as JSON locally; its behavioral effect ap
 
 - [ ] `renovate.json` is valid JSON (`python3 -m json.tool renovate.json` succeeds)
 - [ ] `packageRules` includes `"matchManagers": ["cargo"]` entries
+- [ ] The generic `"cargo minor and patch"` catch-all rule appears BEFORE the named family rules (`grep -n` ordering: `"cargo minor and patch"` line number < `"axum stack"` and < `"sqlx` line numbers)
+- [ ] The named groups exist: `grep -c '"axum stack"\|"sqlx' renovate.json` ≥ 2
 - [ ] The existing `github-actions` rule is preserved
 - [ ] No other files modified
 - [ ] `plans/README.md` status row updated

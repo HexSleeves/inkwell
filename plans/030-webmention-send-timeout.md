@@ -22,9 +22,9 @@
 
 When `INKWELL_WEBMENTION_SEND=true`, publishing a note spawns a detached `tokio::task` that sends a Webmention to each external URL in the note's body. The send path calls `federation::webmention::send_webmention`, which in turn makes outbound HTTP requests to discover Webmention endpoints and POST to them.
 
-`src/federation/fetch.rs` defines `FETCH_TIMEOUT = Duration::from_secs(10)` and uses it for **receive verification** (the SSRF-guarded fetch that confirms a source URL links back to the target). However, it is not confirmed that `send_webmention` in `src/federation/webmention.rs` uses `fetch_with_ssrf_guard` for its outbound calls. If it constructs its own `reqwest::Client` without a timeout, a slow or hostile target can hold the spawned task open for the default (infinite) TCP timeout, exhausting the Tokio thread pool over time.
+`src/federation/fetch.rs` defines `FETCH_TIMEOUT = Duration::from_secs(10)` and applies it inside the guarded HTTP helpers `guarded_get` / `guarded_post` (via `guarded_request`, which sets `.timeout(remaining)`). The receive path uses these; the send path in `src/federation/webmention.rs` (`send_webmention`) calls `guarded_get` then `guarded_post` (imported from `super::fetch`), so it almost certainly **already inherits the 10s timeout**.
 
-This plan is **investigate-then-fix**: verify whether the send path already has a timeout via the guarded fetch, and if not, add one.
+This plan is therefore **investigate-then-confirm**: verify that `send_webmention` routes through `guarded_get`/`guarded_post` (it appears to), and if so mark this plan **REJECTED — no fix needed**. Only if the send path builds its own un-timed `reqwest::Client` is there anything to do. The expected outcome is REJECTED; the plan exists to make that determination explicit rather than assume it.
 
 ## Current state
 
@@ -38,15 +38,16 @@ tokio::spawn(async move {
     }
 });
 ```
-`wm` is `crate::federation::webmention`.
+`wm` is `crate::federation::webmention`. `send_webmention` imports and calls `guarded_get` then `guarded_post` from `super::fetch` (import at the top of `webmention.rs`).
 
 **`src/federation/fetch.rs:29–31`** — existing timeout constant:
 ```rust
-/// Per-request total timeout. Short so a slow or hostile endpoint can't tie up resources.
+/// Per-request total timeout. Short so a slow or hostile endpoint can't tie up
+/// a worker — federation fetches are best-effort and must never block for long.
 const FETCH_TIMEOUT: Duration = Duration::from_secs(10);
 ```
 
-**`src/federation/fetch.rs:130–137`** — timeout applied in guarded client:
+**`src/federation/fetch.rs:130–137`** — timeout applied in the guarded client built by `guarded_request` (the shared helper behind `guarded_get`/`guarded_post`):
 ```rust
 let client = reqwest::Client::builder()
     .timeout(remaining)
@@ -55,13 +56,13 @@ let client = reqwest::Client::builder()
     .context("building guarded HTTP client")?;
 ```
 
-The question is whether `send_webmention` calls `fetch_with_ssrf_guard` or builds its own client.
+The question is whether `send_webmention` routes through `guarded_get`/`guarded_post` (which apply this timeout — evidence says yes) or builds its own un-timed client.
 
 ## Commands you will need
 
 | Purpose   | Command                                                 | Expected on success |
 |-----------|---------------------------------------------------------|---------------------|
-| Inspect   | `grep -n "reqwest\|timeout\|fetch_with\|Client" src/federation/webmention.rs` | shows client usage |
+| Inspect   | `grep -n "guarded_\|reqwest\|timeout\|Client" src/federation/webmention.rs` | shows `guarded_get`/`guarded_post` usage |
 | Typecheck | `cargo check --all-targets`                              | exit 0              |
 | Tests     | `cargo nextest run --test webmention_contract`           | all pass            |
 | All tests | `cargo nextest run`                                      | all pass            |
@@ -86,10 +87,10 @@ The question is whether `send_webmention` calls `fetch_with_ssrf_guard` or build
 ### Step 1: Investigate — does send_webmention already have a timeout?
 
 Read `src/federation/webmention.rs` in full. Check:
-- Does `send_webmention` call `fetch_with_ssrf_guard` or `super::fetch::fetch_with_ssrf_guard`? If yes → it already has the 10s timeout → **this plan is DONE, mark REJECTED in README.md**.
-- Does it build its own `reqwest::Client`? If yes, does it set `.timeout(Duration::from_secs(10))`?
+- Does `send_webmention` call `guarded_get` / `guarded_post` (from `super::fetch`)? If yes → those route through `guarded_request`, which applies the 10s `FETCH_TIMEOUT` (`src/federation/fetch.rs:130-137`) → it **already has a timeout** → **this plan is DONE, mark REJECTED in README.md**. (This is the expected outcome.)
+- Only if it instead builds its own `reqwest::Client` directly: check whether that builder sets `.timeout(...)`. If not, proceed to Step 2.
 
-If the timeout is already present: mark this plan as REJECTED with reason "send path uses fetch_with_ssrf_guard which has built-in 10s FETCH_TIMEOUT". Update `plans/README.md`. Done.
+If the timeout is already present (expected): mark this plan REJECTED with reason "send path uses guarded_get/guarded_post which apply the 10s FETCH_TIMEOUT". Update `plans/README.md`. Done.
 
 **Verify**: You have read `src/federation/webmention.rs` and determined whether a timeout exists.
 
@@ -116,7 +117,7 @@ If the send path had no timeout, add a comment in the relevant function document
 
 ## Done criteria
 
-- [ ] `src/federation/webmention.rs` send path has a timeout ≤ 15 seconds (either via `fetch_with_ssrf_guard` or explicit `.timeout()`)
+- [ ] `src/federation/webmention.rs` send path has a timeout ≤ 15 seconds (via `guarded_get`/`guarded_post` → `FETCH_TIMEOUT`, or an explicit `.timeout()` if a bespoke client is found)
 - [ ] `cargo check --all-targets` exits 0
 - [ ] `cargo nextest run` exits 0
 - [ ] `plans/README.md` status row updated (either DONE or REJECTED-with-reason)

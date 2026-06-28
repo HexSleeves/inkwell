@@ -20,11 +20,17 @@
 
 ## Why this matters
 
-Three security-critical behaviours have implementation but no (or incomplete) integration test coverage. A regression in any of them silently weakens access control with no failing test:
+The repo's access-control test coverage is mostly strong already. This plan fills the **two genuine gaps** that remain, and explicitly does NOT duplicate tests that already exist.
 
-1. **Preview token expiry & revocation** — `tests/preview_contract.rs` covers the happy path (valid token grants draft access) but does not assert that an *expired* token returns 401, a *revoked* token returns 401, or a token for document A used on document B returns 401. These are the entire safety contract of preview links.
-2. **HTTP If-Match optimistic concurrency** — the 409-on-stale-write path is implemented at `src/http/api.rs:624-647` and tested via the MCP tool, but there is no HTTP-level test that a stale `If-Match` returns 409.
-3. **Cross-author draft isolation** — `tests/scoped_tokens_slice3b.rs` proves an author sees their own drafts, but there is no explicit test that author B with a valid `read` token gets **404** (not 200) when reading author A's draft by slug.
+**Already covered — do NOT re-add (verified at `0819727`):**
+- Wrong-document token → 401: `preview_with_wrong_slug_returns_401` (`tests/preview_contract.rs:199`).
+- Revoked token → 401: `revoked_token_returns_401` (`tests/preview_contract.rs:228`).
+- Past-expiry rejected at creation → 400: `preview_token_with_past_expiry_rejected_at_creation` (`tests/preview_contract.rs:282`).
+- Cross-author draft isolation (A sees own draft 200; A/B cannot see each other's draft 404): `owner_aware_read_visibility` (`tests/scoped_tokens_slice3b.rs:140`, assertions ~176-197).
+
+**The two real gaps this plan fills:**
+1. **A token that was valid but has since expired → 401 at GET.** Creation-time rejection is tested, but not a token whose `expires_at` has passed *after* minting. The mint endpoint rejects a past expiry at creation, so this must be set up by directly updating the `preview_tokens.expires_at` row to a past timestamp via the test pool, then hitting the preview GET.
+2. **HTTP-level stale `If-Match` → 409.** Implemented at `src/http/api.rs:624-647` and tested via the MCP tool, but there is no HTTP-API test that a stale `If-Match` header yields 409.
 
 ## Current state
 
@@ -83,97 +89,77 @@ These tests are DB-backed. They are skipped when `DATABASE_URL` is unset (`maybe
 
 ## Scope
 
-**In scope** (add tests only — do NOT change production code):
-- `tests/preview_contract.rs` — add expiry, revocation, wrong-document tests
-- `tests/scoped_tokens_slice3b.rs` — add cross-author 404 test (or a new `tests/if_match_contract.rs` for the If-Match test)
-- A new file `tests/if_match_contract.rs` for the HTTP If-Match test (or add to `tests/api_contract.rs` — choose based on which has compatible helpers)
+**In scope** (add tests only — do NOT change production code, and do NOT re-add the already-existing tests listed in "Why this matters"):
+- `tests/preview_contract.rs` — add ONE test: a previously-valid token whose `expires_at` is now in the past → GET returns 401.
+- A new file `tests/if_match_contract.rs` — the HTTP stale-`If-Match` → 409 test.
 
 **Out of scope**:
-- Any `src/` production code — if a test reveals a bug, STOP and report; do not fix it here
-- Changing existing passing tests
+- Any `src/` production code — if a test reveals a bug, STOP and report; do not fix it here.
+- Re-adding wrong-document / revoked / past-expiry-at-creation / cross-author tests — they already exist (see "Why this matters"). Adding duplicates wastes effort and risks name collisions.
 
 ## Git workflow
 
 - Branch: `advisor/042-auth-preview-tests`
-- Commit: `test: cover preview expiry/revocation, HTTP If-Match, cross-author isolation`
+- Commit: `test: cover expired-at-GET preview token and HTTP stale If-Match`
 
 ## Steps
 
-### Step 1: Preview wrong-document test
+### Step 1: Expired-token-at-GET test (via direct DB update)
 
-In `tests/preview_contract.rs`, add a test:
-1. `create_draft(&router, "doc-a")` and `create_draft(&router, "doc-b")`
-2. `mint_preview_token(&router, "doc-a")` → `(token_a, _)`
-3. `GET /documents/doc-b/preview?token={token_a}` → assert `StatusCode::UNAUTHORIZED`
+The mint endpoint rejects a past expiry at creation (already tested), so set up an *already-minted, then expired* token by updating the row. In `tests/preview_contract.rs`, add:
+1. `create_draft(&router, "exp-after")` and `mint_preview_token(&router, "exp-after")` → `(token, prefix)`.
+2. Confirm it works first: `GET /documents/exp-after/preview?token={token}` → 200.
+3. Expire it directly via the test pool. The test already holds `pool` (use `common::router_for(pool)` but keep a clone of `pool` first, OR re-acquire via `common::maybe_pool`). Run:
+   ```rust
+   sqlx::query("UPDATE preview_tokens SET expires_at = now() - interval '1 hour' WHERE prefix = $1")
+       .bind(&prefix)
+       .execute(&pool)
+       .await?;
+   ```
+   Confirm the actual column names against `migrations/0022_create_preview_tokens.sql` and `src/db/preview_tokens.rs` (the prefix column may be named `prefix` or `token_prefix` — verify before binding).
+4. `GET /documents/exp-after/preview?token={token}` again → assert `StatusCode::UNAUTHORIZED`.
 
-**Verify**: `cargo check --all-targets` → exit 0
-
-### Step 2: Preview revocation test
-
-Add a test:
-1. `create_draft`, `mint_preview_token` → `(token, prefix)`
-2. Confirm `GET /documents/{slug}/preview?token={token}` → 200
-3. `DELETE /documents/{slug}/preview-tokens/{prefix}` with `x-api-key: SHARED_KEY` → assert success (200/204 — check the handler)
-4. `GET /documents/{slug}/preview?token={token}` again → assert `StatusCode::UNAUTHORIZED`
-
-**Verify**: `cargo check --all-targets` → exit 0
-
-### Step 3: Preview expiry test
-
-First read `src/http/preview.rs` `preview_tokens` (mint) handler and `src/db/preview_tokens.rs` to determine how expiry is set. Two cases:
-- **If the mint endpoint accepts an expiry/ttl in the request body**: mint a token with a 0-second or past expiry, then `GET .../preview?token=...` → assert 401.
-- **If expiry can only be set internally**: mint a token, then directly UPDATE the `preview_tokens` row's `expires_at` to a past timestamp via `sqlx::query` on the test `pool` (the test has the pool), then GET → assert 401. Use the `prefix` to locate the row.
+To hold the pool for the UPDATE: structure the test like the others but bind `let pool = common::maybe_pool().await?` then `let router = common::router_for(pool.clone());` so you can run the UPDATE on `&pool` after minting.
 
 **Verify**: `cargo check --all-targets` → exit 0
 
-### Step 4: Cross-author isolation test
+### Step 2: HTTP stale-If-Match test
 
-In `tests/scoped_tokens_slice3b.rs` (which already has `mint_token` and `create_draft(router, title, body, key)`):
-1. `mint_token(&router, "author-a", &["read", "write"])` → `token_a`
-2. `mint_token(&router, "author-b", &["read", "write"])` → `token_b`
-3. `create_draft(&router, "A secret", "body", &token_a)` → `slug_a` (a draft owned by author A)
-4. `GET /documents/{slug_a}` with `x-api-key: {token_b}` (author B's read token) → assert `StatusCode::NOT_FOUND` (not 200 — B must not see A's draft)
-5. Sanity: `GET /documents/{slug_a}` with `x-api-key: {token_a}` → assert `StatusCode::OK` (A sees own draft)
-
-**Verify**: `cargo check --all-targets` → exit 0
-
-### Step 5: HTTP If-Match stale-write test
-
-Create `tests/if_match_contract.rs` (mirror the structure of `tests/preview_contract.rs`: `mod common;`, `DB_TEST_LOCK`, `SHARED_KEY`, `body_json`):
-1. Create a document via `POST /documents` (x-api-key SHARED_KEY) → read its `version` (call it v1) from the JSON envelope
-2. `PATCH /documents/{slug}` with `If-Match: {v1}` and a body change → assert 200, read new `version` v2
-3. `PATCH /documents/{slug}` again with the **stale** `If-Match: {v1}` → assert `StatusCode::CONFLICT` (409)
+Create `tests/if_match_contract.rs` (mirror `tests/preview_contract.rs`: `mod common;`, `DB_TEST_LOCK`, `db_guard`, `SHARED_KEY`, `body_json`, the `maybe_pool`/early-return pattern):
+1. `POST /documents` (x-api-key SHARED_KEY) → read `version` v1 from the JSON envelope.
+2. `PATCH /documents/{slug}` with header `If-Match: {v1}` and a body change → assert 200; read new `version` v2.
+3. `PATCH /documents/{slug}` again with the **stale** `If-Match: {v1}` → assert `StatusCode::CONFLICT` (409).
 
 **Verify**: `cargo check --all-targets` → exit 0; (with DB) `cargo nextest run --test if_match_contract` → all pass
 
-### Step 6: Run the full suite
+### Step 3: Run the affected suites
 
-**Verify (with DB)**: `DATABASE_URL=... cargo test --all` → all pass
+**Verify (with DB)**: `DATABASE_URL=... cargo nextest run --test preview_contract --test if_match_contract` → all pass
 
 ## Test plan
 
-This plan IS the test plan. New tests:
-- `preview_contract.rs`: wrong-document → 401, revoked → 401, expired → 401
-- `scoped_tokens_slice3b.rs`: author B reading author A's draft → 404; author A reading own → 200
-- `if_match_contract.rs`: stale If-Match → 409
+Two new tests only:
+- `preview_contract.rs`: previously-valid token, `expires_at` set to the past via DB → GET → 401.
+- `if_match_contract.rs`: stale `If-Match` → 409.
+
+(Wrong-document, revoked, past-expiry-at-creation, and cross-author isolation are already covered — do not duplicate.)
 
 ## Done criteria
 
 - [ ] `cargo check --all-targets` exits 0 (tests compile)
-- [ ] At least 3 new `#[tokio::test]` functions in `preview_contract.rs`
-- [ ] At least 1 new cross-author test in `scoped_tokens_slice3b.rs`
+- [ ] Exactly ONE new `#[tokio::test]` in `preview_contract.rs` (expired-at-GET); no duplicates of existing tests
 - [ ] New `tests/if_match_contract.rs` with the stale-If-Match test
-- [ ] With a DB available: `cargo test --all` exits 0, all new tests pass
+- [ ] With a DB available: `cargo nextest run --test preview_contract --test if_match_contract` passes
 - [ ] No `src/` files modified (`git status`)
 - [ ] `plans/README.md` status row updated
 
 ## STOP conditions
 
-- **A new test fails because production behaviour is wrong** (e.g. author B CAN read author A's draft, or an expired token returns 200). This is a real security bug — STOP, do not modify production code, and report the failing test and observed behaviour. This is the most important STOP condition in this plan.
-- The mint endpoint's expiry field cannot be determined from `src/http/preview.rs` / `src/db/preview_tokens.rs`. Report and use the direct DB-update approach (Step 3, second case).
+- **A new test fails because production behaviour is wrong** (e.g. an expired token returns 200, or a stale If-Match returns 200 instead of 409). Real bug — STOP, do not modify production code, report the failing test and observed behaviour.
+- The `preview_tokens` expiry/prefix column names differ from the UPDATE in Step 1. Read `migrations/0022_create_preview_tokens.sql` and use the actual names.
 - No `DATABASE_URL` available: write and compile the tests, report that runtime pass needs a DB.
 
 ## Maintenance notes
 
-- When preview token semantics change (new expiry rules, new scopes that can mint), these tests are the guard — extend them.
-- The cross-author isolation test is the canonical proof of the slice-3b invariant; if `resolve_visibility` or `owner_filter` is refactored (e.g. plan 038 or 039), this test must stay green.
+- When preview token semantics change (new expiry rules, new scopes that can mint), extend `tests/preview_contract.rs`.
+- The cross-author isolation invariant is guarded by `owner_aware_read_visibility` in `tests/scoped_tokens_slice3b.rs`; if `resolve_visibility`/`owner_filter` is refactored (plan 038 or 039), keep that test green.

@@ -29,23 +29,26 @@ The fix is mechanical: extract the 4 inline queries to functions in `src/db/docu
 
 ## Current state
 
-**`src/garden.rs:205–224`** — 3 inline queries in `rerender_one` and related helper:
+**`src/garden.rs:198–232`** — 3 of the 4 inline queries live in the private helper `fetch_embed_target`, which looks up an embed target **by slug with visibility branching** (NOT by id). The three arms differ only in the `WHERE`:
 ```rust
-// garden.rs:205
-sqlx::query_as::<Postgres, (DocumentStatus, String)>(
-    "SELECT status, body_markdown FROM documents WHERE id = $1 ...",
-)
-// garden.rs:214
-sqlx::query_as::<Postgres, (DocumentStatus, String)>(
-    "SELECT status, body_markdown FROM documents WHERE ...",
-)
-// garden.rs:224
-sqlx::query_as::<Postgres, (DocumentStatus, String)>(
-    "...",
-)
+async fn fetch_embed_target(
+    pool: &PgPool, slug: &str, visibility: Visibility,
+) -> Result<Option<(DocumentStatus, String)>, sqlx::Error> {
+    match visibility {
+        Visibility::Public => sqlx::query_as::<Postgres, (DocumentStatus, String)>(
+            "SELECT status, body_markdown FROM documents WHERE slug = $1 AND status = 'published'",
+        ).bind(slug).fetch_optional(pool).await,
+        Visibility::Owner(owner_id) => sqlx::query_as::<Postgres, (DocumentStatus, String)>(
+            "SELECT status, body_markdown FROM documents WHERE slug = $1 AND (status = 'published' OR owner_id = $2)",
+        ).bind(slug).bind(owner_id).fetch_optional(pool).await,
+        Visibility::All => sqlx::query_as::<Postgres, (DocumentStatus, String)>(
+            "SELECT status, body_markdown FROM documents WHERE slug = $1",
+        ).bind(slug).fetch_optional(pool).await,
+    }
+}
 ```
 
-**`src/garden.rs:310`** — 1 inline query in `rerender_one`:
+**`src/garden.rs:310`** — the 4th inline query, in `rerender_one`, IS id-based:
 ```rust
 let Some((_slug, body_markdown)) = sqlx::query_as::<Postgres, (String, String)>(
     "SELECT slug, body_markdown FROM documents WHERE id = $1",
@@ -55,12 +58,12 @@ let Some((_slug, body_markdown)) = sqlx::query_as::<Postgres, (String, String)>(
 .await?
 ```
 
-These 4 queries return narrow projections for the rendering pipeline, not the full `Document` struct.
+These queries return narrow projections for the rendering pipeline, not the full `Document` struct.
 
 **Convention for new DB functions** (from `context/conventions.md`):
 ```
 DB query functions: in src/db/<entity>.rs, named <verb>_<entity>_<qualifier>
-Example: get_document_body_by_id, list_documents_needing_rerender
+Examples in the doc: list_documents_by_tag, update_document_by_slug_if_version
 ```
 
 Functions take `&PgPool` as first arg, never `&AppState`.
@@ -101,13 +104,13 @@ Read `src/garden.rs` in full around lines 200–330. For each of the 4 `sqlx::qu
 
 **Verify**: You have all 4 queries documented.
 
-### Step 2: Add DB functions for each query
+### Step 2: Add DB functions for the two distinct queries
 
-In `src/db/documents.rs`, add new public async functions for each of the 4 queries. Suggested names:
+There are only **two** distinct query shapes (the 3 arms of `fetch_embed_target` are one slug+visibility lookup; line 310 is one id lookup). Add two functions to `src/db/documents.rs`:
 
-1. `get_document_body_by_id(pool: &PgPool, id: Uuid) -> Result<Option<(String, String)>, sqlx::Error>` — returns `(slug, body_markdown)` for a document by ID (used in `rerender_one`)
+1. `get_document_body_by_id(pool: &PgPool, id: Uuid) -> Result<Option<(String, String)>, sqlx::Error>` — returns `(slug, body_markdown)` for a document by ID (replaces the line-310 query in `rerender_one`).
 
-2. For any queries that select `(DocumentStatus, String)` for the backfill helpers, name them descriptively (e.g., `list_documents_for_rerender` if they return multiple rows, or `get_document_for_rerender` for single-row).
+2. `get_embed_target_by_slug(pool: &PgPool, slug: &str, visibility: Visibility) -> Result<Option<(DocumentStatus, String)>, sqlx::Error>` — lift the **entire** `fetch_embed_target` body (all three visibility arms) verbatim into this function. It is a slug + visibility lookup returning `(status, body_markdown)`; do NOT rename it to anything `_rerender`-flavored — it fetches an embed target, not a rerender candidate. `garden.rs::fetch_embed_target` then becomes a thin wrapper (or is deleted and callers call the db fn directly). Note this needs `use crate::db::links::Visibility;` already imported in garden.
 
 Follow the existing function signatures in `src/db/documents.rs`:
 ```rust

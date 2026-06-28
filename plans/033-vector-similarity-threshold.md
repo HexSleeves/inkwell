@@ -24,12 +24,23 @@ The vector ANN search in `src/db/chunks.rs` returns the top-K nearest chunks wit
 
 ## Current state
 
-**`src/db/chunks.rs`** — ANN query pattern (all three visibility variants follow this pattern):
-```rust
-ORDER BY distance ASC, slug ASC
-LIMIT $6
+**The target is `search_chunks`** (`src/db/chunks.rs:374`), which the `/ask` RAG path calls (`src/http/ai.rs:228`). It is a **FLAT** query (NOT a subquery): it computes the distance in the SELECT list and references the alias only in `ORDER BY`. Each of its three visibility arms looks like (Public arm shown):
+```sql
+SELECT documents.slug, documents.title, note_chunks.content,
+       (note_chunks.embedding <=> $1::vector) AS distance
+FROM note_chunks
+JOIN documents ON documents.id = note_chunks.note_id
+WHERE documents.status = 'published'
+  AND note_chunks.embedding_provider = $2
+  AND note_chunks.embedding_model = $3
+ORDER BY distance ASC, documents.slug ASC, note_chunks.chunk_index ASC
+LIMIT $4
 ```
-No `WHERE distance < threshold` clause. The `distance` column is computed as `(embedding <=> $1::vector)`.
+Note the bind numbering differs per arm: `LIMIT` is `$4` (Public/All) but `$5` (Owner, which also binds `owner_id = $2`). **PostgreSQL cannot reference a SELECT-list alias (`distance`) in `WHERE`** — so you cannot simply add `WHERE distance <= $x`. You must either wrap the whole query in an outer subquery and filter on the alias there, or repeat the `(note_chunks.embedding <=> $1::vector) <= $x` expression in the WHERE. This plan uses the **subquery-wrap** approach (Step 2) — it filters the alias once and avoids recomputing the distance.
+
+The `related_notes` (`chunks.rs:140`) and `related_notes_for_note` (`chunks.rs:261`) functions ARE already subquery-shaped (`SELECT … FROM (SELECT … DISTINCT ON …) AS nearest ORDER BY … LIMIT …`); applying a threshold there is a one-line `WHERE distance <= $x` on the outer query. They are an OPTIONAL secondary target — see Scope.
+
+**`src/config.rs`** — already reads many `INKWELL_*` env vars with defaults. Add `INKWELL_MIN_SIMILARITY` here.
 
 **`src/config.rs`** — already reads many `INKWELL_*` env vars with defaults. Add `INKWELL_MIN_SIMILARITY` here.
 
@@ -49,14 +60,15 @@ Note: cosine distance from pgvector `<=>` is in range [0, 2]. A similarity of 0.
 ## Scope
 
 **In scope**:
-- `src/config.rs` — add `min_similarity: f32` field (default 0.0)
-- `src/db/chunks.rs` — add optional `max_distance` parameter to ANN query functions
-- `src/http/ai.rs` — pass `max_distance` from `state.config.min_similarity`
+- `src/config.rs` — add `min_similarity: f32` field (default 0.0); also add it to the test config in `tests/common/mod.rs` (the `Config { … }` literal there must list every field — add `min_similarity: 0.0,`)
+- `src/db/chunks.rs` — add a `max_distance: Option<f32>` parameter to `search_chunks` (primary). OPTIONALLY also `related_notes` + `related_notes_for_note` (secondary; see below)
+- `src/http/ai.rs` — pass `max_distance` from `state.config.min_similarity` to the `search_chunks` call (`ai.rs:228`)
 
 **Out of scope**:
 - Schema changes — no migration needed
 - Changes to the embedding model or dimension
 - `/search` endpoint — that uses FTS, not vector ANN
+- The `related_notes` family is OPTIONAL. If you add `max_distance` to them, you MUST also update their caller at `src/http/ai.rs:91` (the `/documents/{slug}/related` route). If you do not want to expand scope, leave them and only thread the threshold through `search_chunks` (the `/ask` path the "Why" section justifies). State which you did.
 
 ## Git workflow
 
@@ -87,40 +99,46 @@ INKWELL_MIN_SIMILARITY=0  # Minimum cosine similarity for ANN search (0.0=disabl
 
 **Verify**: `cargo check --all-targets` → exit 0
 
-### Step 2: Add max_distance to ANN search functions in src/db/chunks.rs
+### Step 2: Add max_distance to `search_chunks` (wrap the flat query)
 
-In `src/db/chunks.rs`, find the `search_chunks` and `related_chunks` functions (or their visibility-aware variants). Add an optional `max_distance: Option<f32>` parameter.
+Add a `max_distance: f32` parameter to `search_chunks` (use a concrete `f32`, not `Option` — pass `2.0` for "no filter" so the bind structure is uniform; `2.0` is the max possible cosine distance, so `distance <= 2.0` matches everything). For EACH of the three visibility arms, wrap the existing flat SELECT in an outer subquery that filters on the alias and append one new bind:
 
-In the SQL, add a `HAVING` or subquery filter. The cleanest approach since `distance` is computed in the SELECT:
-
-For queries using a subquery pattern (the current code uses `SELECT … FROM (SELECT … ORDER BY distance) AS nearest ORDER BY distance ASC LIMIT $k`):
 ```sql
-SELECT slug, title, distance FROM (
-    SELECT ...
+SELECT slug, title, content, distance FROM (
+    SELECT documents.slug, documents.title, note_chunks.content,
            (note_chunks.embedding <=> $1::vector) AS distance
-    FROM note_chunks ...
-) AS nearest
-WHERE distance <= $max_dist   -- new: filter out low-similarity chunks
-ORDER BY distance ASC, slug ASC
-LIMIT $k
+    FROM note_chunks
+    JOIN documents ON documents.id = note_chunks.note_id
+    WHERE documents.status = 'published'
+      AND note_chunks.embedding_provider = $2
+      AND note_chunks.embedding_model = $3
+) AS scored
+WHERE distance <= $4                 -- new threshold bind
+ORDER BY distance ASC, slug ASC, /* keep existing tiebreakers */
+LIMIT $5                              -- shifted: was $4
 ```
 
-When `max_distance` is `None`, pass `2.0` (the maximum possible cosine distance, effectively no filter) to keep the same bind-parameter structure without branching.
+Key points:
+- The threshold bind and the LIMIT bind both shift by one per arm. The Owner arm (which binds `owner_id`) shifts accordingly. Re-number ALL `$N` carefully per arm and add the corresponding `.bind(max_distance)` / `.bind(limit)` in the right order.
+- The outer `ORDER BY` can reference the `distance` alias (it is the outer query's column); the inner tiebreakers (`documents.slug`, `note_chunks.chunk_index`) must be carried out as `slug`, and you may need to also select `chunk_index` in the inner query if you want to keep that tiebreaker — simplest is to keep `ORDER BY distance ASC, slug ASC` on the outer query.
+- The row tuple type `(String, String, String, f64)` is unchanged (slug, title, content, distance).
 
 **Verify**: `cargo check --all-targets` → exit 0
 
-### Step 3: Pass threshold from AppState to ANN calls
+### Step 3: Pass the threshold from AppState to `search_chunks`
 
-In `src/http/ai.rs`, find where `search_chunks` or `related_chunks` is called. Add the threshold:
+In `src/http/ai.rs` (around line 228 where `search_chunks` is called), compute the max distance from config and pass it:
 ```rust
+// similarity in [0,1] → cosine distance in [0,2]; 0.0 similarity ⇒ 2.0 (no filter)
 let max_distance = if state.config.min_similarity > 0.0 {
-    Some(1.0 - state.config.min_similarity)  // convert similarity to distance
+    1.0 - state.config.min_similarity
 } else {
-    None
+    2.0
 };
 // ...
-chunks::search_chunks(&state.pool, ..., max_distance).await?
+chunks::search_chunks(&state.pool, &embedding, visibility, limit, provider, model, max_distance).await?
 ```
+(Match the actual current argument order of `search_chunks`; `max_distance` is the new trailing arg.)
 
 **Verify**: `cargo check --all-targets` → exit 0
 
@@ -137,15 +155,16 @@ No new tests required for the default (`min_similarity=0.0`) — existing `ai_co
 - [ ] `cargo check --all-targets` exits 0
 - [ ] `cargo clippy --all-targets -- -D warnings` exits 0
 - [ ] `cargo fmt --check` exits 0
-- [ ] `cargo nextest run` exits 0
-- [ ] `INKWELL_MIN_SIMILARITY` documented in `.env.example`
-- [ ] Default value is `0.0` (no behavioural change when not configured)
+- [ ] `DATABASE_URL=… cargo nextest run --test ai_contract` exits 0 (DB-backed; skips without `DATABASE_URL`)
+- [ ] `INKWELL_MIN_SIMILARITY` documented in `.env.example` and added to the `Config` literal in `tests/common/mod.rs`
+- [ ] Default value is `0.0` → passes `max_distance = 2.0` → no behavioural change when not configured
 - [ ] `plans/README.md` status row updated
 
 ## STOP conditions
 
-- The ANN query does not use a subquery structure that allows a `WHERE distance <=` clause. Report the actual query shape and stop.
-- `sqlx` parameterized queries cannot bind `f32` for the distance filter. Try `f64`; if still failing, report.
+- After wrapping `search_chunks` in a subquery, the per-arm bind renumbering does not line up (a `cargo check` parameter-count or type error you cannot resolve in two attempts). Report the exact arm and stop.
+- `sqlx` cannot bind `f32` for the distance filter. Use `f64` for the parameter and the `2.0` sentinel; if still failing, report.
+- Do NOT treat "search_chunks is a flat query, not a subquery" as a stop — wrapping it in a subquery (Step 2) is the intended fix, not a blocker.
 
 ## Maintenance notes
 

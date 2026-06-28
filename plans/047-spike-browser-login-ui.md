@@ -48,7 +48,7 @@ if browser_login {
 ```
 
 **Already-decided constraints (do NOT re-litigate — read and honor):**
-- ADR 0010 (in `.mex/context/decisions.md` / `.mex/events/decisions.jsonl`) records the browser-session decision. **Read it before designing.** It caps browser sessions at `read/write/publish` and **downscopes admin** — a browser session can never hold the `admin` scope (confirmed in `auth_session.rs`: admin tokens are downscoped when minting a session). So the login UI authenticates authors, not admins.
+- ADR 0010 lives at **`docs/adr/0010-browser-login.md`** (NOT in `.mex/` — the decisions there are only board-status notes). **Read `docs/adr/0010-browser-login.md` before designing.** It caps browser sessions at `read/write/publish` and **downscopes admin** — a browser session can never hold the `admin` scope (confirmed in `auth_session.rs`: admin tokens are downscoped when minting a session). So the login UI authenticates authors, not admins.
 - The login input is a scoped author token (`ink_<prefix>_<secret>`), exchanged at `POST /auth/login`. Read `auth_session.rs` `login` handler to confirm the exact request body field name (e.g. `token`).
 - Cookie attributes are already correct (`HttpOnly; Secure; SameSite=Strict`).
 
@@ -58,14 +58,14 @@ if browser_login {
 
 | Purpose   | Command                                              | Expected on success |
 |-----------|-----------------------------------------------------|---------------------|
-| Read ADR  | `grep -rn "0010\|browser.login\|session" .mex/context/decisions.md` | finds ADR 0010 |
+| Read ADR  | `cat docs/adr/0010-browser-login.md` (or open it)   | the 8.9K ADR body   |
 | Typecheck (if PoC built) | `cargo check --all-targets`          | exit 0              |
 | Tests (if PoC built) | `cargo nextest run --test browser_login` | all pass        |
 
 ## Scope
 
 **In scope**:
-- `docs/spikes/0NN-browser-login-ui.md` (NEW — pick the next spike number by listing `docs/spikes/`) — the design document
+- `docs/spikes/001-browser-login-ui.md` (NEW) — the design document. The `docs/spikes/` directory does **not exist yet** (the repo has `docs/adr/` and flat `docs/*.md`); create `docs/spikes/` and start numbering at `001`.
 - OPTIONAL (only if Step 4 greenlights): `src/views/login.rs` + a handler in `src/http/auth_session.rs` serving `GET /auth/login` as an HTML form (the existing `/auth/login` is POST-only), all behind the existing `INKWELL_BROWSER_LOGIN` flag
 
 **Out of scope**:
@@ -83,7 +83,7 @@ Read: ADR 0010 (decisions), `src/http/auth_session.rs` (full), `migrations/0020_
 
 ### Step 2: Write the design document
 
-Create `docs/spikes/0NN-browser-login-ui.md` covering:
+Create `docs/spikes/001-browser-login-ui.md` covering:
 
 1. **Goal & non-goals** — login page for authors; not admin, not registration.
 2. **Page design** — a minimal HTML form (token field + submit) rendered via `src/views/`, served at `GET /auth/login` (HTML) while `POST /auth/login` (existing) does the exchange. Sketch the form markup and where the nonce goes. Decide: does the form POST as `application/x-www-form-urlencoded` or `application/json`? (Check what the existing POST handler accepts — match it, or note the handler needs to accept form encoding.)
@@ -102,7 +102,7 @@ In the same doc, add a "Graduation of `INKWELL_BROWSER_LOGIN`" section answering
 - Security review of the session cookie + CSRF posture under flag-on.
 - Documentation in `docs/DEPLOYMENT.md` for operators.
 
-Record this so the flag does not become permanent dead infrastructure (the D04 finding).
+Record this so `INKWELL_BROWSER_LOGIN` does not become permanent dead infrastructure — a flag with no graduation path is debt.
 
 **Verify**: The criteria are concrete and checkable, not "when it's ready".
 
@@ -122,7 +122,7 @@ Based on the design, make a recommendation: build the minimal `GET /auth/login` 
 
 ## Done criteria
 
-- [ ] `docs/spikes/0NN-browser-login-ui.md` exists with: page design, CSRF posture, error UX, and flag graduation criteria
+- [ ] `docs/spikes/001-browser-login-ui.md` exists with: page design, CSRF posture, error UX, and flag graduation criteria
 - [ ] The doc honors ADR 0010 (author-scoped sessions, no admin) — does not propose contradicting it
 - [ ] A clear build-now-or-defer recommendation is recorded
 - [ ] If PoC built: `cargo check --all-targets` and `cargo nextest run --test browser_login` pass; routes are flag-gated

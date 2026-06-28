@@ -52,17 +52,19 @@ Splitting into focused sub-modules gives each concern its own file, makes owners
 
 **In scope**:
 - `src/http/api.rs` — to be split
-- `src/http/documents.rs` (NEW) — document CRUD handlers + types
+- `src/http/documents.rs` (NEW) — document CRUD handlers + `DocumentEnvelope` type
 - `src/http/graph.rs` (NEW) — graph and backlinks handlers
 - `src/http/publish.rs` (NEW) — publish/unpublish handlers
-- `src/http/mod.rs` — declare new modules
+- `src/http/mod.rs` — declare new modules (use `pub mod`, matching the existing convention — see note below)
 - `src/http/router.rs` — update import paths
-- `src/http/auth.rs` — move `resolve_visibility` here
+- `src/http/auth.rs` — move `resolve_visibility` AND `require_scope` here (both are pub(crate) auth helpers)
 - `src/http/ai.rs`, `src/http/search.rs` — update import of `resolve_visibility`
+- `src/http/preview.rs` — **MUST be updated**: its line 52 is `use crate::http::api::{DocumentEnvelope, require_scope, resolve_visibility};`. After this split those move: `DocumentEnvelope` → `crate::http::documents`, `require_scope` + `resolve_visibility` → `crate::http::auth`. Update this import or `cargo check` fails.
+
+> **mod.rs convention**: `src/http/mod.rs` declares every module as `pub mod <name>;` (NOT `pub(crate) mod`). All new module declarations must use `pub mod` to match.
 
 **Out of scope**:
-- `src/http/preview.rs` — already a separate module; no change
-- `src/http/admin.rs` — already a separate module; no change
+- `src/http/admin.rs` — already a separate module; it does not import from api.rs (verify with `grep -n "http::api" src/http/admin.rs`); no change
 - Any change to handler logic — this is a pure restructuring, no behaviour changes
 
 ## Git workflow
@@ -73,14 +75,16 @@ Splitting into focused sub-modules gives each concern its own file, makes owners
 
 ## Steps
 
-### Step 1: Move resolve_visibility to auth.rs
+### Step 1: Move `resolve_visibility` AND `require_scope` to auth.rs
 
-`resolve_visibility` is already used by `ai.rs` and `search.rs` via `use crate::http::api::resolve_visibility`. Moving it to `auth.rs` is the right home (it is an auth concern).
+Both are `pub(crate)` auth helpers in `api.rs` (`resolve_visibility` at ~line 867, `require_scope` at ~line 883) and are imported across modules — `resolve_visibility` by `ai.rs`, `search.rs`, and `preview.rs`; `require_scope` by `publish`/CRUD handlers and `preview.rs`. Both belong in `auth.rs`.
 
-1. Cut `resolve_visibility` from `src/http/api.rs`
-2. Paste into `src/http/auth.rs` with `pub(crate)` visibility
-3. Update `src/http/ai.rs` and `src/http/search.rs` imports: change `use crate::http::api::resolve_visibility` to `use crate::http::auth::resolve_visibility`
-4. Update any remaining references in `api.rs` itself
+1. Cut `resolve_visibility` and `require_scope` from `src/http/api.rs`.
+2. Paste both into `src/http/auth.rs` keeping `pub(crate)` visibility. (`require_scope` uses `Principal`/`Scope` — already available in `auth.rs`.)
+3. Update importers:
+   - `src/http/ai.rs`, `src/http/search.rs`: `use crate::http::api::resolve_visibility` → `use crate::http::auth::resolve_visibility`
+   - `src/http/preview.rs:52`: `use crate::http::api::{DocumentEnvelope, require_scope, resolve_visibility};` → split into `use crate::http::auth::{require_scope, resolve_visibility};` and `use crate::http::documents::DocumentEnvelope;` (the latter resolves after Step 4's rename; until then, temporarily keep `DocumentEnvelope` import pointing at `api` and fix it in Step 4).
+   - Any remaining references inside the api.rs handlers (now in documents.rs/publish.rs/graph.rs) → `crate::http::auth::{...}`.
 
 **Verify**: `cargo check --all-targets` → exit 0
 
@@ -92,7 +96,7 @@ Create `src/http/graph.rs`. Move from `api.rs`:
 - `document_graph` handler
 - Any types used only by these handlers
 
-Declare `pub(crate) mod graph;` in `src/http/mod.rs`.
+Declare `pub mod graph;` in `src/http/mod.rs` (match the existing `pub mod` convention).
 Update `src/http/router.rs` imports: `use super::graph` and change `any(api::graph)` to `any(graph::graph)` etc.
 
 **Verify**: `cargo check --all-targets` → exit 0
@@ -110,10 +114,11 @@ Update `mod.rs` and `router.rs` accordingly.
 
 ### Step 4: Rename api.rs to documents.rs
 
-What remains in `api.rs` after steps 1–3 should be document CRUD + health + shared utility types. Rename:
+What remains in `api.rs` after steps 1–3 should be document CRUD + health + the `DocumentEnvelope` type. Rename:
 - `src/http/api.rs` → `src/http/documents.rs`
-- In `src/http/mod.rs`: change `pub(crate) mod api;` → `pub(crate) mod documents;`; optionally keep `pub(crate) use documents as api;` re-export for a one-step migration
+- In `src/http/mod.rs`: change `pub mod api;` → `pub mod documents;` (keep `pub mod`)
 - In `router.rs` and any other importers: update `api::documents` → `documents::documents`, etc.
+- Finalize `preview.rs`'s `DocumentEnvelope` import to `use crate::http::documents::DocumentEnvelope;` (the temporary `api` pointer from Step 1).
 
 `health` handler can stay in `documents.rs` or move to a tiny `health.rs` — your call; keep it in `documents.rs` if the change is trivial, move if it's already isolated.
 
@@ -134,18 +139,19 @@ No new tests — pure restructuring. All existing tests exercise the HTTP endpoi
 
 - [ ] `src/http/api.rs` either does not exist or is ≤ 50 lines (only re-exports)
 - [ ] New files: `src/http/documents.rs`, `src/http/graph.rs`, `src/http/publish.rs`
-- [ ] `resolve_visibility` lives in `src/http/auth.rs`
+- [ ] `resolve_visibility` AND `require_scope` live in `src/http/auth.rs`
+- [ ] `src/http/preview.rs` imports compile (its `DocumentEnvelope`/`require_scope`/`resolve_visibility` now resolve to documents/auth)
 - [ ] `cargo check --all-targets` exits 0
 - [ ] `cargo clippy --all-targets -- -D warnings` exits 0
 - [ ] `cargo fmt --check` exits 0
-- [ ] `cargo nextest run` exits 0 (all routes still work)
+- [ ] `cargo check --all-targets` is the primary signal; `DATABASE_URL=… cargo nextest run` exits 0 (route integration tests are DB-backed and skip without `DATABASE_URL`)
 - [ ] `plans/README.md` status row updated
 
 ## STOP conditions
 
-- A split requires moving a type that is shared between more than 2 new modules, requiring a new `src/http/types.rs` shared module. Report and stop — the plan needs to be extended.
+- A type other than `DocumentEnvelope`/`require_scope`/`resolve_visibility` turns out to be shared across all of documents.rs + publish.rs + graph.rs + preview.rs and has no clear home. Report and stop — the plan may need a small `src/http/wire.rs` shared module.
 - `cargo check` fails with circular import errors. Report the cycle and stop.
-- The split would require touching more than 10 files total. Report scope and stop.
+- The split would require touching more than 10 files total. Report scope and stop. (Expected file set: api.rs→documents.rs, graph.rs, publish.rs, mod.rs, router.rs, auth.rs, ai.rs, search.rs, preview.rs = 9.)
 
 ## Maintenance notes
 
