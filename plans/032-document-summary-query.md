@@ -56,17 +56,19 @@ pub async fn list_documents(pool: &PgPool, options: ListOptions) -> Result<Vec<D
 
 ## Scope
 
-**In scope**:
-This change touches ~9 files (counted, not estimated) — `render_document_list` is the shared seam but each wrapper view takes a concrete `&[Document]`:
+**In scope** — this change touches **11 files** (counted): 9 source + 2 test files whose fixtures feed the changed view signatures:
 - `src/domain/document.rs` — add `DocumentSummary` struct
 - `src/db/documents.rs` — add summary-only query variants for `list_documents`, `list_documents_by_tag`, `list_documents_by_month`, `search_documents`
 - `src/http/pages.rs` — switch index/tag/archive handlers to the summary queries
-- `src/http/search.rs` — switch the HTML search path to the summary query
+- `src/http/search.rs` — switch BOTH the JSON and HTML search branches to the summary query (one shared call — see Step 4)
 - `src/views/layout.rs` — `render_document_list(&[Document])` → `render_document_list(&[DocumentSummary])`
 - `src/views/index.rs` — `render_index_page` param `&[Document]` → `&[DocumentSummary]`
 - `src/views/tags.rs` — `render_tag_page` param → `&[DocumentSummary]`
 - `src/views/search.rs` — `render_search_page` param → `&[DocumentSummary]`
 - `src/views/archive.rs` — `render_archive_month_page` param → `&[DocumentSummary]`
+- `tests/view_layout_contract.rs` — its `tagged_document()` helper (~line 12) builds a `Document` and passes it to `render_index_page` (~174) and `render_search_page` (~196); add a `DocumentSummary` fixture (or convert the helper) so these calls compile.
+- `tests/archive_nav_contract.rs` — its `doc()` helper (~line 18) builds a `Document` and passes it to `render_archive_month_page` (~127-188); same — produce `DocumentSummary` fixtures.
+Without the two test files, `cargo check --all-targets` (a done criterion) fails on the changed signatures.
 
 **Out of scope** (keep using full `Document`):
 - `GET /documents/{slug}` — single-document detail fetch; body is needed
@@ -119,7 +121,7 @@ pub struct DocumentSummary {
 }
 ```
 
-Match the `sqlx::FromRow` derive pattern used by `Document`. Match the `serde` attributes used on `Document`. Note: `Document` may not derive `sqlx::FromRow` (the repo uses positional `query_as::<Postgres, Document>`); if `FromRow` causes a column-name mismatch with the `LEFT(...) AS body_excerpt_source` alias, drop the derive and map rows manually in Step 3 (see STOP conditions).
+`Document` DOES derive `sqlx::FromRow` (`src/domain/document.rs:80`), and `FromRow` maps by COLUMN NAME — so `LEFT(body_markdown, 320) AS body_excerpt_source` binds correctly to the `body_excerpt_source` field via the alias. Derive `sqlx::FromRow` on `DocumentSummary` the same way and match `Document`'s `serde` attributes. (No positional-tuple fallback is needed; the alias makes `FromRow` work.)
 
 **Verify**: `cargo check --all-targets` → exit 0
 
@@ -149,7 +151,7 @@ Naming convention: append `_summary` to the existing function name.
 ### Step 4: Switch HTML list handlers + views to summaries
 
 1. In `src/http/pages.rs`: index, tag, and archive handlers call `list_documents`/`list_documents_by_tag`/`list_documents_by_month` → switch to the `_summary` variants.
-2. In `src/http/search.rs`: the HTML path calls `search_documents` then `derive_excerpt(doc.body_markdown(), 160)` → switch to `search_documents_summary` and call `derive_excerpt(&summary.body_excerpt_source, 160)`.
+2. In `src/http/search.rs`: there is ONE `search_documents` call (~line 79) whose result feeds BOTH the JSON branch (~line 106, `derive_excerpt(doc.body_markdown(), 160)`) AND the HTML branch (~line 120, `render_search_page`). Switch that single call to `search_documents_summary`, then update BOTH branches: the JSON `SearchResult.excerpt` mapping → `derive_excerpt(&summary.body_excerpt_source, 160)`, and the HTML `render_search_page(&docs, …)` call (now `&[DocumentSummary]`). The JSON `SearchResult` struct only exposes `excerpt` (not full body), so this is wire-compatible. If you switch the call but leave the JSON branch on `doc.body_markdown()`, it will NOT compile (`DocumentSummary` has no `body_markdown()`).
 3. In `src/views/layout.rs`: change `render_document_list(documents: &[Document])` to `&[DocumentSummary]`, and its per-item call from `derive_excerpt(doc.body_markdown(), 160)` to `derive_excerpt(&doc.body_excerpt_source, 160)`. Everything else in that function (title, slug, date_line, tag chips) reads fields present on `DocumentSummary`.
 4. In `src/views/index.rs`, `tags.rs`, `search.rs`, `archive.rs`: change each wrapper's `&[Document]` parameter to `&[DocumentSummary]`.
 
@@ -169,16 +171,17 @@ This is intended as a behaviour-preserving refactor — BUT the excerpt path is 
 - [ ] `cargo clippy --all-targets -- -D warnings` exits 0
 - [ ] `cargo fmt --check` exits 0
 - [ ] `DATABASE_URL=… cargo nextest run` exits 0 (DB-backed list tests skip without it)
-- [ ] `grep -c "body_markdown, rendered_html" src/db/documents.rs` is below the baseline of **18** (the in-scope list queries no longer select both body columns; detail/write queries still do)
+- [ ] The HTML list handlers call the `_summary` variants: `grep -n "list_document_summaries\|search_documents_summary\|_summary" src/http/pages.rs src/http/search.rs` shows the summary functions are the ones the handlers now call (the change is real, not just additive). NOTE: do NOT use a `grep -c "body_markdown, rendered_html"` count as a gate — the summary functions are added ALONGSIDE the existing full-body ones (which feed, legitimately, but are no longer the *list* path), so that count does not move and would verify nothing.
+- [ ] `DocumentSummary` exists and the four `_summary` query functions exist in `src/db/documents.rs`
 - [ ] Excerpt regression guard test added and passing (`view_layout_contract`): list excerpt is markdown-stripped
-- [ ] `list_documents_vis` is unchanged (`git diff` shows the JSON list query untouched)
+- [ ] `list_documents_vis` is unchanged (`git diff` shows the JSON `GET /documents` list query untouched)
 - [ ] `plans/README.md` status row updated
 
 ## STOP conditions
 
 - A list view actually renders `body_html` (full preview). If so, that view keeps `Document`; exclude it and report.
-- `sqlx::FromRow` derive fails for `DocumentSummary` (column/alias mismatch). Fall back to `sqlx::query_as::<Postgres, (Uuid, String, String, String, DocumentStatus, GrowthStage, Vec<String>, OffsetDateTime, OffsetDateTime)>` with a manual map into `DocumentSummary`, matching the positional style already used for `Document` in this file.
-- The change requires modifying **more than 10** files — report scope creep and stop. (Expected set is 9, enumerated in Scope.)
+- `sqlx::FromRow` unexpectedly fails for `DocumentSummary` despite the `AS body_excerpt_source` alias. Fall back to `sqlx::query_as::<Postgres, (Uuid, String, String, String, DocumentStatus, GrowthStage, Vec<String>, OffsetDateTime, OffsetDateTime)>` with a manual map into `DocumentSummary`.
+- The change requires modifying **more than 12** files — report scope creep and stop. (Expected set is 11, enumerated in Scope: 9 source + 2 test files.)
 
 ## Maintenance notes
 

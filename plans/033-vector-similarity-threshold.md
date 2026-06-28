@@ -38,13 +38,19 @@ LIMIT $4
 ```
 Note the bind numbering differs per arm: `LIMIT` is `$4` (Public/All) but `$5` (Owner, which also binds `owner_id = $2`). **PostgreSQL cannot reference a SELECT-list alias (`distance`) in `WHERE`** — so you cannot simply add `WHERE distance <= $x`. You must either wrap the whole query in an outer subquery and filter on the alias there, or repeat the `(note_chunks.embedding <=> $1::vector) <= $x` expression in the WHERE. This plan uses the **subquery-wrap** approach (Step 2) — it filters the alias once and avoids recomputing the distance.
 
-The `related_notes` (`chunks.rs:140`) and `related_notes_for_note` (`chunks.rs:261`) functions ARE already subquery-shaped (`SELECT … FROM (SELECT … DISTINCT ON …) AS nearest ORDER BY … LIMIT …`); applying a threshold there is a one-line `WHERE distance <= $x` on the outer query. They are an OPTIONAL secondary target — see Scope.
+Only `related_notes` (`chunks.rs:140`) is genuinely subquery-shaped (`SELECT … FROM (SELECT … DISTINCT ON …) AS nearest ORDER BY … LIMIT …`) — there a threshold IS a one-line `WHERE distance <= $x` on the outer query, BUT it has **no caller** in `src/` or `tests/` (verified), so threading a param through it is caller-less dead work; skip it. `related_notes_for_note` (`chunks.rs:261`, the function `/documents/{slug}/related` actually calls at `ai.rs:91`) is a **FLAT** query that computes `min(candidate.embedding <=> origin.embedding) AS distance` with `GROUP BY` — you CANNOT add `WHERE distance <= $x` (no alias in WHERE, and it's an aggregate); you'd need `HAVING min(...) <= $x` or a wrapping subquery. Given this, treat the entire `related_notes` family as **out of scope** and thread the threshold through `search_chunks` only (the `/ask` path the "Why" justifies).
 
 **`src/config.rs`** — already reads many `INKWELL_*` env vars with defaults. Add `INKWELL_MIN_SIMILARITY` here.
 
-**`src/config.rs`** — already reads many `INKWELL_*` env vars with defaults. Add `INKWELL_MIN_SIMILARITY` here.
+**CONFIG-LITERAL FANOUT (build-breaker — read carefully)**: `Config` has NO `..Default::default()` spread, so adding a field forces EVERY full `Config { ... }` literal to add it or the build fails with `E0063 missing field`. There are **6** such literals to update:
+- `src/config.rs:263` and `src/config.rs:291` (in-scope file, but unit-test literals — easy to miss)
+- `src/http/auth.rs:180`
+- `tests/common/mod.rs` (the `test_config` helper)
+- `tests/browser_login.rs:139`
+- `tests/http_caching.rs:31`
+Add `min_similarity: 0.0,` to each. `cargo check --all-targets` will list any you missed.
 
-**Convention**: Config fields added to the `Config` struct in `src/config.rs`; env var name `INKWELL_*`; default chosen to match current behaviour (0.0 = no threshold = current behaviour, or a reasonable starting value like 0.0 that operators can tune).
+**Convention**: Config fields added to the `Config` struct in `src/config.rs`; env var name `INKWELL_*`; default `0.0` matches current behaviour (no filter).
 
 Note: cosine distance from pgvector `<=>` is in range [0, 2]. A similarity of 0.65 corresponds to distance ≤ 0.35. A similarity of 0.0 means distance ≤ 2.0 (no filter). Setting `INKWELL_MIN_SIMILARITY=0` disables the filter (current behaviour preserved by default).
 
@@ -60,15 +66,19 @@ Note: cosine distance from pgvector `<=>` is in range [0, 2]. A similarity of 0.
 ## Scope
 
 **In scope**:
-- `src/config.rs` — add `min_similarity: f32` field (default 0.0); also add it to the test config in `tests/common/mod.rs` (the `Config { … }` literal there must list every field — add `min_similarity: 0.0,`)
-- `src/db/chunks.rs` — add a `max_distance: Option<f32>` parameter to `search_chunks` (primary). OPTIONALLY also `related_notes` + `related_notes_for_note` (secondary; see below)
+- `src/config.rs` — add `min_similarity: f32` field (default 0.0) to the `Config` struct AND to the two test-literal `Config { ... }` blocks at `config.rs:263` and `config.rs:291`
+- `src/http/auth.rs` — add `min_similarity: 0.0,` to the `Config { ... }` literal at ~line 180
+- `tests/common/mod.rs` — add `min_similarity: 0.0,` to the `test_config` `Config { ... }` literal
+- `tests/browser_login.rs` — add `min_similarity: 0.0,` to the `Config { ... }` literal at ~line 139
+- `tests/http_caching.rs` — add `min_similarity: 0.0,` to the `Config { ... }` literal at ~line 31
+- `src/db/chunks.rs` — add a `max_distance: f32` parameter to `search_chunks` only (wrap its flat query in a subquery — Step 2)
 - `src/http/ai.rs` — pass `max_distance` from `state.config.min_similarity` to the `search_chunks` call (`ai.rs:228`)
 
 **Out of scope**:
 - Schema changes — no migration needed
 - Changes to the embedding model or dimension
 - `/search` endpoint — that uses FTS, not vector ANN
-- The `related_notes` family is OPTIONAL. If you add `max_distance` to them, you MUST also update their caller at `src/http/ai.rs:91` (the `/documents/{slug}/related` route). If you do not want to expand scope, leave them and only thread the threshold through `search_chunks` (the `/ask` path the "Why" section justifies). State which you did.
+- **The `related_notes` family** (`related_notes` and `related_notes_for_note`): `related_notes` has no caller; `related_notes_for_note` is a flat `GROUP BY/min()` aggregate where a `WHERE distance <= $x` is invalid SQL. Leave both. Only `search_chunks` gets the threshold.
 
 ## Git workflow
 
@@ -148,7 +158,7 @@ chunks::search_chunks(&state.pool, &embedding, visibility, limit, provider, mode
 
 ## Test plan
 
-No new tests required for the default (`min_similarity=0.0`) — existing `ai_contract.rs` tests cover the path. Optionally add one test verifying that with a very high threshold (e.g., 0.999), `/ask` returns an empty context (the MockEmbedder produces deterministic embeddings, so you can calculate the expected distance).
+No new tests required for the default (`min_similarity=0.0` → `max_distance=2.0` → no filter) — existing `ai_contract.rs` tests cover the path. Do NOT assert "/ask returns empty context at a high threshold": `retrieve_context` (`src/http/ai.rs:212`) falls through to the FTS fallback (`search_documents`, `ai.rs:245`) when vector hits are empty, so `/ask` still returns non-empty context. If you add a test, assert at the `search_chunks` layer (e.g. a very high `min_similarity` yields zero chunks from `search_chunks` directly), not at the `/ask` response.
 
 ## Done criteria
 

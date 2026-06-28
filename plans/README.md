@@ -38,21 +38,21 @@ Removed stale TypeScript-era plan files: 002, 003, 005, 008, 009, 011, and 013.
 | 025 | Track embedding provider provenance | bug/architecture | P2 | L | none | new @fef38ad | DONE |
 | 026 | Harden the RAG prompt boundary | security/AI correctness | P2 | M | 023 | new @fef38ad | DONE |
 | 027 | Media upload UI (deferred design) | direction | P3 | M | none | new @ca174cc | TODO |
-| 028 | Harden security headers (TraceLayer URI, HSTS, img-src colons) | security | P1 | S | none | new @0819727 | TODO |
+| 028 | Harden security headers (TraceLayer URI, HSTS, img-src colons) | security | P1 | S | none | new @0819727 | IN PROGRESS · PR #55 (review ✓, unmerged) |
 | 029 | Remove `style-src 'unsafe-inline'` (nonce inline styles) | security | P2 | M | 028 | new @0819727 | TODO |
 | 030 | Webmention send timeout (investigate-then-fix) | security/reliability | P3 | S | none | new @0819727 | TODO |
-| 031 | spawn_blocking for Markdown render | perf | P1 | S | none | new @0819727 | TODO |
+| 031 | spawn_blocking for Markdown render | perf | P1 | S | none | new @0819727 | IN PROGRESS · PR #54 (review ✓, unmerged) |
 | 032 | DocumentSummary list query (omit body) | perf | P2 | M | none | new @0819727 | TODO |
 | 033 | Vector ANN similarity threshold | perf/AI | P2 | S | none | new @0819727 | TODO |
 | 034 | Bound + concurrentize backfill fan-out | perf | P2 | M | 031 (rec) | new @0819727 | TODO |
-| 035 | Remove dead `syntect` dependency | tech-debt | P3 | S | none | new @0819727 | TODO |
+| 035 | Remove dead `syntect` dependency | tech-debt | P3 | S | none | new @0819727 | IN PROGRESS · PR #56 (review ✓, unmerged) |
 | 036 | Extract `DOCUMENT_COLUMNS` const | tech-debt | P3 | S | none | new @0819727 | TODO |
 | 037 | Move garden.rs raw queries into `src/db/` | tech-debt | P2 | M | none | new @0819727 | TODO |
 | 038 | Dedup `Visibility` SQL predicate | tech-debt | P2 | M | none | new @0819727 | TODO |
 | 039 | Split `api.rs` god module | tech-debt | P3 | L | 036, 037 (rec) | new @0819727 | TODO |
-| 040 | Populate AGENTS.md | dx | P1 | S | none | new @0819727 | TODO |
+| 040 | Populate AGENTS.md | dx | P1 | S | none | new @0819727 | IN PROGRESS · PR #53 (review ✓, unmerged) |
 | 041 | Renovate Cargo grouping | dx | P3 | S | none | new @0819727 | TODO |
-| 042 | Auth/preview/If-Match security tests | tests | P1 | M | none | new @0819727 | TODO |
+| 042 | Auth/preview/If-Match security tests | tests | P1 | M | none | new @0819727 | IN PROGRESS · PR #57 (review ✓, unmerged) |
 | 043 | Validation + backfill contract tests | tests | P2 | M | none | new @0819727 | TODO |
 | 044 | Docs accuracy fixes (revoke route, dead var, missing endpoints) | docs | P2 | M | none | new @0819727 | TODO |
 | 045 | Rate-limit preview-read endpoint | security | P3 | S | none | new @0819727 | TODO |
@@ -340,3 +340,42 @@ This pass produced plans **028–048** (21 plans). Numbering is monotonic; 027
 Verification this pass: read-only `grep`/`git`/file reads; no build run by the
 advisor (and none needed — see the SQLx rejection above). Trust the live code
 over plan excerpts and run each plan's drift check (`@0819727`) first.
+
+### Plan cold-review + revision (2026-06-27)
+
+After authoring 028–048, a 21-agent cold-read panel (one fresh-context reviewer
+per plan, zero audit context) verified every excerpt/symbol/scope against live
+code. 6 plans passed clean; 15 were revised. Notable corrections applied:
+
+- **029** reframed from nonce-threading (7–8 files) to **externalizing the static
+  stylesheet** as `GET /assets/site.css` so the policy is plain `style-src 'self'`
+  (no nonce, no hash, no new dep) — the only inline `<style>` is one static const.
+- **033** `search_chunks` is a FLAT query (cannot `WHERE` on the `distance` alias) →
+  wrap in a subquery; `related_notes_for_note` is a `GROUP BY/min()` aggregate (not
+  subquery) → out of scope; adding a `Config` field breaks 6 `Config {…}` literals → all listed.
+- **032** real file count is 11 (2 test files build `Document` fixtures); `search.rs`'s
+  single call feeds both JSON+HTML branches; the old `grep` done-criterion was a no-op → replaced.
+- **038** `Owner(Uuid)` not `i64`; `chunks.rs` is raw positional-param (no `QueryBuilder`) → out of scope; sites 706/744 made explicitly convertible.
+- **042** 3 of 5 originally-planned tests already exist → narrowed to the 2 real gaps (expired-at-GET, HTTP stale If-Match).
+- **028/030/031/036/037/039/041/043/046/047** — surgical fixes (existing-test update, wrong symbol `fetch_with_ssrf_guard`→`guarded_get/post`, second render site, RETURNING clauses, slug-based `fetch_embed_target`, preview.rs import + `require_scope` home, Renovate rule ordering, `growth` field name, 9 not_found sites, ADR path `docs/adr/0010`).
+
+A second pass re-verified the 7 substantially-rewritten plans; all are now ready
+(029/032/038 received a further round of fixes from it).
+
+### Execution pass 1 (2026-06-28) — Wave 1, via Orca orchestration
+
+Wave 1 dispatched to isolated `codex` worktrees, ship = Build + Review + open PR.
+**PRs opened (PR-only — NOT merged; merge to `main` auto-deploys to Railway prod
+and is held for maintainer review):**
+
+| Plan | PR | Coordinator review |
+|---|---|---|
+| 040 populate AGENTS.md | #53 | ✓ scope+content correct |
+| 031 spawn_blocking render | #54 | ✓ both render sites wrapped, garden.rs only |
+| 028 security headers | #55 | ✓ uri redact + HSTS + img-src colons + tests |
+| 035 remove syntect | #56 | ✓ Cargo.toml+lock+stack.md, no src changes |
+| 042 auth/preview tests | #57 | ✓ 2 tests, tests-only, no duplicates |
+
+Worker local gates = `fmt`/`clippy`/`check` + non-DB tests (fresh worktrees have
+no Postgres); DB-backed contract tests validated by CI's `test-integration` job
+on each PR. Next: maintainer merges Wave 1 (or authorizes auto-land), then Wave 2.

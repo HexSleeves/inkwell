@@ -96,7 +96,7 @@ pub async fn nunito_font() -> Response {
 ## Git workflow
 
 - Branch: `advisor/029-externalize-stylesheet`
-- Commit: `security(http): serve site CSS as /assets/site.css and drop style-src 'unsafe-inline'`
+- Commit: `fix(http): externalize site CSS to /assets/site.css and drop style-src 'unsafe-inline'` (use a valid conventional-commit type — `security(...)` is rejected by the repo's Semantic-PR check)
 
 ## Steps
 
@@ -160,11 +160,11 @@ In `src/http/security_headers.rs`, change `style-src 'self' 'unsafe-inline'` to 
 
 ### Step 6: Update tests
 
-1. `tests/security_headers_contract.rs` — the CSP assertion for `style-src` must change from `'self' 'unsafe-inline'` to `'self'` (no unsafe-inline). Update the expected substring.
+1. `tests/security_headers_contract.rs` — change the `style-src` CSP assertion to `csp.contains("style-src 'self'")` AND add an explicit `assert!(!csp.contains("unsafe-inline"))`. (Just asserting `contains("style-src 'self'")` is NOT enough — it still matches the old `style-src 'self' 'unsafe-inline'`; the negative assertion is what guards the regression.)
 2. `tests/view_layout_contract.rs` — if any test asserts the page contains `<style>`, change it to assert the page contains `<link rel="stylesheet" href="/assets/site.css"` and does NOT contain `<style>`.
-3. Add a small test (in `security_headers_contract.rs` or `view_layout_contract.rs`, whichever has the router fixture) that `GET /assets/site.css` returns 200 with `content-type: text/css; charset=utf-8` and a non-empty body.
+3. Route-registration test — **must exercise the REAL router**, not an ad-hoc one. Note: `tests/security_headers_contract.rs` builds an ad-hoc `Router::new().route(...)` and `tests/view_layout_contract.rs` calls render fns directly — neither registers `/assets/*`, so a path typo in `router.rs` would pass tests there. Instead add the route test to **`tests/http_caching.rs`**, which already has a private `router_with_unreachable_database()` helper that calls the real `build_router` (DB-less). The `site_css` handler needs no DB, so it returns 200 even against an unreachable DB. Assert `GET /assets/site.css` → 200, `content-type: text/css; charset=utf-8`, non-empty body. (Model it on the existing tests in that file.)
 
-**Verify**: `cargo nextest run --test security_headers_contract --test view_layout_contract` → all pass
+**Verify**: `cargo nextest run --test security_headers_contract --test view_layout_contract --test http_caching` → all pass (these three are non-DB / DB-less-router suites)
 
 ## Test plan
 
@@ -180,7 +180,8 @@ In `src/http/security_headers.rs`, change `style-src 'self' 'unsafe-inline'` to 
 - [ ] `cargo nextest run` exits 0
 - [ ] `grep -rn '<style' src/views/` → no matches
 - [ ] `grep -n "unsafe-inline" src/http/security_headers.rs` → no matches
-- [ ] `GET /assets/site.css` route exists and is tested (200, text/css)
+- [ ] CSP test asserts `!csp.contains("unsafe-inline")` (negative guard), not just `contains("style-src 'self'")`
+- [ ] `GET /assets/site.css` is tested through the REAL router (in `tests/http_caching.rs` via `build_router`), returns 200 + `text/css`
 - [ ] `plans/README.md` status row updated
 
 ## STOP conditions

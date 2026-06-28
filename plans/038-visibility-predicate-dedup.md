@@ -87,7 +87,7 @@ The pattern: three separate query paths, each with an inline SQL string. For `Qu
 
 ### Step 1: Add a `push_where` helper to Visibility
 
-`Visibility::Owner` holds a `Uuid` (not `i64`). The helper pushes the visibility predicate onto a `QueryBuilder`, binding the `Uuid` via `push_bind` (which handles positional numbering automatically — no `$N` bookkeeping). In `src/db/links.rs`:
+`Visibility::Owner` holds a `Uuid` (not `i64`). The helper pushes the visibility predicate onto a `QueryBuilder`, binding the `Uuid` via `push_bind` (which handles positional numbering automatically — no `$N` bookkeeping). In `src/db/links.rs`. NOTE: `links.rs` currently imports only `use sqlx::{PgPool, Postgres};` — widen it to `use sqlx::{PgPool, Postgres, QueryBuilder};` for the helper to compile.
 
 ```rust
 impl Visibility {
@@ -115,23 +115,36 @@ Add a `#[cfg(test)]` unit test exercising each arm if a `QueryBuilder` can be ch
 
 ### Step 2: Replace the three-way matches in the documents.rs QueryBuilder queries
 
-In `src/db/documents.rs` only, find the `QueryBuilder` queries whose visibility handling is a three-arm `match` differing only in the WHERE predicate (≈ lines 585, 622, 706, 744). Replace each with a single `QueryBuilder` block using `visibility.push_where(&mut builder)`:
+Convert **all four** `QueryBuilder` sites in `src/db/documents.rs` (≈ lines 585, 622, 706, 744). Two shapes:
+
+**Simple WHERE-fragment sites (≈585 `search_documents`, ≈622 `count_search_documents`)** — the visibility match only varies the WHERE predicate. Replace with:
 ```rust
 let mut builder = QueryBuilder::<Postgres>::new("SELECT ... FROM documents WHERE ");
 visibility.push_where(&mut builder);
 builder.push(" AND ...other conditions...");
-// rest of query
 ```
+Behavior note for the diff reviewer: the `All` arm previously emitted *nothing*; `push_where` now emits `TRUE` (so `... AND TRUE`). Semantically identical — call it out in the PR.
 
-Do NOT touch `chunks.rs` or the raw positional-param sites (see Out of scope) — they are not `QueryBuilder`-based and `push_where` cannot apply. Run `cargo check` after each conversion.
+**Divergent-`All`-arm sites (≈706 `list_documents_vis`, ≈744 `count_documents_vis`)** — these are NOT "non-reducible": the only reason the `All` arm looks different is it early-returns with `WHERE status = ...` while Public/Owner use `AND status = ...`. They ARE convertible. Always push `WHERE `, then `push_where`, then a SINGLE optional status clause as `AND`:
+```rust
+let mut builder = QueryBuilder::<Postgres>::new("SELECT ... FROM documents WHERE ");
+visibility.push_where(&mut builder);                 // emits TRUE for All
+if let Some(status) = extra_status {                 // the former per-arm status handling, unified
+    builder.push(" AND status = ").push_bind(status.as_str());
+}
+builder.push(" ORDER BY ... LIMIT ... OFFSET ...");
+```
+`WHERE TRUE AND status = X` ≡ `WHERE status = X`, so dropping the `All` early-return is safe. Drop the early `return`; keep the shared ORDER/LIMIT/OFFSET tail.
+
+Run `cargo check` after each conversion. Do NOT touch `chunks.rs` or the raw positional-param sites (see Out of scope).
 
 **Verify after each conversion**: `cargo check --all-targets` → exit 0
 
-### Step 3: Leave non-reducible matches as-is
+### Step 3: Confirm the raw positional-param sites are correctly left alone
 
-Some queries may have visibility-dependent SQL that is more than just the WHERE predicate (e.g., different JOIN conditions or entirely different query shapes). Do NOT force these into `push_where` — leave them as three-arm matches and add a comment: `// Visibility variants differ in structure, not just the predicate; intentional match`.
+The OUT-OF-SCOPE raw `sqlx::query_as`/`query_scalar` sites (all of `chunks.rs`; the slug-alias lookup ~`documents.rs:377`; `get_document_by_slug_vis` ~`documents.rs:652`; `resolve_slug_ids`/`resolve_existing_slugs` in `links.rs`) are NOT `QueryBuilder`-based, so `push_where` cannot apply. Leave them unchanged (do not add comments or touch them). This is expected — the goal is to convert the 4 `documents.rs` QueryBuilder sites, not every visibility match in the repo.
 
-**Verify**: You have not changed any query whose correctness depends on the variant-specific SQL structure.
+**Verify**: `git diff --stat` shows changes only in `src/db/links.rs` (helper) and `src/db/documents.rs` (4 sites).
 
 ### Step 4: Run all tests
 
