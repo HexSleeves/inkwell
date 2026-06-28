@@ -36,10 +36,12 @@ use subtle::ConstantTimeEq;
 use time::OffsetDateTime;
 
 use crate::config::Config;
+use crate::db::links::Visibility;
 use crate::db::{sessions, tokens};
 use crate::domain::author::{BOOTSTRAP_ADMIN_ID, Principal, Scope};
 use crate::domain::token;
 use crate::error::AppError;
+use crate::http::AppState;
 use crate::http::auth_session::extract_session_cookie;
 
 /// Resolve the [`Principal`] behind a request, or `None` for an unauthenticated
@@ -115,6 +117,40 @@ pub async fn require_principal(
     authenticate(headers, config, pool)
         .await
         .ok_or(AppError::Unauthorized)
+}
+
+/// Resolve the request's credentials to the correct [`Visibility`] for read
+/// surfaces (ADR 0009, slice 3b):
+///   - No credential / no `read` scope → [`Visibility::Public`]
+///   - Admin (`admin` scope or shared key) → [`Visibility::All`]
+///   - Non-admin with `read` scope + known author id → [`Visibility::Owner(id)`]
+///
+/// This is the SINGLE place read-visibility is derived for every API surface
+/// that exposes note content; callers must NOT re-derive this rule.
+pub(crate) async fn resolve_visibility(headers: &HeaderMap, state: &AppState) -> Visibility {
+    let Some(principal) = authenticate(headers, &state.config, &state.pool).await else {
+        return Visibility::Public;
+    };
+    if principal.has(Scope::Admin) {
+        return Visibility::All;
+    }
+    if principal.has(Scope::Read)
+        && let Some(author_id) = principal.author_id
+    {
+        return Visibility::Owner(author_id);
+    }
+    Visibility::Public
+}
+
+/// Require the principal to hold `scope` (admin implies all). 403 otherwise.
+pub(crate) fn require_scope(principal: &Principal, scope: Scope) -> Result<(), AppError> {
+    if principal.has(scope) {
+        Ok(())
+    } else {
+        Err(AppError::Forbidden(format!(
+            "This action requires the \"{scope}\" scope."
+        )))
+    }
 }
 
 /// Extract the single ASCII `x-api-key` header value. Returns `None` when the

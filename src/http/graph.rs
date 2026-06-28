@@ -1,0 +1,191 @@
+use axum::Json;
+use axum::extract::{Path, State};
+use axum::http::{HeaderMap, Method, StatusCode};
+use axum::response::{IntoResponse, Response};
+use serde::Serialize;
+
+use crate::db::documents;
+use crate::db::links::{self, Backlink, Graph, GraphEdge, GraphNode};
+use crate::error::AppError;
+use crate::http::AppState;
+use crate::http::auth::resolve_visibility;
+use crate::http::documents::document_not_found;
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BacklinkEnvelope {
+    slug: String,
+    title: String,
+    snippet: Option<String>,
+}
+
+impl From<Backlink> for BacklinkEnvelope {
+    fn from(value: Backlink) -> Self {
+        Self {
+            slug: value.source_slug,
+            title: value.source_title,
+            snippet: value.context_snippet,
+        }
+    }
+}
+
+/// A verified inbound Webmention surfaced alongside backlinks.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MentionEnvelope {
+    source_url: String,
+}
+
+impl From<crate::db::webmentions::Mention> for MentionEnvelope {
+    fn from(value: crate::db::webmentions::Mention) -> Self {
+        Self {
+            source_url: value.source_url,
+        }
+    }
+}
+
+/// The "linked from" surface as JSON: internal backlinks plus verified external
+/// Webmentions, both visibility-filtered identically (never a draft-targeting
+/// mention to the public).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BacklinksResponse {
+    backlinks: Vec<BacklinkEnvelope>,
+    mentions: Vec<MentionEnvelope>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GraphNodeEnvelope {
+    slug: String,
+    title: String,
+}
+
+impl From<GraphNode> for GraphNodeEnvelope {
+    fn from(value: GraphNode) -> Self {
+        Self {
+            slug: value.slug,
+            title: value.title,
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GraphEdgeEnvelope {
+    source_slug: String,
+    target_slug: String,
+}
+
+impl From<GraphEdge> for GraphEdgeEnvelope {
+    fn from(value: GraphEdge) -> Self {
+        Self {
+            source_slug: value.source_slug,
+            target_slug: value.target_slug,
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GraphEnvelope {
+    nodes: Vec<GraphNodeEnvelope>,
+    edges: Vec<GraphEdgeEnvelope>,
+}
+
+impl From<Graph> for GraphEnvelope {
+    fn from(value: Graph) -> Self {
+        Self {
+            nodes: value
+                .nodes
+                .into_iter()
+                .map(GraphNodeEnvelope::from)
+                .collect(),
+            edges: value
+                .edges
+                .into_iter()
+                .map(GraphEdgeEnvelope::from)
+                .collect(),
+        }
+    }
+}
+
+/// `GET /documents/{slug}/backlinks` — the "linked from" set as JSON: internal
+/// backlinks plus verified inbound Webmentions.
+///
+/// The target is resolved under the caller's visibility (authenticated ⇒ all
+/// statuses, else published-only), mirroring document reads: a target the caller
+/// cannot see 404s rather than leaking its existence. Both backlinks and
+/// mentions are fetched at the SAME visibility, so a public caller never sees a
+/// draft source nor a mention targeting a draft (the no-draft-leak invariant,
+/// enforced by the centralized visibility predicate). GET only; 405 else.
+pub async fn document_backlinks(
+    State(state): State<AppState>,
+    Path(slug): Path<String>,
+    method: Method,
+    headers: HeaderMap,
+) -> Result<Response, AppError> {
+    if method != Method::GET {
+        return Err(AppError::MethodNotAllowed(vec!["GET"]));
+    }
+    let visibility = resolve_visibility(&headers, &state).await;
+    let Some(document) =
+        documents::get_document_by_slug_vis(&state.pool, &slug, visibility).await?
+    else {
+        return Err(document_not_found(&slug));
+    };
+    let backlinks = links::backlinks(&state.pool, document.id, visibility).await?;
+    let mentions =
+        crate::db::webmentions::verified_mentions(&state.pool, document.id, visibility).await?;
+    let response = BacklinksResponse {
+        backlinks: backlinks.into_iter().map(BacklinkEnvelope::from).collect(),
+        mentions: mentions.into_iter().map(MentionEnvelope::from).collect(),
+    };
+    Ok((StatusCode::OK, Json(response)).into_response())
+}
+
+/// `GET /graph` — the whole garden's bounded link graph as JSON.
+///
+/// Visibility follows the same rule as document reads: an authenticated caller
+/// sees every note (`All`), an anonymous one only published notes (`Public`).
+/// The query itself enforces the no-draft-leak invariant — a public graph never
+/// returns a draft node nor an edge touching one — and is hard bounded by the
+/// node/edge caps in [`links`]. GET only; any other method 405s.
+pub async fn graph(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+) -> Result<Response, AppError> {
+    if method != Method::GET {
+        return Err(AppError::MethodNotAllowed(vec!["GET"]));
+    }
+    let visibility = resolve_visibility(&headers, &state).await;
+    let graph = links::garden_graph(&state.pool, visibility).await?;
+    Ok((StatusCode::OK, Json(GraphEnvelope::from(graph))).into_response())
+}
+
+/// `GET /documents/{slug}/graph` — the one-hop neighborhood graph around a note.
+///
+/// Same visibility rule as [`graph`]/document reads: a note the caller cannot
+/// see 404s rather than leaking its existence, and the neighborhood is fetched
+/// at the SAME visibility so a public caller never sees a draft neighbor or an
+/// edge touching one. Bounded and depth-capped in [`links`]. GET only.
+pub async fn document_graph(
+    State(state): State<AppState>,
+    Path(slug): Path<String>,
+    method: Method,
+    headers: HeaderMap,
+) -> Result<Response, AppError> {
+    if method != Method::GET {
+        return Err(AppError::MethodNotAllowed(vec!["GET"]));
+    }
+    let visibility = resolve_visibility(&headers, &state).await;
+    if documents::get_document_by_slug_vis(&state.pool, &slug, visibility)
+        .await?
+        .is_none()
+    {
+        return Err(document_not_found(&slug));
+    }
+    let graph = links::note_neighborhood(&state.pool, &slug, visibility).await?;
+    Ok((StatusCode::OK, Json(GraphEnvelope::from(graph))).into_response())
+}
