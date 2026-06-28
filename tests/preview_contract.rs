@@ -348,6 +348,46 @@ async fn preview_token_with_future_expiry_works() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn preview_token_expired_after_mint_returns_401() -> anyhow::Result<()> {
+    let _guard = db_guard().await;
+    let Some(pool) = common::maybe_pool().await? else {
+        return Ok(());
+    };
+    let router = common::router_for(pool.clone());
+    create_draft(&router, "exp-after").await?;
+    let (token, prefix) = mint_preview_token(&router, "exp-after").await?;
+
+    let before = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!("/documents/exp-after/preview?token={token}"))
+                .body(Body::empty())?,
+        )
+        .await?;
+    assert_eq!(before.status(), StatusCode::OK);
+
+    sqlx::query(
+        "UPDATE preview_tokens SET expires_at = now() - interval '1 hour' WHERE prefix = $1",
+    )
+    .bind(&prefix)
+    .execute(&pool)
+    .await?;
+
+    let after = router
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!("/documents/exp-after/preview?token={token}"))
+                .body(Body::empty())?,
+        )
+        .await?;
+    assert_eq!(after.status(), StatusCode::UNAUTHORIZED);
+    Ok(())
+}
+
 // --------------------------------------------------------------------------
 // List tokens
 // --------------------------------------------------------------------------
