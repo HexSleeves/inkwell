@@ -4,5 +4,6 @@ pub mod editor;
 pub mod index;
 pub mod layout;
 pub mod login;
+pub mod media;
 pub mod search;
 pub mod tags;

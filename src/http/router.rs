@@ -125,6 +125,7 @@ pub fn build_router_with_providers(
     if browser_login {
         router = router
             .route("/login", get(auth_session::login_page))
+            .route("/media/new", get(media::media_new_page))
             .route("/auth/login", any(auth_session::login))
             .route("/auth/logout", any(auth_session::logout))
             // Authoring web UI (CYP-42). Static segments, so matchit prefers the
