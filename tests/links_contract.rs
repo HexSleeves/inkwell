@@ -345,7 +345,7 @@ async fn backfill_lights_up_stub_when_target_appears() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn create_document_fans_out_backfill_to_existing_stub_sources() -> anyhow::Result<()> {
+async fn publishing_target_fans_out_backfill_to_inbound_stubs() -> anyhow::Result<()> {
     let _guard = db_guard().await;
     let Some(pool) = common::maybe_pool().await? else {
         return Ok(());
@@ -370,6 +370,8 @@ async fn create_document_fans_out_backfill_to_existing_stub_sources() -> anyhow:
         "source starts with an unresolved stub"
     );
 
+    // Create the target as a DRAFT. Wikilinks resolve at PUBLIC visibility, so a
+    // draft target must NOT light up the stub yet.
     let response = post_document(
         router.clone(),
         json!({
@@ -381,11 +383,32 @@ async fn create_document_fans_out_backfill_to_existing_stub_sources() -> anyhow:
     .await?;
     assert_eq!(response.status(), StatusCode::CREATED);
 
+    let source = get_document(router.clone(), "source-fanout").await?;
+    let html_draft = source["renderedHtml"].as_str().unwrap();
+    assert!(
+        html_draft.contains("class=\"stub\""),
+        "a draft target leaves the inbound link a stub (public resolution)"
+    );
+
+    // Publish the target → the publish route's backfill fan-out re-renders the
+    // inbound source so its stub becomes a resolved link.
+    let publish = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/documents/future-note/publish")
+                .header("x-api-key", SHARED_KEY)
+                .body(Body::empty())?,
+        )
+        .await?;
+    assert_eq!(publish.status(), StatusCode::OK);
+
     let source = get_document(router, "source-fanout").await?;
     let html_after = source["renderedHtml"].as_str().unwrap();
     assert!(
         html_after.contains("href=\"/future-note\"") && !html_after.contains("class=\"stub\""),
-        "creating the target re-renders inbound stubs as resolved links"
+        "publishing the target re-renders inbound stubs as resolved links"
     );
 
     Ok(())
