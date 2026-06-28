@@ -108,6 +108,25 @@ impl Document {
     }
 }
 
+#[derive(Clone, Debug, Serialize, sqlx::FromRow)]
+#[serde(rename_all = "camelCase")]
+pub struct DocumentSummary {
+    pub id: Uuid,
+    pub slug: String,
+    pub title: String,
+    /// Raw markdown prefix selected with `LEFT(body_markdown, 320)`.
+    /// List renderers feed this through `derive_excerpt` so markdown stripping
+    /// stays identical to the full-document path.
+    pub body_excerpt_source: String,
+    pub tags: Vec<String>,
+    pub growth: GrowthStage,
+    pub status: DocumentStatus,
+    #[serde(with = "timestamp")]
+    pub created_at: OffsetDateTime,
+    #[serde(with = "timestamp")]
+    pub updated_at: OffsetDateTime,
+}
+
 #[derive(Clone, Debug)]
 pub struct NewDocument {
     pub slug: String,

@@ -76,7 +76,7 @@ pub async fn search(
     let docs = if trimmed.is_empty() {
         Vec::new()
     } else {
-        match documents::search_documents(
+        match documents::search_documents_summary(
             &state.pool,
             &trimmed,
             visibility,
@@ -103,7 +103,7 @@ pub async fn search(
                 .map(|doc| SearchResult {
                     slug: doc.slug.clone(),
                     title: doc.title.clone(),
-                    excerpt: derive_excerpt(doc.body_markdown(), 160),
+                    excerpt: derive_excerpt(&doc.body_excerpt_source, 160),
                     tags: doc.tags.clone(),
                     created_at: doc.created_at,
                     updated_at: doc.updated_at,

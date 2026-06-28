@@ -1,5 +1,5 @@
 use crate::config::Config;
-use crate::domain::document::Document;
+use crate::domain::document::DocumentSummary;
 use serde_json::json;
 
 /// Fallback brand name used when `INKWELL_SITE_TITLE` is not set.
@@ -484,11 +484,11 @@ pub fn truncate_on_char_boundary(text: &str, max_length: usize) -> &str {
 
 /// Render the shared `<ul class="index">` document list used by the index,
 /// tag, and search views. Callers gate the empty state themselves.
-pub(crate) fn render_document_list(documents: &[Document]) -> String {
+pub(crate) fn render_document_list(documents: &[DocumentSummary]) -> String {
     let items = documents
         .iter()
         .map(|doc| {
-            let excerpt = derive_excerpt(doc.body_markdown(), 160);
+            let excerpt = derive_excerpt(&doc.body_excerpt_source, 160);
             let excerpt_html = if excerpt.is_empty() {
                 String::new()
             } else {

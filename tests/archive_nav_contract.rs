@@ -1,6 +1,8 @@
 mod common;
 
-use inkwell::domain::document::{AdjacentDoc, ArchiveMonth, Document, DocumentStatus, GrowthStage};
+use inkwell::domain::document::{
+    AdjacentDoc, ArchiveMonth, Document, DocumentStatus, DocumentSummary, GrowthStage,
+};
 use inkwell::views::archive::{render_archive_index_page, render_archive_month_page};
 use inkwell::views::document::render_document_page;
 use inkwell::views::layout::SiteMeta;
@@ -27,6 +29,21 @@ fn doc(slug: &str, title: &str) -> Document {
         growth: GrowthStage::Seedling,
         tags: vec![],
         version: 1,
+        created_at: now,
+        updated_at: now,
+    }
+}
+
+fn doc_summary(slug: &str, title: &str) -> DocumentSummary {
+    let now = time::OffsetDateTime::now_utc();
+    DocumentSummary {
+        id: uuid::Uuid::nil(),
+        slug: slug.to_string(),
+        title: title.to_string(),
+        body_excerpt_source: "Body text.".to_string(),
+        tags: vec![],
+        growth: GrowthStage::Seedling,
+        status: DocumentStatus::Published,
         created_at: now,
         updated_at: now,
     }
@@ -133,7 +150,7 @@ fn archive_month_page_route_has_canonical_meta_tag() {
 
 #[test]
 fn archive_month_page_2_has_page_canonical() {
-    let html = render_archive_month_page(2026, 6, &[doc("a", "A")], 2, 3, &site());
+    let html = render_archive_month_page(2026, 6, &[doc_summary("a", "A")], 2, 3, &site());
     assert!(
         html.contains(r#"rel="canonical" href="https://example.com/archive/2026/06/page/2""#),
         "page 2 canonical must include /page/2"
@@ -151,7 +168,7 @@ fn archive_month_page_has_back_to_archive_link() {
 
 #[test]
 fn archive_month_page_pagination_prev_page_1_links_to_base_url() {
-    let html = render_archive_month_page(2026, 3, &[doc("a", "A")], 2, 3, &site());
+    let html = render_archive_month_page(2026, 3, &[doc_summary("a", "A")], 2, 3, &site());
     assert!(
         html.contains(r#"href="/archive/2026/03""#),
         "prev from page 2 must link to base month URL, not /page/1"
@@ -160,7 +177,7 @@ fn archive_month_page_pagination_prev_page_1_links_to_base_url() {
 
 #[test]
 fn archive_month_page_pagination_next_link_present() {
-    let html = render_archive_month_page(2026, 3, &[doc("a", "A")], 1, 2, &site());
+    let html = render_archive_month_page(2026, 3, &[doc_summary("a", "A")], 1, 2, &site());
     assert!(
         html.contains(r#"href="/archive/2026/03/page/2""#),
         "next link must appear when more pages exist"
@@ -184,7 +201,7 @@ fn archive_month_page_empty_state_renders_gracefully() {
 
 #[test]
 fn archive_month_page_uses_zero_padded_month_in_pager_links() {
-    let docs = vec![doc("a", "A")];
+    let docs = vec![doc_summary("a", "A")];
     let html = render_archive_month_page(2026, 3, &docs, 1, 2, &site());
     assert!(
         html.contains("/archive/2026/03/page/2"),

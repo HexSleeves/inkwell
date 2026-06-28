@@ -1,10 +1,10 @@
-use crate::domain::document::Document;
+use crate::domain::document::DocumentSummary;
 
 use super::layout::{HeadMeta, SiteMeta, escape_html, render_document_list, render_page};
 
 pub fn render_search_page(
     query: &str,
-    documents: &[Document],
+    documents: &[DocumentSummary],
     page: i64,
     total_pages: i64,
     site: &SiteMeta<'_>,
