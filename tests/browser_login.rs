@@ -213,9 +213,12 @@ async fn flag_off_logout_is_404() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// With the flag off, /media/new is 404 (the page is not exposed).
+/// With the flag off, the `/media/new` page route is not registered, so the
+/// request falls through to the dynamic `/media/{id}` serve route, whose
+/// `Path<Uuid>` extractor rejects "new" with 400 (not 404). Either way the
+/// upload page is absent when the flag is off.
 #[tokio::test]
-async fn flag_off_media_new_is_404() -> anyhow::Result<()> {
+async fn flag_off_media_new_is_400() -> anyhow::Result<()> {
     let _guard = db_guard().await;
     let Some(router) = common::maybe_router().await? else {
         return Ok(());
@@ -231,8 +234,8 @@ async fn flag_off_media_new_is_404() -> anyhow::Result<()> {
         .await?;
     assert_eq!(
         response.status(),
-        StatusCode::NOT_FOUND,
-        "media upload page must not exist when flag is off"
+        StatusCode::BAD_REQUEST,
+        "media upload page route is absent when flag is off; /media/new hits /media/{{id}} Uuid extractor -> 400"
     );
     Ok(())
 }

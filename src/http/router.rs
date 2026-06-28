@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use axum::Router;
-use axum::http::StatusCode;
 use axum::middleware;
 use axum::routing::{any, get};
 use tower_http::compression::CompressionLayer;
@@ -136,8 +135,6 @@ pub fn build_router_with_providers(
             .route("/editor", get(editor::editor_list_page))
             .route("/editor/new", get(editor::editor_new_page))
             .route("/editor/{slug}", get(editor::editor_edit_page));
-    } else {
-        router = router.route("/media/new", get(|| async { StatusCode::NOT_FOUND }));
     }
 
     router
