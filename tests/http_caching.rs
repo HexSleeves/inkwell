@@ -136,6 +136,26 @@ async fn write_api_responses_do_not_emit_cache_headers() -> Result<()> {
 }
 
 #[tokio::test]
+async fn site_css_asset_is_served_by_the_real_router_without_database() -> Result<()> {
+    let router = router_with_unreachable_database()?;
+
+    let response = send(&router, Method::GET, "/assets/site.css", Body::empty(), &[]).await?;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers().get(header::CONTENT_TYPE).unwrap(),
+        "text/css; charset=utf-8"
+    );
+    assert_eq!(
+        response.headers().get(header::CACHE_CONTROL).unwrap(),
+        "public, max-age=3600"
+    );
+    assert!(!to_bytes(response.into_body(), usize::MAX).await?.is_empty());
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn public_read_routes_return_500_when_database_queries_fail() -> Result<()> {
     let router = router_with_unreachable_database()?;
 

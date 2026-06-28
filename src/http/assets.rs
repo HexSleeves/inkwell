@@ -1,4 +1,4 @@
-//! Static font assets, embedded in the binary and served same-origin.
+//! Static site assets, embedded in the binary and served same-origin.
 //!
 //! The "Botanical Soft" theme uses Nunito, a rounded geometric sans. Chromium
 //! ignores the `ui-rounded` generic family (it is Safari-only), so a real web
@@ -27,6 +27,20 @@ pub async fn nunito_font() -> Response {
             (header::CACHE_CONTROL, "public, max-age=31536000, immutable"),
         ],
         NUNITO_WOFF2,
+    )
+        .into_response()
+}
+
+/// `GET /assets/site.css` — serve the site stylesheet same-origin so pages need
+/// no inline `<style>` and CSP can keep `style-src` locked to `'self'`.
+pub async fn site_css() -> Response {
+    (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, "text/css; charset=utf-8"),
+            (header::CACHE_CONTROL, "public, max-age=3600"),
+        ],
+        crate::views::layout::STYLES,
     )
         .into_response()
 }

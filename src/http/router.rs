@@ -92,6 +92,7 @@ pub fn build_router_with_providers(
             get(sitemap::sitemap_documents_page),
         )
         .route("/sitemaps/tags/{page}", get(sitemap::sitemap_tags_page))
+        .route("/assets/site.css", get(assets::site_css))
         .route("/assets/fonts/nunito.woff2", get(assets::nunito_font))
         .route("/search", get(search::search))
         .route("/tags", get(pages::tags_index))

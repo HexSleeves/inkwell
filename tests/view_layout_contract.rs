@@ -83,6 +83,8 @@ fn render_page_emits_valid_html_attributes() {
     assert!(html.contains(r#"<div class="botanical-band" aria-hidden="true">"#));
     assert!(html.contains(r#"<main class="site-main">"#));
     assert!(html.contains(r#"<footer class="site-footer">Published with Inkwell.</footer>"#));
+    assert!(html.contains(r#"<link rel="stylesheet" href="/assets/site.css" />"#));
+    assert!(!html.contains("<style>"));
     assert!(!html.contains(r#"\""#));
 }
 

@@ -55,7 +55,7 @@ pub async fn apply_security_headers(mut request: Request, next: Next) -> Respons
 
     if is_html {
         let policy = format!(
-            "default-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; img-src 'self' http: https:; style-src 'self' 'unsafe-inline'; script-src 'self' 'nonce-{}'",
+            "default-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; img-src 'self' http: https:; style-src 'self'; script-src 'self' 'nonce-{}'",
             nonce.as_str()
         );
         if let Ok(value) = HeaderValue::from_str(&policy) {

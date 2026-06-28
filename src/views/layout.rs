@@ -98,7 +98,7 @@ fn json_for_script(value: serde_json::Value) -> String {
         .replace('&', r#"\u0026"#)
 }
 
-const STYLES: &str = r#"
+pub(crate) const STYLES: &str = r#"
   /* Theme: "Botanical Soft" — friendly, organic, rounded. Forest-green
      headings, warm-clay links, sage tag pills, soft rounded backlink cards.
      Font note: prefers Nunito/Quicksand if installed, else falls back to the
@@ -413,7 +413,7 @@ pub fn render_page(site: &SiteMeta<'_>, meta: HeadMeta<'_>, main: &str) -> Strin
   <head>
     {}
     <link rel="preload" href="/assets/fonts/nunito.woff2" as="font" type="font/woff2" crossorigin />
-    <style>{}</style>{}
+    <link rel="stylesheet" href="/assets/site.css" />{}
   </head>
   <body class="site-body">
     <div class="site-shell">
@@ -433,7 +433,6 @@ pub fn render_page(site: &SiteMeta<'_>, meta: HeadMeta<'_>, main: &str) -> Strin
 </html>
 "#,
         tags.join("\n    "),
-        STYLES,
         extra_css,
         LEAF_ICON,
         escape_html(site.name),

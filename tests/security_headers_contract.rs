@@ -53,7 +53,8 @@ async fn html_responses_include_csp_and_hardening_headers() -> anyhow::Result<()
     assert!(csp.contains("base-uri 'self'"));
     assert!(csp.contains("frame-ancestors 'none'"));
     assert!(csp.contains("img-src 'self' http: https:"));
-    assert!(csp.contains("style-src 'self' 'unsafe-inline'"));
+    assert!(csp.contains("style-src 'self'"));
+    assert!(!csp.contains("unsafe-inline"));
     assert!(csp.contains("script-src 'self' 'nonce-"));
     assert!(!csp.contains(&browser_runtime_src));
     assert!(!csp.contains(&runtime_config_marker));
