@@ -6,6 +6,7 @@ use crate::domain::document::{
 use sqlx::{PgPool, Postgres, QueryBuilder};
 use uuid::Uuid;
 
+const DOCUMENT_COLUMNS: &str = "id, slug, title, body_markdown, rendered_html, status, growth, tags, version, created_at, updated_at";
 const UNIQUE_VIOLATION: &str = "23505";
 
 #[derive(Debug, thiserror::Error)]
@@ -18,7 +19,8 @@ pub enum DbError {
 
 pub async fn create_document(pool: &PgPool, input: NewDocument) -> Result<Document, DbError> {
     let result = sqlx::query_as::<Postgres, Document>(
-        r#"
+        &format!(
+            r#"
         INSERT INTO documents (slug, title, body_markdown, rendered_html, status, growth, tags, owner_id)
         VALUES (
             $1, $2, $3, $4, COALESCE($5, 'draft'), COALESCE($6, 'seedling'), $7,
@@ -26,8 +28,9 @@ pub async fn create_document(pool: &PgPool, input: NewDocument) -> Result<Docume
             -- principal id is supplied, matching the column default (ADR 0009).
             COALESCE($8, '00000000-0000-0000-0000-000000000001'::uuid)
         )
-        RETURNING id, slug, title, body_markdown, rendered_html, status, growth, tags, version, created_at, updated_at
-        "#,
+        RETURNING {DOCUMENT_COLUMNS}
+        "#
+        ),
     )
     .bind(&input.slug)
     .bind(&input.title)
@@ -50,26 +53,26 @@ pub async fn get_document_by_slug(
 ) -> Result<Option<Document>, sqlx::Error> {
     match filter.status {
         Some(status) => {
-            sqlx::query_as::<Postgres, Document>(
+            sqlx::query_as::<Postgres, Document>(&format!(
                 r#"
-                SELECT id, slug, title, body_markdown, rendered_html, status, growth, tags, version, created_at, updated_at
+                SELECT {DOCUMENT_COLUMNS}
                 FROM documents
                 WHERE slug = $1 AND status = $2
-                "#,
-            )
+                "#
+            ))
             .bind(slug)
             .bind(status.as_str())
             .fetch_optional(pool)
             .await
         }
         None => {
-            sqlx::query_as::<Postgres, Document>(
+            sqlx::query_as::<Postgres, Document>(&format!(
                 r#"
-                SELECT id, slug, title, body_markdown, rendered_html, status, growth, tags, version, created_at, updated_at
+                SELECT {DOCUMENT_COLUMNS}
                 FROM documents
                 WHERE slug = $1
-                "#,
-            )
+                "#
+            ))
             .bind(slug)
             .fetch_optional(pool)
             .await
@@ -81,9 +84,8 @@ pub async fn list_documents(
     pool: &PgPool,
     options: ListOptions,
 ) -> Result<Vec<Document>, sqlx::Error> {
-    let mut builder = QueryBuilder::<Postgres>::new(
-        "SELECT id, slug, title, body_markdown, rendered_html, status, growth, tags, version, created_at, updated_at FROM documents",
-    );
+    let mut builder =
+        QueryBuilder::<Postgres>::new(format!("SELECT {DOCUMENT_COLUMNS} FROM documents"));
     if let Some(status) = options.status {
         builder.push(" WHERE status = ").push_bind(status.as_str());
     }
@@ -138,7 +140,7 @@ pub async fn update_document_by_slug(
         };
     }
 
-    let result = sqlx::query_as::<Postgres, Document>(
+    let result = sqlx::query_as::<Postgres, Document>(&format!(
         r#"
         UPDATE documents
         SET title = COALESCE($2, title),
@@ -149,9 +151,9 @@ pub async fn update_document_by_slug(
             version = version + 1,
             updated_at = now()
         WHERE slug = $1 AND ($7::uuid IS NULL OR owner_id = $7)
-        RETURNING id, slug, title, body_markdown, rendered_html, status, growth, tags, version, created_at, updated_at
-        "#,
-    )
+        RETURNING {DOCUMENT_COLUMNS}
+        "#
+    ))
     .bind(slug)
     .bind(&patch.title)
     .bind(&patch.body_markdown)
@@ -203,7 +205,7 @@ pub async fn update_document_by_slug_if_version(
             .await;
     }
 
-    let result = sqlx::query_as::<Postgres, Document>(
+    let result = sqlx::query_as::<Postgres, Document>(&format!(
         r#"
         UPDATE documents
         SET title = COALESCE($3, title),
@@ -214,9 +216,9 @@ pub async fn update_document_by_slug_if_version(
             version = version + 1,
             updated_at = now()
         WHERE slug = $1 AND version = $2 AND ($8::uuid IS NULL OR owner_id = $8)
-        RETURNING id, slug, title, body_markdown, rendered_html, status, growth, tags, version, created_at, updated_at
-        "#,
-    )
+        RETURNING {DOCUMENT_COLUMNS}
+        "#
+    ))
     .bind(slug)
     .bind(expected_version)
     .bind(&patch.title)
@@ -317,7 +319,7 @@ async fn rename_and_update(
         .execute(&mut *tx)
         .await?;
 
-    let updated = sqlx::query_as::<Postgres, Document>(
+    let updated = sqlx::query_as::<Postgres, Document>(&format!(
         r#"
         UPDATE documents
         SET slug = $2,
@@ -329,9 +331,9 @@ async fn rename_and_update(
             version = version + 1,
             updated_at = now()
         WHERE id = $1
-        RETURNING id, slug, title, body_markdown, rendered_html, status, growth, tags, version, created_at, updated_at
-        "#,
-    )
+        RETURNING {DOCUMENT_COLUMNS}
+        "#
+    ))
     .bind(id)
     .bind(new_slug)
     .bind(&patch.title)
@@ -407,14 +409,14 @@ pub async fn set_document_status(
     status: DocumentStatus,
     owner: Option<Uuid>,
 ) -> Result<Option<Document>, sqlx::Error> {
-    sqlx::query_as::<Postgres, Document>(
+    sqlx::query_as::<Postgres, Document>(&format!(
         r#"
         UPDATE documents
         SET status = $2, version = version + 1, updated_at = now()
         WHERE slug = $1 AND ($3::uuid IS NULL OR owner_id = $3)
-        RETURNING id, slug, title, body_markdown, rendered_html, status, growth, tags, version, created_at, updated_at
-        "#,
-    )
+        RETURNING {DOCUMENT_COLUMNS}
+        "#
+    ))
     .bind(slug)
     .bind(status.as_str())
     .bind(owner)
@@ -462,9 +464,8 @@ pub async fn list_documents_by_tag(
     tag: &str,
     options: ListByTagOptions,
 ) -> Result<Vec<Document>, sqlx::Error> {
-    let mut builder = QueryBuilder::<Postgres>::new(
-        "SELECT id, slug, title, body_markdown, rendered_html, status, growth, tags, version, created_at, updated_at FROM documents WHERE ",
-    );
+    let mut builder =
+        QueryBuilder::<Postgres>::new(format!("SELECT {DOCUMENT_COLUMNS} FROM documents WHERE "));
     builder.push_bind(tag).push(" = ANY(tags)");
     if let Some(status) = options.status {
         builder.push(" AND status = ").push_bind(status.as_str());
@@ -575,11 +576,11 @@ pub async fn search_documents(
     visibility: Visibility,
     options: SearchOptions,
 ) -> Result<Vec<Document>, sqlx::Error> {
-    let mut builder = QueryBuilder::<Postgres>::new(
-        "SELECT id, slug, title, body_markdown, rendered_html, status, growth, tags, version, created_at, updated_at
+    let mut builder = QueryBuilder::<Postgres>::new(format!(
+        "SELECT {DOCUMENT_COLUMNS}
          FROM documents
          WHERE search_vector @@ websearch_to_tsquery('english', ",
-    );
+    ));
     builder.push_bind(query).push(")");
     match visibility {
         Visibility::Public => {
@@ -650,33 +651,30 @@ pub async fn get_document_by_slug_vis(
 ) -> Result<Option<Document>, sqlx::Error> {
     match visibility {
         Visibility::Public => {
-            sqlx::query_as::<Postgres, Document>(
-                r#"SELECT id, slug, title, body_markdown, rendered_html, status, growth, tags,
-                          version, created_at, updated_at
+            sqlx::query_as::<Postgres, Document>(&format!(
+                r#"SELECT {DOCUMENT_COLUMNS}
                    FROM documents WHERE slug = $1 AND status = 'published'"#,
-            )
+            ))
             .bind(slug)
             .fetch_optional(pool)
             .await
         }
         Visibility::Owner(owner_id) => {
-            sqlx::query_as::<Postgres, Document>(
-                r#"SELECT id, slug, title, body_markdown, rendered_html, status, growth, tags,
-                          version, created_at, updated_at
+            sqlx::query_as::<Postgres, Document>(&format!(
+                r#"SELECT {DOCUMENT_COLUMNS}
                    FROM documents
                    WHERE slug = $1 AND (status = 'published' OR owner_id = $2)"#,
-            )
+            ))
             .bind(slug)
             .bind(owner_id)
             .fetch_optional(pool)
             .await
         }
         Visibility::All => {
-            sqlx::query_as::<Postgres, Document>(
-                r#"SELECT id, slug, title, body_markdown, rendered_html, status, growth, tags,
-                          version, created_at, updated_at
+            sqlx::query_as::<Postgres, Document>(&format!(
+                r#"SELECT {DOCUMENT_COLUMNS}
                    FROM documents WHERE slug = $1"#,
-            )
+            ))
             .bind(slug)
             .fetch_optional(pool)
             .await
@@ -697,10 +695,8 @@ pub async fn list_documents_vis(
     limit: u32,
     offset: u32,
 ) -> Result<Vec<Document>, sqlx::Error> {
-    let mut builder = QueryBuilder::<Postgres>::new(
-        "SELECT id, slug, title, body_markdown, rendered_html, status, growth, tags, \
-         version, created_at, updated_at FROM documents",
-    );
+    let mut builder =
+        QueryBuilder::<Postgres>::new(format!("SELECT {DOCUMENT_COLUMNS} FROM documents"));
     // Apply visibility base predicate.
     match visibility {
         Visibility::Public => {
@@ -851,18 +847,17 @@ pub async fn list_documents_by_month(
     limit: u32,
     offset: u32,
 ) -> Result<Vec<Document>, sqlx::Error> {
-    sqlx::query_as::<Postgres, Document>(
+    sqlx::query_as::<Postgres, Document>(&format!(
         r#"
-        SELECT id, slug, title, body_markdown, rendered_html, status, growth, tags,
-               version, created_at, updated_at
+        SELECT {DOCUMENT_COLUMNS}
         FROM documents
         WHERE status = 'published'
           AND EXTRACT(YEAR  FROM created_at AT TIME ZONE 'UTC')::int = $1
           AND EXTRACT(MONTH FROM created_at AT TIME ZONE 'UTC')::int = $2
         ORDER BY created_at DESC, id DESC
         LIMIT $3 OFFSET $4
-        "#,
-    )
+        "#
+    ))
     .bind(year)
     .bind(month)
     .bind(limit as i64)
