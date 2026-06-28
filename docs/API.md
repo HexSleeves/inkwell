@@ -28,6 +28,8 @@ read the source code or tests to integrate.
   - [Media](#media)
   - [Admin — token management](#admin-token-management)
   - [Feed and sitemaps](#feed-and-sitemaps)
+- [Federation](#federation)
+  - [Webmention](#webmention)
 - [Public HTML routes](#public-html-routes)
   - [Archive navigation](#archive-navigation)
 
@@ -934,6 +936,41 @@ These endpoints are public (no auth) and return XML.
 | `GET /sitemap-static.xml` | Sitemap for static pages |
 | `GET /sitemaps/documents/{page}` | Paginated document sitemap |
 | `GET /sitemaps/tags/{page}` | Paginated tag sitemap |
+
+---
+
+## Federation
+
+### Webmention
+
+#### `POST /webmention`
+
+Receive a Webmention for a published note on this site. The request must be
+`application/x-www-form-urlencoded` with `source` and `target` fields.
+
+| Field | Required | Notes |
+|-------|----------|-------|
+| `source` | Yes | Public `http` or `https` URL of the page linking to this site |
+| `target` | Yes | Public `http` or `https` URL on this site; must resolve to a published note |
+
+**Request:**
+
+```http
+POST /webmention HTTP/1.1
+Content-Type: application/x-www-form-urlencoded
+
+source=https%3A%2F%2Fexample.net%2Fpost&target=https%3A%2F%2Fblog.example.com%2Fmy-note
+```
+
+**Response `202 Accepted`:** no body. The mention is recorded as pending and
+verified asynchronously; slow or hostile source pages do not block the request.
+
+**Errors:**
+
+| Status | Cause |
+|--------|-------|
+| `400` | Invalid URL; target is not on this site; target is not a published note; source equals target |
+| `405` | Method is not `POST`; `error.allow` is `POST` |
 
 ---
 
