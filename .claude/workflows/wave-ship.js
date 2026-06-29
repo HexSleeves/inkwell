@@ -314,7 +314,7 @@ async function runCard(c) {
     // Spike 003: if the Orca runtime is unreachable (e.g. headless/cron), fall back
     // to the in-process workflow backend rather than failing the card. Any other
     // orca error is a real failure and is returned as-is.
-    if (!(out.error && /unreachable/i.test(out.error))) return out;
+    if (out.error !== "orca runtime unreachable") return out;
     log(
       `wave-ship: orca runtime unreachable for "${c.title}" → workflow-backend fallback.`,
     );
@@ -376,7 +376,7 @@ function wtName(c) {
       .slice(0, 28) || "card";
   // Deterministic suffix from stable card identity (no Math.random in scripts) so
   // cards whose titles collide after slug/truncation still get distinct worktrees.
-  const seed = `${c.title || ""}|${c.cil || ""}|${c.plan || ""}`;
+  const seed = `${c.title || ""}|${c.cil || ""}|${c.plan || ""}|${c.task || ""}`;
   let h = 0;
   for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) >>> 0;
   return `ship-${s}-${h.toString(36).slice(0, 6)}`;
@@ -423,7 +423,7 @@ Run each step with \`--json\` and read the fields named:
 5. DISPATCH: \`orca orchestration dispatch --task <TASK_ID> --to <WORKER> --from <COORDINATOR> --inject --json\`. codex auto-submits the injected brief. If a follow-up \`terminal read\` shows the brief unsent in the composer, run \`orca terminal send --terminal <WORKER> --text "\\n"\` once.
 6. SUPERVISE — loop up to ~20 windows (~20 min): \`orca orchestration check --terminal <COORDINATOR> --wait --types worker_done,escalation,decision_gate --timeout-ms 60000 --json\`. Emit one short log line after EACH call so you stay active.
    - worker_done → parse its JSON body → return {status:"merge-ready", pr:<number>, prUrl:<url>, branch:<branch>, cil:${c.cil ? JSON.stringify(c.cil) : "null"}, worktreeSelector:"name:${name}", note:"opened PR"}.
-   - decision_gate → if the answer is clear from repo conventions / the task, \`orca orchestration reply --id <msgId> --body <answer>\` and keep polling; if it needs a human product/scope call, STOP and return {status:"blocked", question:"<the question>", questionOptions:[<options as strings>], blockReason:"<short why blocked>", note:"<the question>", cil:${c.cil ? JSON.stringify(c.cil) : "null"}, worktreeSelector:"name:${name}"}.
+   - decision_gate → if the answer is clear from repo conventions / the task, \`orca orchestration reply --id <msgId> --body <answer>\` and keep polling; if it needs a human product/scope call, STOP: first run \`orca worktree remove --selector name:${name} --json\` to clean up so a future retry does not collide, then return {status:"blocked", question:"<the question>", questionOptions:[<options as strings>], blockReason:"<short why blocked>", note:"<the question>", cil:${c.cil ? JSON.stringify(c.cil) : "null"}, worktreeSelector:"name:${name}"}.
    - escalation → STOP, return {status:"error", note:"<escalation text>", worktreeSelector:"name:${name}"}.
    - no worker_done after the windows → return {status:"error", note:"worker timeout (no worker_done in ~20m)", worktreeSelector:"name:${name}"}.
 
@@ -448,10 +448,13 @@ async function runCardViaOrca(c) {
         effort: "low",
       }),
     );
-    const s =
+    const rawStatus =
       r?.status === "merge-ready" || r?.status === "blocked"
         ? r.status
         : "error";
+    const missingMergeCoords =
+      rawStatus === "merge-ready" && (!r?.pr || !r?.prUrl || !r?.branch);
+    const s = missingMergeCoords ? "error" : rawStatus;
     return {
       card: c,
       result: {
@@ -477,7 +480,11 @@ async function runCardViaOrca(c) {
             r?.blockReason ?? (s === "blocked" ? (r?.note ?? null) : null),
         },
       },
-      error: s === "error" ? r?.note || "orca worker error" : null,
+      error: s === "error"
+        ? missingMergeCoords
+          ? "orca merge-ready result missing pr/prUrl/branch"
+          : r?.note || "orca worker error"
+        : null,
     };
   } catch (e) {
     return { card: c, result: null, error: String((e && e.message) || e) };
