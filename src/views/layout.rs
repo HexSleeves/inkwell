@@ -355,6 +355,80 @@ pub(crate) const STYLES: &str = r#"
     .editor-grid { grid-template-columns: 1fr 1fr; align-items: start; }
     .preview { border-top: none; border-left: 1px solid rgb(224 232 224); padding-top: 0; padding-left: 2rem; }
   }
+  /* Tag graph split-panel layout */
+  .tag-graph-layout {
+    display: flex;
+    gap: 1.5rem;
+    align-items: flex-start;
+    min-height: 420px;
+  }
+  .tag-graph-panel {
+    flex: 0 0 60%;
+    min-width: 0;
+  }
+  .tag-graph-panel svg {
+    width: 100%;
+    height: auto;
+    display: block;
+    border-radius: 1rem;
+    background: rgb(255 255 255);
+    border: 1px solid rgb(224 232 224);
+  }
+  .tag-node circle { cursor: pointer; transition: fill 0.15s; }
+  .tag-node circle:hover { fill: rgb(197 107 71); }
+  .tag-node text {
+    font-family: inherit;
+    font-size: 11px;
+    font-weight: 700;
+    fill: rgb(255 255 255);
+    pointer-events: none;
+    text-anchor: middle;
+    dominant-baseline: central;
+  }
+  .tag-edge { stroke: rgb(168 192 170); stroke-opacity: 0.5; }
+  .tag-sidebar-panel {
+    flex: 0 0 40%;
+    min-width: 0;
+  }
+  #tag-filter {
+    width: 100%;
+    padding: 0.55rem 0.75rem;
+    font-size: 0.9rem;
+    font-family: inherit;
+    border: 1px solid rgb(206 220 208);
+    border-radius: 0.75rem;
+    background: #fff;
+    color: inherit;
+    margin-bottom: 0.75rem;
+  }
+  #tag-sidebar-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    max-height: 420px;
+    overflow-y: auto;
+    display: grid;
+    gap: 0.2rem;
+  }
+  #tag-sidebar-list li { margin: 0; }
+  #tag-sidebar-list a {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.35rem 0.6rem;
+    border-radius: 0.5rem;
+    text-decoration: none;
+    color: rgb(47 93 69);
+    font-size: 0.875rem;
+    font-weight: 600;
+  }
+  #tag-sidebar-list a:hover { background: rgb(234 241 234); color: rgb(197 107 71); }
+  #tag-sidebar-list .count { color: rgb(120 132 123); font-weight: 400; }
+  @media (max-width: 639px) {
+    .tag-graph-layout { flex-direction: column; }
+    .tag-graph-panel, .tag-sidebar-panel { flex: none; width: 100%; }
+    #tag-sidebar-list { max-height: 240px; }
+  }
 "#;
 
 /// Leaf glyph for the wordmark pill.
