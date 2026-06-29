@@ -7,6 +7,7 @@ export const meta = {
   phases: [
     { title: "Plan" },
     { title: "Deploy" },
+    { title: "Land" },
     { title: "Reconcile" },
     { title: "Report" },
   ],
@@ -35,6 +36,8 @@ export const meta = {
 //   stopOnFailedDependency : halt if cards remain whose deps can never merge (default true)
 //   sequentialCards : force maxConcurrent=1 (one card in flight at a time) (default false)
 //   perCardBudget   : stop dispatching when budget.remaining() drops below this (default 120000)
+//   serializedMerge : wave-ship owns the merge — land PRs one-at-a-time re-checking
+//                     mergeability (default true; false → ship-card self-merges)
 //   plannerEngine   : model for planner/reconcile agents ("opus"|"sonnet"|"haiku"; default: inherit)
 //   shipCardName    : registry name of the ship-card workflow (default "ship-card")
 //   shipCardPath    : absolute path to ship-card.js (overrides shipCardName)
@@ -77,6 +80,12 @@ const MAX_CONCURRENT = SEQUENTIAL_CARDS
     : MAX_CARDS_PER_WAVE;
 const PER_CARD_BUDGET =
   typeof a.perCardBudget === "number" ? a.perCardBudget : 120_000;
+// Coordinator-owned serialized merge (Tier-2 D): when true, ship-card stops at a
+// green PR (status "merge-ready", no self-merge) and wave-ship lands PRs ONE AT A
+// TIME, re-checking mergeability against the moving base — so a wide layer that
+// finishes together can't merge-train-race, and only this single worker touches
+// the base checkout. Set false to restore ship-card self-merge.
+const SERIALIZED_MERGE = a.serializedMerge !== false;
 const ENGINE = a.engine;
 const ENGINES = a.engines;
 const DRY_RUN = a.dryRun === true;
@@ -249,6 +258,8 @@ function cardArgs(c) {
     maxReviewRounds: MAX_REVIEW_ROUNDS,
     engine: ENGINE,
     engines: ENGINES,
+    // Tier-2 D: hand the green PR back for serialized coordinator merge (or self).
+    land: SERIALIZED_MERGE ? "coordinator" : "self",
   };
 }
 
@@ -259,6 +270,77 @@ async function runCard(c) {
     return { card: c, result: res, error: null };
   } catch (e) {
     return { card: c, result: null, error: String((e && e.message) || e) };
+  }
+}
+
+// ── Tier-2 D: serialized coordinator merge ───────────────────────────────────
+// With SERIALIZED_MERGE on, ship-card returns a green PR without merging
+// ("merge-ready"); wave-ship lands those PRs one-at-a-time via landCard so the
+// base advances serially and migrations/CI can't race at the merge boundary.
+const LAND_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["merged", "mergeSha", "ticketDone", "note"],
+  properties: {
+    merged: { type: "boolean" },
+    mergeSha: { type: ["string", "null"] },
+    ticketDone: { type: "boolean" },
+    note: { type: "string" },
+  },
+};
+
+function landPrompt(rc) {
+  const r = rc.result || {};
+  const ignoreLine = IGNORE.join(", ");
+  const ticketStep = r.cil
+    ? `Load tools: ToolSearch "select:mcp__plugin_linear_linear__save_issue,mcp__plugin_linear_linear__save_comment". save_issue { id: "${r.cil}", state: "Done" }, then save_comment on ${r.cil} recapping: "Landed on ${BASE} — squash-merged PR #${r.pr} as <sha>." If Linear is unavailable, still report merged=true with ticketDone=false and a note.`
+    : `No ticket id — skip Linear and set ticketDone=true.`;
+  return `You are the wave-ship MERGE coordinator landing ONE already-green PR. Work autonomously; do not ask questions.
+PR #${r.pr} on the repo at ${REPO} — branch ${r.branch}, base ${BASE}, ticket ${r.cil || "(none)"}, worktree ${r.worktreePath || "(none)"}.
+This PR already passed CI + CodeRabbit in its ship-card run. You OWN the merge so sibling merges land serially, each on the CURRENT base.
+
+== Pre-flight (re-check — the base may have moved since this PR went green) ==
+cd ${REPO}; git fetch origin. Inspect: gh pr view ${r.pr} --json state,mergeable,mergeStateStatus  and  gh pr checks ${r.pr}.
+- If state is already MERGED → idempotent success: return merged=true with the existing squash SHA (git log --oneline -10 on ${BASE}; the subject contains "(#${r.pr})").
+- Treat these check names as non-blocking: ${ignoreLine}. Also ignore "skipping"/"neutral". Every OTHER check must be "pass".
+- If mergeable is CONFLICTING, or a required check regressed/failed → DO NOT force and DO NOT rebase+re-wait here (re-running CI would stall the serialized merge queue). Return merged=false with a one-line note naming the conflict/check so a human can rebase ${r.branch} and re-land.
+
+== Merge (squash) ==
+gh pr merge ${r.pr} --squash --delete-branch. Then sync the base: git checkout ${BASE} && git pull --ff-only. Capture the squash commit SHA on ${BASE} (its subject contains "(#${r.pr})").
+
+== Close ticket + cleanup ==
+${ticketStep}
+Remove the worktree if present: git worktree remove --force ${r.worktreePath || ""} ; git worktree prune. Delete the stale local branch: git branch -D ${r.branch} (ignore errors).
+
+== Hard rules ==
+Never fabricate a merge. Merge only this one PR. Return the structured result (merged, mergeSha, ticketDone, note).`;
+}
+
+// Land ONE merge-ready card. The caller serializes these (single in-flight slot).
+async function landCard(rc) {
+  try {
+    const land = await agent(
+      landPrompt(rc),
+      maybeModel({
+        label: `land:${rc.result?.cil || rc.card.title}`,
+        phase: "Land",
+        schema: LAND_SCHEMA,
+        agentType: "general-purpose",
+      }),
+    );
+    return {
+      merged: !!land?.merged,
+      mergeSha: land?.mergeSha || null,
+      ticketDone: !!land?.ticketDone,
+      note: land?.note || "",
+    };
+  } catch (e) {
+    return {
+      merged: false,
+      mergeSha: null,
+      ticketDone: false,
+      note: String((e && e.message) || e),
+    };
   }
 }
 
@@ -494,8 +576,10 @@ const mergedTitles = new Set();
 const failedTitles = new Set(); // terminally not-merged → can never satisfy a dep
 const remCount = new Map(); // card title → remediation attempts already spent
 const byTitle = new Map(); // card title → card object (migration + retry lookups)
-const inflight = new Map(); // card title → Promise<{ title, out }>
+const inflight = new Map(); // card title → Promise<{ kind:"card", title, out }>
 const pool = []; // cards awaiting dispatch (deps not yet all merged)
+const mergeQueue = []; // green merge-ready cards awaiting serialized land
+let merging = null; // the single in-flight land Promise (serializes merges)
 let continuations = 0;
 let stopped = null;
 let goalComplete = false;
@@ -573,14 +657,32 @@ while (true) {
       log(
         `wave-ship: dispatch "${c.title}"${c.migration ? " [migration]" : ""} (layer ${c._wave || "?"}; ${inflight.size + 1} in flight).`,
       );
-      const p = runCard(c).then((out) => ({ title: c.title, out }));
+      const p = runCard(c).then((out) => ({ kind: "card", title: c.title, out }));
       inflight.set(c.title, p);
     }
   }
 
+  // 2b. Serialized merge: if a green PR is queued and no merge is running, land
+  //     exactly ONE. Each merge advances the base alone so siblings can't race.
+  //     Drain whenever the queue is non-empty (anything queued was handed back
+  //     specifically to be merged here) — not gated on SERIALIZED_MERGE.
+  if (!merging && mergeQueue.length) {
+    const rc = mergeQueue.shift();
+    phase("Land");
+    log(
+      `wave-ship: merging "${rc.card.title}" (PR #${rc.result?.pr}; ${mergeQueue.length} more queued).`,
+    );
+    merging = landCard(rc).then((landed) => ({
+      kind: "merge",
+      title: rc.card.title,
+      rc,
+      landed,
+    }));
+  }
+
   // 3. Nothing running → the pool drained (try a continuation wave) or we are
   //    stuck on unsatisfiable deps / budget.
-  if (inflight.size === 0) {
+  if (inflight.size === 0 && !merging && mergeQueue.length === 0) {
     if (pool.length === 0) {
       if (!AUTO_CONTINUE || stopped || budgetLow()) {
         if (!stopped && budgetLow()) stopped = "budget";
@@ -639,12 +741,70 @@ while (true) {
     break;
   }
 
-  // 4. Block until ONE card finishes, then re-evaluate readiness.
-  const { title, out } = await Promise.race(inflight.values());
+  // 4. Block until ONE in-flight thing finishes — a card's build/review run, or
+  //    the single serialized merge — then re-evaluate readiness.
+  const ev = await Promise.race([
+    ...inflight.values(),
+    ...(merging ? [merging] : []),
+  ]);
+
+  if (ev.kind === "merge") {
+    merging = null;
+    const mt = ev.title;
+    const mcard = byTitle.get(mt) || ev.rc.card;
+    const r = ev.rc.result || {};
+    if (ev.landed.merged) {
+      mergedTitles.add(mt);
+      allResults.push({
+        wave: mcard._wave || 0,
+        card: mcard,
+        result: {
+          status: "merged",
+          cil: r.cil || null,
+          pr: r.pr || null,
+          prUrl: r.prUrl || null,
+          mergeSha: ev.landed.mergeSha,
+          ticketDone: ev.landed.ticketDone,
+        },
+        error: null,
+      });
+      log(`wave-ship: MERGED "${mt}" (${mergedTitles.size} merged so far).`);
+    } else {
+      // Green PR that could not be landed (conflict / regressed check) → human.
+      failedTitles.add(mt);
+      allResults.push({
+        wave: mcard._wave || 0,
+        card: mcard,
+        result: {
+          status: "merge-failed",
+          cil: r.cil || null,
+          pr: r.pr || null,
+          prUrl: r.prUrl || null,
+          note: ev.landed.note,
+        },
+        error: ev.landed.note,
+      });
+      log(`wave-ship: merge BLOCKED for "${mt}" — ${ev.landed.note}`);
+    }
+    continue;
+  }
+
+  // ev.kind === "card": a build/review run finished.
+  const { title, out } = ev;
   inflight.delete(title);
   const card = byTitle.get(title) || out.card;
+  const status = statusOf(out);
+
+  if (status === "merge-ready") {
+    // Green PR handed back — queue for serialized coordinator merge. NOT merged
+    // yet, so it does not satisfy dependents until landCard lands it.
+    mergeQueue.push(out);
+    log(`wave-ship: "${title}" green → queued for serialized merge.`);
+    continue;
+  }
 
   if (isMerged(out)) {
+    // Self-merge path (serializedMerge=false, or an older ship-card).
     mergedTitles.add(title);
     allResults.push({ wave: card._wave || 0, ...out });
     log(`wave-ship: MERGED "${title}" (${mergedTitles.size} merged so far).`);

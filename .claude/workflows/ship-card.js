@@ -31,6 +31,8 @@ export const meta = {
 //   engine     : engine for the reasoning-heavy subagents (Build+Review) —
 //                "opus" | "sonnet" | "codex" (orchestrator's call; see below)
 //   engines    : per-phase override, e.g. { build: "codex", review: "sonnet" }
+//   land       : "self" (default) merge here; "coordinator" stop at the green PR
+//                and return status "merge-ready" for wave-ship to merge serially
 
 // `args` may arrive as a structured object OR as a JSON-encoded string depending
 // on the caller — normalize to an object either way.
@@ -54,6 +56,9 @@ const IGNORE = Array.isArray(a.ignoreChecks)
   : ["evaluate_trigger", "sandbox-verify"];
 const MAX_ROUNDS =
   typeof a.maxReviewRounds === "number" ? a.maxReviewRounds : 5;
+// land mode: "self" (default) merges here; "coordinator" hands the green PR back
+// to wave-ship for a serialized merge (returns status "merge-ready", no merge).
+const LAND_MODE = a.land === "coordinator" ? "coordinator" : "self";
 const WORK = a.plan
   ? `the plan file \`${a.plan}\` (read it IN FULL and follow it exactly)`
   : `this task: ${a.task || "(none provided)"}`;
@@ -382,6 +387,27 @@ if (!green) {
     pr: PR,
     prUrl: build.prUrl,
     rounds: round,
+  };
+}
+
+// ── merge_ready hand-back (Tier-2 D) ───────────────────────────────────────
+// In coordinator mode wave-ship owns the (serialized) merge: stop at the green
+// PR and report "merge-ready" without merging, so sibling merges can't race.
+if (LAND_MODE === "coordinator") {
+  log(
+    `ship-card: PR #${PR} green — handing back to coordinator for serialized merge (not merging here).`,
+  );
+  return {
+    status: "merge-ready",
+    cil: CIL,
+    pr: PR,
+    prUrl: build.prUrl,
+    branch: BRANCH,
+    worktreePath: WT,
+    mergeSha: null,
+    ticketDone: false,
+    reviewRounds: round,
+    ticketCreated: ticket.created,
   };
 }
 
