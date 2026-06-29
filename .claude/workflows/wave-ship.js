@@ -44,6 +44,11 @@ export const meta = {
 //   shipCardName    : registry name of the ship-card workflow (default "ship-card")
 //   shipCardPath    : absolute path to ship-card.js (overrides shipCardName)
 //   dryRun          : plan only, return the wave structure, deploy nothing (default false)
+//   backend         : "workflow" (default — each card is an in-process nested
+//                     ship-card run) | "orca" (Spike 003 — each card's Build+Review
+//                     runs as a codex worker in an isolated Orca worktree, supervised
+//                     by a thin in-process poller; execution lives in the worker's own
+//                     PTY so a stalled build cannot trip the no-progress watchdog).
 
 let a = args || {};
 if (typeof a === "string") {
@@ -102,6 +107,10 @@ const SHIP_CARD_PATH = a.shipCardPath || null;
 const SHIP_REF = SHIP_CARD_PATH
   ? { scriptPath: SHIP_CARD_PATH }
   : SHIP_CARD_NAME;
+// Spike 003 (Tier-3): card execution backend. "orca" routes runCard through a thin
+// in-process supervisor that drives a codex worker in an isolated Orca worktree; the
+// scheduler (DAG/migration-serialize/merge/clarify) and landCard (D) are unchanged.
+const BACKEND = a.backend === "orca" ? "orca" : "workflow";
 
 const PLANNER_MODEL =
   a.plannerEngine && ["opus", "sonnet", "haiku"].includes(a.plannerEngine)
@@ -288,11 +297,153 @@ function cardArgs(c) {
   };
 }
 
-// Run ONE card through the full autonomous ship-card workflow.
+// Run ONE card through the configured execution backend. Both return the SAME
+// shape ({card, result:{status,...}, error}); the scheduler routes on status, so
+// "orca" is invisible to merge (D), retry, and DAG bookkeeping.
 async function runCard(c) {
+  if (BACKEND === "orca") return runCardViaOrca(c);
   try {
     const res = await workflow(SHIP_REF, cardArgs(c));
     return { card: c, result: res, error: null };
+  } catch (e) {
+    return { card: c, result: null, error: String((e && e.message) || e) };
+  }
+}
+
+// ── Spike 003: orca execution backend ────────────────────────────────────────
+// Each card's heavy work (Build + Review → green PR) runs as a codex worker in an
+// isolated Orca worktree. A THIN in-process supervisor agent only runs `orca` CLI
+// and polls `check --wait` in ≤60s windows (logging each, so it never idles) — the
+// reasoning/implementation happens in the worker's own PTY, invisible to the
+// Workflow no-progress watchdog. On success it returns status "merge-ready" so the
+// existing serialized landCard (D) merges it in-process, then cleans up the worktree.
+const ORCA_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "status",
+    "pr",
+    "prUrl",
+    "branch",
+    "cil",
+    "worktreeSelector",
+    "note",
+  ],
+  properties: {
+    status: {
+      type: "string",
+      description:
+        'one of: "merge-ready" (green PR opened, not merged), "blocked" (no PR; safe to auto-retry), "error" (a PR may exist or the runtime failed; needs a human)',
+    },
+    pr: { type: ["number", "null"], description: "PR number, or null" },
+    prUrl: { type: ["string", "null"] },
+    branch: { type: ["string", "null"] },
+    cil: { type: ["string", "null"] },
+    worktreeSelector: {
+      type: ["string", "null"],
+      description: 'Orca worktree selector for cleanup, e.g. "name:ship-foo"',
+    },
+    note: { type: "string" },
+  },
+};
+
+// Deterministic Orca worktree name from the card title (no Math.random in scripts).
+function wtName(c) {
+  const s =
+    String(c.title || "card")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 32) || "card";
+  return `ship-${s}`;
+}
+
+// The self-contained ship brief handed to the codex worker (the proven task_2659…
+// shape): isolate, follow the task/plan, VERIFY, open a PR, do NOT merge, report once.
+function orcaBrief(c) {
+  const work = c.plan
+    ? `Follow the plan file ${c.plan} EXACTLY.`
+    : `Implement this task:\n${c.task || c.title}`;
+  return [
+    `CARD: ${c.title}`,
+    `You are in an isolated Orca git worktree based off origin/${BASE}. Work ONLY in this worktree. Work FULLY AUTONOMOUSLY; do NOT ask interactive questions.`,
+    ``,
+    `Read .mex/ROUTER.md for repo conventions before editing. ${work}`,
+    `Scope: ${c.scope || "Keep the change minimal and focused on the task."}`,
+    ``,
+    `VERIFY exactly as this repo does (run what applies): \`cargo fmt --all -- --check\`, \`cargo clippy --all-targets -- -D warnings\`, \`cargo test --all\`. Enumerate each pass/fail. If any required check fails, FIX it before opening a PR.`,
+    `SHIP: commit on this worktree's branch with a conventional-commit message, then open a PR with \`gh pr create --base ${BASE}\` (clear title + body). Do NOT merge — leave it merge-ready.`,
+    `REPORT: send EXACTLY ONE worker_done message to the coordinator with a JSON body {taskId, dispatchId, pr, prUrl, branch, cil, filesModified}. pr = the PR number; prUrl = its URL.`,
+    `DECISIONS: do NOT use the \`ask\` verb (broken here). If you must ask, \`orca orchestration send --type decision_gate\` to the coordinator with the question + options, then poll \`orca orchestration check --wait\` for the reply and continue.`,
+    c.cil
+      ? `Linear ticket for this card: ${c.cil} (resolve it; do not create a new one).`
+      : `No Linear ticket — skip Linear.`,
+  ].join("\n");
+}
+
+// Prompt for the thin supervisor agent: drive the proven orca CLI sequence + poll.
+function orcaSupervisorPrompt(c) {
+  const name = wtName(c);
+  const brief = orcaBrief(c);
+  return `You are the wave-ship ORCA SUPERVISOR for ONE card. You are THIN: you ONLY run \`orca\` CLI commands and poll — you do NOT implement the card yourself (a codex worker does, in its own worktree). Work autonomously; never block on a human.
+
+CARD TITLE: ${c.title}
+REPO: ${REPO}    BASE: ${BASE}    WORKTREE NAME: ${name}
+
+Run each step with \`--json\` and read the fields named:
+
+1. PREFLIGHT: \`orca status --json\`. If result.runtime.state != "ready" or not reachable → STOP, return {status:"error", note:"orca runtime unreachable"}.
+2. TASK: \`orca orchestration task-create --spec <BRIEF> --task-title ${JSON.stringify(c.title)} --json\` (BRIEF is verbatim below). Capture result.task.id (TASK_ID) and result.task.created_by_terminal_handle (COORDINATOR handle).
+3. WORKER: \`orca worktree create --name ${name} --repo path:${REPO} --agent codex --base-branch origin/${BASE} --no-parent --json\`. Capture result.startupTerminal.handle (WORKER handle) and result.worktree.branch.
+4. WAIT: \`orca terminal wait --terminal <WORKER> --for tui-idle --timeout-ms 90000\`, then \`orca terminal read --terminal <WORKER>\` once to confirm boot (a hooks-trust prompt may auto-resolve; a \`railway\` MCP auth failure is harmless).
+5. DISPATCH: \`orca orchestration dispatch --task <TASK_ID> --to <WORKER> --from <COORDINATOR> --inject --json\`. codex auto-submits the injected brief. If a follow-up \`terminal read\` shows the brief unsent in the composer, run \`orca terminal send --terminal <WORKER> --text "\\n"\` once.
+6. SUPERVISE — loop up to ~20 windows (~20 min): \`orca orchestration check --terminal <COORDINATOR> --wait --types worker_done,escalation,decision_gate --timeout-ms 60000 --json\`. Emit one short log line after EACH call so you stay active.
+   - worker_done → parse its JSON body → return {status:"merge-ready", pr:<number>, prUrl:<url>, branch:<branch>, cil:${c.cil ? JSON.stringify(c.cil) : "null"}, worktreeSelector:"name:${name}", note:"opened PR"}.
+   - decision_gate → if the answer is clear from repo conventions / the task, \`orca orchestration reply --id <msgId> --body <answer>\` and keep polling; if it needs a human product/scope call, STOP and return {status:"blocked", pr:null, prUrl:null, branch:null, cil:${c.cil ? JSON.stringify(c.cil) : "null"}, worktreeSelector:"name:${name}", note:"<the question>"}.
+   - escalation → STOP, return {status:"error", note:"<escalation text>", worktreeSelector:"name:${name}"}.
+   - no worker_done after the windows → return {status:"error", note:"worker timeout (no worker_done in ~20m)", worktreeSelector:"name:${name}"}.
+
+Do NOT merge the PR and do NOT remove the worktree — the coordinator lands and cleans up. Return ONLY the structured result.
+
+BRIEF (pass verbatim as --spec in step 2):
+"""
+${brief}
+"""`;
+}
+
+// Supervise ONE card via orca; map the supervisor result into the scheduler shape.
+async function runCardViaOrca(c) {
+  try {
+    const r = await agent(
+      orcaSupervisorPrompt(c),
+      maybeModel({
+        label: `orca:${c.title}`,
+        phase: "Deploy",
+        schema: ORCA_SCHEMA,
+        agentType: "general-purpose",
+        effort: "low",
+      }),
+    );
+    const s =
+      r?.status === "merge-ready" || r?.status === "blocked"
+        ? r.status
+        : "error";
+    return {
+      card: c,
+      result: {
+        status: s,
+        cil: r?.cil ?? c.cil ?? null,
+        pr: r?.pr ?? null,
+        prUrl: r?.prUrl ?? null,
+        branch: r?.branch ?? null,
+        worktreeSelector: r?.worktreeSelector || `name:${wtName(c)}`,
+        backend: "orca",
+        // detail.note carries the blocked question / error text; no prUrl/prNumber
+        // here keeps isRetriable() true for "blocked" (a no-PR, safe-to-retry stop).
+        detail: { note: r?.note || "" },
+      },
+      error: s === "error" ? r?.note || "orca worker error" : null,
+    };
   } catch (e) {
     return { card: c, result: null, error: String((e && e.message) || e) };
   }
@@ -320,6 +471,12 @@ function landPrompt(rc) {
   const ticketStep = r.cil
     ? `Load tools: ToolSearch "select:mcp__plugin_linear_linear__save_issue,mcp__plugin_linear_linear__save_comment". save_issue { id: "${r.cil}", state: "Done" }, then save_comment on ${r.cil} recapping: "Landed on ${BASE} — squash-merged PR #${r.pr} as <sha>." If Linear is unavailable, still report merged=true with ticketDone=false and a note.`
     : `No ticket id — skip Linear and set ticketDone=true.`;
+  // Spike 003: orca-managed worktrees are torn down with `orca worktree rm` (removes
+  // worktree + branch from Orca and git); workflow-backend worktrees use plain git.
+  const cleanupStep =
+    r.backend === "orca" && r.worktreeSelector
+      ? `Remove the Orca worktree (this also deletes its branch): orca worktree rm --worktree ${r.worktreeSelector} --force ; orca worktree prune (ignore errors).`
+      : `Remove the worktree if present: git worktree remove --force ${r.worktreePath || ""} ; git worktree prune. Delete the stale local branch: git branch -D ${r.branch} (ignore errors).`;
   return `You are the wave-ship MERGE coordinator landing ONE already-green PR. Work autonomously; do not ask questions.
 PR #${r.pr} on the repo at ${REPO} — branch ${r.branch}, base ${BASE}, ticket ${r.cil || "(none)"}, worktree ${r.worktreePath || "(none)"}.
 This PR already passed CI + CodeRabbit in its ship-card run. You OWN the merge so sibling merges land serially, each on the CURRENT base.
@@ -335,7 +492,7 @@ gh pr merge ${r.pr} --squash --delete-branch. Then sync the base: git checkout $
 
 == Close ticket + cleanup ==
 ${ticketStep}
-Remove the worktree if present: git worktree remove --force ${r.worktreePath || ""} ; git worktree prune. Delete the stale local branch: git branch -D ${r.branch} (ignore errors).
+${cleanupStep}
 
 == Hard rules ==
 Never fabricate a merge. Merge only this one PR. Return the structured result (merged, mergeSha, ticketDone, note).`;
