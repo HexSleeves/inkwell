@@ -37,6 +37,8 @@ pub fn render_archive_index_page(months: &[ArchiveMonth], site: &SiteMeta<'_>) -
             og_type: "website",
             json_ld: None,
             csp_nonce: None,
+            nav_current: None,
+            wide_layout: false,
         },
         &format!("<h1>Archive</h1>\n        {}", body),
     )
@@ -150,6 +152,8 @@ pub fn render_archive_month_page(
             og_type: "website",
             json_ld: None,
             csp_nonce: None,
+            nav_current: None,
+            wide_layout: false,
         },
         &format!(
             "<h1>Archive: {}</h1>\n        {}{}{}\n        {}",

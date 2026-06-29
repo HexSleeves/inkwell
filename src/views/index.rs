@@ -61,6 +61,8 @@ pub fn render_index_page(
             og_type: "website",
             json_ld: None,
             csp_nonce: None,
+            nav_current: Some("dashboard"),
+            wide_layout: false,
         },
         &format!("{}{}", list, pager),
     )

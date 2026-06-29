@@ -69,6 +69,8 @@ pub fn render_search_page(
             og_type: "website",
             json_ld: None,
             csp_nonce: None,
+            nav_current: None,
+            wide_layout: false,
         },
         &format!("<h1>Search</h1>\n        {}\n        {}", form, body),
     )

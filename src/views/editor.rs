@@ -118,6 +118,8 @@ pub fn render_editor_list(site: &SiteMeta<'_>, csp_nonce: Option<&str>) -> Strin
             og_type: "website",
             json_ld: None,
             csp_nonce,
+            nav_current: None,
+            wide_layout: false,
         },
         &main,
     )
@@ -210,6 +212,8 @@ pub fn render_editor_new(site: &SiteMeta<'_>, csp_nonce: Option<&str>) -> String
             og_type: "website",
             json_ld: None,
             csp_nonce,
+            nav_current: None,
+            wide_layout: false,
         },
         &main,
     )
@@ -390,6 +394,8 @@ pub fn render_editor_edit(site: &SiteMeta<'_>, csp_nonce: Option<&str>, slug: &s
             og_type: "website",
             json_ld: None,
             csp_nonce,
+            nav_current: None,
+            wide_layout: false,
         },
         &main,
     )
