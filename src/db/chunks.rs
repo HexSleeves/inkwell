@@ -147,34 +147,47 @@ pub async fn related_notes(
     model: &str,
 ) -> Result<Vec<RelatedNote>, sqlx::Error> {
     let embedding = vector_to_pg_text(query_embedding);
-    // DISTINCT ON (note) keeps each note's single nearest chunk; the outer order
-    // then ranks notes by that best distance. Both the inner DISTINCT ON and the
-    // outer query order by distance so the chosen chunk is genuinely the closest.
+    // HNSW-friendly shape: pull the globally nearest chunks through the ANN index
+    // (`ORDER BY embedding <=> $q LIMIT fanout`), THEN collapse to one row per
+    // note (its nearest chunk) and rank notes by that distance. The old
+    // `DISTINCT ON (note) ... ORDER BY note, distance` shape forced a full scan
+    // because its lead ORDER BY column was the note id, not the distance, and
+    // HNSW only accelerates `ORDER BY <distance> LIMIT k`. `fanout` over-fetches
+    // chunks so enough distinct notes survive the per-note dedup (ANN trades a
+    // little recall for a large latency win; small datasets are unaffected since
+    // the fanout covers every chunk).
+    let fanout = (limit * 8).max(40);
     let rows: Vec<(String, String, f64)> = match visibility {
         Visibility::Public => {
             sqlx::query_as::<Postgres, (String, String, f64)>(
                 r#"
                 SELECT slug, title, distance FROM (
-                    SELECT DISTINCT ON (documents.id)
-                           documents.slug AS slug,
-                           documents.title AS title,
-                           (note_chunks.embedding <=> $1::vector) AS distance
-                    FROM note_chunks
-                    JOIN documents ON documents.id = note_chunks.note_id
-                    WHERE documents.id <> $2
-                      AND documents.status = 'published'
-                      AND note_chunks.embedding_provider = $3
-                      AND note_chunks.embedding_model = $4
-                    ORDER BY documents.id, distance
+                    SELECT DISTINCT ON (note_id) slug, title, distance
+                    FROM (
+                        SELECT documents.id AS note_id,
+                               documents.slug AS slug,
+                               documents.title AS title,
+                               (note_chunks.embedding <=> $1::vector) AS distance
+                        FROM note_chunks
+                        JOIN documents ON documents.id = note_chunks.note_id
+                        WHERE documents.id <> $2
+                          AND documents.status = 'published'
+                          AND note_chunks.embedding_provider = $3
+                          AND note_chunks.embedding_model = $4
+                        ORDER BY note_chunks.embedding <=> $1::vector
+                        LIMIT $5
+                    ) AS ann
+                    ORDER BY note_id, distance
                 ) AS nearest
                 ORDER BY distance ASC, slug ASC
-                LIMIT $5
+                LIMIT $6
                 "#,
             )
             .bind(&embedding)
             .bind(exclude_note_id)
             .bind(provider)
             .bind(model)
+            .bind(fanout)
             .bind(limit)
             .fetch_all(pool)
             .await?
@@ -183,20 +196,25 @@ pub async fn related_notes(
             sqlx::query_as::<Postgres, (String, String, f64)>(
                 r#"
                 SELECT slug, title, distance FROM (
-                    SELECT DISTINCT ON (documents.id)
-                           documents.slug AS slug,
-                           documents.title AS title,
-                           (note_chunks.embedding <=> $1::vector) AS distance
-                    FROM note_chunks
-                    JOIN documents ON documents.id = note_chunks.note_id
-                    WHERE documents.id <> $2
-                      AND (documents.status = 'published' OR documents.owner_id = $3)
-                      AND note_chunks.embedding_provider = $4
-                      AND note_chunks.embedding_model = $5
-                    ORDER BY documents.id, distance
+                    SELECT DISTINCT ON (note_id) slug, title, distance
+                    FROM (
+                        SELECT documents.id AS note_id,
+                               documents.slug AS slug,
+                               documents.title AS title,
+                               (note_chunks.embedding <=> $1::vector) AS distance
+                        FROM note_chunks
+                        JOIN documents ON documents.id = note_chunks.note_id
+                        WHERE documents.id <> $2
+                          AND (documents.status = 'published' OR documents.owner_id = $3)
+                          AND note_chunks.embedding_provider = $4
+                          AND note_chunks.embedding_model = $5
+                        ORDER BY note_chunks.embedding <=> $1::vector
+                        LIMIT $6
+                    ) AS ann
+                    ORDER BY note_id, distance
                 ) AS nearest
                 ORDER BY distance ASC, slug ASC
-                LIMIT $6
+                LIMIT $7
                 "#,
             )
             .bind(&embedding)
@@ -204,6 +222,7 @@ pub async fn related_notes(
             .bind(owner_id)
             .bind(provider)
             .bind(model)
+            .bind(fanout)
             .bind(limit)
             .fetch_all(pool)
             .await?
@@ -212,25 +231,31 @@ pub async fn related_notes(
             sqlx::query_as::<Postgres, (String, String, f64)>(
                 r#"
                 SELECT slug, title, distance FROM (
-                    SELECT DISTINCT ON (documents.id)
-                           documents.slug AS slug,
-                           documents.title AS title,
-                           (note_chunks.embedding <=> $1::vector) AS distance
-                    FROM note_chunks
-                    JOIN documents ON documents.id = note_chunks.note_id
-                    WHERE documents.id <> $2
-                      AND note_chunks.embedding_provider = $3
-                      AND note_chunks.embedding_model = $4
-                    ORDER BY documents.id, distance
+                    SELECT DISTINCT ON (note_id) slug, title, distance
+                    FROM (
+                        SELECT documents.id AS note_id,
+                               documents.slug AS slug,
+                               documents.title AS title,
+                               (note_chunks.embedding <=> $1::vector) AS distance
+                        FROM note_chunks
+                        JOIN documents ON documents.id = note_chunks.note_id
+                        WHERE documents.id <> $2
+                          AND note_chunks.embedding_provider = $3
+                          AND note_chunks.embedding_model = $4
+                        ORDER BY note_chunks.embedding <=> $1::vector
+                        LIMIT $5
+                    ) AS ann
+                    ORDER BY note_id, distance
                 ) AS nearest
                 ORDER BY distance ASC, slug ASC
-                LIMIT $5
+                LIMIT $6
                 "#,
             )
             .bind(&embedding)
             .bind(exclude_note_id)
             .bind(provider)
             .bind(model)
+            .bind(fanout)
             .bind(limit)
             .fetch_all(pool)
             .await?
@@ -266,35 +291,50 @@ pub async fn related_notes_for_note(
     provider: &str,
     model: &str,
 ) -> Result<Vec<RelatedNote>, sqlx::Error> {
-    // The JOIN condition `candidate.note_id <> origin.note_id` combined with
-    // `WHERE origin.note_id = $1` ensures the origin note is excluded from
-    // candidates without an extra predicate. GROUP BY collapses all chunk pairs
-    // for a given candidate note to a single row; min() picks its best match.
-    // Both origin and candidate are filtered by provenance so vectors from
-    // different embedding spaces are never cross-compared.
+    // HNSW-friendly shape: for each origin chunk, pull its top-`fanout` nearest
+    // candidate chunks through the ANN index via a LATERAL
+    // `ORDER BY candidate.embedding <=> origin.embedding LIMIT fanout`, then take
+    // the min distance per candidate note across all origin chunks. The old
+    // self-join + `min()` over the full origin x candidate cross product could
+    // not use any ANN index (the min ranges over an unordered cross product), so
+    // it scanned every pair: O(origin_chunks x all_chunks). Both origin and
+    // candidate are provenance-filtered so only same-space vectors are compared,
+    // and the candidate side is visibility-filtered (no-draft-leak). `fanout`
+    // over-fetches per origin chunk to preserve recall (ANN approximation; exact
+    // on small datasets). An origin note with no matching chunks yields no rows.
+    let fanout = (limit * 8).max(40);
     let rows: Vec<(String, String, f64)> = match visibility {
         Visibility::Public => {
             sqlx::query_as::<Postgres, (String, String, f64)>(
                 r#"
-                SELECT documents.slug, documents.title,
-                       min(candidate.embedding <=> origin.embedding) AS distance
+                SELECT nn.slug, nn.title, min(nn.distance) AS distance
                 FROM note_chunks AS origin
-                JOIN note_chunks AS candidate ON candidate.note_id <> origin.note_id
-                JOIN documents ON documents.id = candidate.note_id
+                JOIN LATERAL (
+                    SELECT documents.id AS cand_id,
+                           documents.slug AS slug,
+                           documents.title AS title,
+                           (candidate.embedding <=> origin.embedding) AS distance
+                    FROM note_chunks AS candidate
+                    JOIN documents ON documents.id = candidate.note_id
+                    WHERE candidate.note_id <> origin.note_id
+                      AND documents.status = 'published'
+                      AND candidate.embedding_provider = $2
+                      AND candidate.embedding_model = $3
+                    ORDER BY candidate.embedding <=> origin.embedding
+                    LIMIT $4
+                ) AS nn ON true
                 WHERE origin.note_id = $1
-                  AND documents.status = 'published'
                   AND origin.embedding_provider = $2
                   AND origin.embedding_model = $3
-                  AND candidate.embedding_provider = $2
-                  AND candidate.embedding_model = $3
-                GROUP BY documents.id, documents.slug, documents.title
-                ORDER BY distance ASC, documents.slug ASC
-                LIMIT $4
+                GROUP BY nn.cand_id, nn.slug, nn.title
+                ORDER BY min(nn.distance) ASC, nn.slug ASC
+                LIMIT $5
                 "#,
             )
             .bind(origin_note_id)
             .bind(provider)
             .bind(model)
+            .bind(fanout)
             .bind(limit)
             .fetch_all(pool)
             .await?
@@ -302,26 +342,35 @@ pub async fn related_notes_for_note(
         Visibility::Owner(owner_id) => {
             sqlx::query_as::<Postgres, (String, String, f64)>(
                 r#"
-                SELECT documents.slug, documents.title,
-                       min(candidate.embedding <=> origin.embedding) AS distance
+                SELECT nn.slug, nn.title, min(nn.distance) AS distance
                 FROM note_chunks AS origin
-                JOIN note_chunks AS candidate ON candidate.note_id <> origin.note_id
-                JOIN documents ON documents.id = candidate.note_id
+                JOIN LATERAL (
+                    SELECT documents.id AS cand_id,
+                           documents.slug AS slug,
+                           documents.title AS title,
+                           (candidate.embedding <=> origin.embedding) AS distance
+                    FROM note_chunks AS candidate
+                    JOIN documents ON documents.id = candidate.note_id
+                    WHERE candidate.note_id <> origin.note_id
+                      AND (documents.status = 'published' OR documents.owner_id = $2)
+                      AND candidate.embedding_provider = $3
+                      AND candidate.embedding_model = $4
+                    ORDER BY candidate.embedding <=> origin.embedding
+                    LIMIT $5
+                ) AS nn ON true
                 WHERE origin.note_id = $1
-                  AND (documents.status = 'published' OR documents.owner_id = $2)
                   AND origin.embedding_provider = $3
                   AND origin.embedding_model = $4
-                  AND candidate.embedding_provider = $3
-                  AND candidate.embedding_model = $4
-                GROUP BY documents.id, documents.slug, documents.title
-                ORDER BY distance ASC, documents.slug ASC
-                LIMIT $5
+                GROUP BY nn.cand_id, nn.slug, nn.title
+                ORDER BY min(nn.distance) ASC, nn.slug ASC
+                LIMIT $6
                 "#,
             )
             .bind(origin_note_id)
             .bind(owner_id)
             .bind(provider)
             .bind(model)
+            .bind(fanout)
             .bind(limit)
             .fetch_all(pool)
             .await?
@@ -329,24 +378,33 @@ pub async fn related_notes_for_note(
         Visibility::All => {
             sqlx::query_as::<Postgres, (String, String, f64)>(
                 r#"
-                SELECT documents.slug, documents.title,
-                       min(candidate.embedding <=> origin.embedding) AS distance
+                SELECT nn.slug, nn.title, min(nn.distance) AS distance
                 FROM note_chunks AS origin
-                JOIN note_chunks AS candidate ON candidate.note_id <> origin.note_id
-                JOIN documents ON documents.id = candidate.note_id
+                JOIN LATERAL (
+                    SELECT documents.id AS cand_id,
+                           documents.slug AS slug,
+                           documents.title AS title,
+                           (candidate.embedding <=> origin.embedding) AS distance
+                    FROM note_chunks AS candidate
+                    JOIN documents ON documents.id = candidate.note_id
+                    WHERE candidate.note_id <> origin.note_id
+                      AND candidate.embedding_provider = $2
+                      AND candidate.embedding_model = $3
+                    ORDER BY candidate.embedding <=> origin.embedding
+                    LIMIT $4
+                ) AS nn ON true
                 WHERE origin.note_id = $1
                   AND origin.embedding_provider = $2
                   AND origin.embedding_model = $3
-                  AND candidate.embedding_provider = $2
-                  AND candidate.embedding_model = $3
-                GROUP BY documents.id, documents.slug, documents.title
-                ORDER BY distance ASC, documents.slug ASC
-                LIMIT $4
+                GROUP BY nn.cand_id, nn.slug, nn.title
+                ORDER BY min(nn.distance) ASC, nn.slug ASC
+                LIMIT $5
                 "#,
             )
             .bind(origin_note_id)
             .bind(provider)
             .bind(model)
+            .bind(fanout)
             .bind(limit)
             .fetch_all(pool)
             .await?
