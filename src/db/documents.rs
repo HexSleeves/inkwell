@@ -3,7 +3,7 @@ use crate::domain::document::{
     AdjacentDoc, ArchiveMonth, Document, DocumentPatch, DocumentStatus, DocumentSummary,
     ListByTagOptions, ListOptions, NewDocument, SearchOptions, StatusFilter, TagCount,
 };
-use sqlx::{PgPool, Postgres, QueryBuilder};
+use sqlx::{AssertSqlSafe, PgPool, Postgres, QueryBuilder};
 use uuid::Uuid;
 
 const DOCUMENT_COLUMNS: &str = "id, slug, title, body_markdown, rendered_html, status, growth, tags, version, created_at, updated_at";
@@ -20,7 +20,7 @@ pub enum DbError {
 
 pub async fn create_document(pool: &PgPool, input: NewDocument) -> Result<Document, DbError> {
     let result = sqlx::query_as::<Postgres, Document>(
-        &format!(
+        AssertSqlSafe(format!(
             r#"
         INSERT INTO documents (slug, title, body_markdown, rendered_html, status, growth, tags, owner_id)
         VALUES (
@@ -31,7 +31,7 @@ pub async fn create_document(pool: &PgPool, input: NewDocument) -> Result<Docume
         )
         RETURNING {DOCUMENT_COLUMNS}
         "#
-        ),
+        )),
     )
     .bind(&input.slug)
     .bind(&input.title)
@@ -54,26 +54,26 @@ pub async fn get_document_by_slug(
 ) -> Result<Option<Document>, sqlx::Error> {
     match filter.status {
         Some(status) => {
-            sqlx::query_as::<Postgres, Document>(&format!(
+            sqlx::query_as::<Postgres, Document>(AssertSqlSafe(format!(
                 r#"
                 SELECT {DOCUMENT_COLUMNS}
                 FROM documents
                 WHERE slug = $1 AND status = $2
                 "#
-            ))
+            )))
             .bind(slug)
             .bind(status.as_str())
             .fetch_optional(pool)
             .await
         }
         None => {
-            sqlx::query_as::<Postgres, Document>(&format!(
+            sqlx::query_as::<Postgres, Document>(AssertSqlSafe(format!(
                 r#"
                 SELECT {DOCUMENT_COLUMNS}
                 FROM documents
                 WHERE slug = $1
                 "#
-            ))
+            )))
             .bind(slug)
             .fetch_optional(pool)
             .await
@@ -208,7 +208,7 @@ pub async fn update_document_by_slug(
         };
     }
 
-    let result = sqlx::query_as::<Postgres, Document>(&format!(
+    let result = sqlx::query_as::<Postgres, Document>(AssertSqlSafe(format!(
         r#"
         UPDATE documents
         SET title = COALESCE($2, title),
@@ -221,7 +221,7 @@ pub async fn update_document_by_slug(
         WHERE slug = $1 AND ($7::uuid IS NULL OR owner_id = $7)
         RETURNING {DOCUMENT_COLUMNS}
         "#
-    ))
+    )))
     .bind(slug)
     .bind(&patch.title)
     .bind(&patch.body_markdown)
@@ -273,7 +273,7 @@ pub async fn update_document_by_slug_if_version(
             .await;
     }
 
-    let result = sqlx::query_as::<Postgres, Document>(&format!(
+    let result = sqlx::query_as::<Postgres, Document>(AssertSqlSafe(format!(
         r#"
         UPDATE documents
         SET title = COALESCE($3, title),
@@ -286,7 +286,7 @@ pub async fn update_document_by_slug_if_version(
         WHERE slug = $1 AND version = $2 AND ($8::uuid IS NULL OR owner_id = $8)
         RETURNING {DOCUMENT_COLUMNS}
         "#
-    ))
+    )))
     .bind(slug)
     .bind(expected_version)
     .bind(&patch.title)
@@ -387,7 +387,7 @@ async fn rename_and_update(
         .execute(&mut *tx)
         .await?;
 
-    let updated = sqlx::query_as::<Postgres, Document>(&format!(
+    let updated = sqlx::query_as::<Postgres, Document>(AssertSqlSafe(format!(
         r#"
         UPDATE documents
         SET slug = $2,
@@ -401,7 +401,7 @@ async fn rename_and_update(
         WHERE id = $1
         RETURNING {DOCUMENT_COLUMNS}
         "#
-    ))
+    )))
     .bind(id)
     .bind(new_slug)
     .bind(&patch.title)
@@ -445,15 +445,17 @@ pub async fn resolve_alias_target(
                 WHERE a.old_slug = $1";
     match visibility {
         Visibility::Public => {
-            sqlx::query_scalar::<Postgres, String>(&format!("{base} AND d.status = 'published'"))
-                .bind(old_slug)
-                .fetch_optional(pool)
-                .await
+            sqlx::query_scalar::<Postgres, String>(AssertSqlSafe(format!(
+                "{base} AND d.status = 'published'"
+            )))
+            .bind(old_slug)
+            .fetch_optional(pool)
+            .await
         }
         Visibility::Owner(owner_id) => {
-            sqlx::query_scalar::<Postgres, String>(&format!(
+            sqlx::query_scalar::<Postgres, String>(AssertSqlSafe(format!(
                 "{base} AND (d.status = 'published' OR d.owner_id = $2)"
-            ))
+            )))
             .bind(old_slug)
             .bind(owner_id)
             .fetch_optional(pool)
@@ -477,14 +479,14 @@ pub async fn set_document_status(
     status: DocumentStatus,
     owner: Option<Uuid>,
 ) -> Result<Option<Document>, sqlx::Error> {
-    sqlx::query_as::<Postgres, Document>(&format!(
+    sqlx::query_as::<Postgres, Document>(AssertSqlSafe(format!(
         r#"
         UPDATE documents
         SET status = $2, version = version + 1, updated_at = now()
         WHERE slug = $1 AND ($3::uuid IS NULL OR owner_id = $3)
         RETURNING {DOCUMENT_COLUMNS}
         "#
-    ))
+    )))
     .bind(slug)
     .bind(status.as_str())
     .bind(owner)
@@ -757,30 +759,30 @@ pub async fn get_document_by_slug_vis(
 ) -> Result<Option<Document>, sqlx::Error> {
     match visibility {
         Visibility::Public => {
-            sqlx::query_as::<Postgres, Document>(&format!(
+            sqlx::query_as::<Postgres, Document>(AssertSqlSafe(format!(
                 r#"SELECT {DOCUMENT_COLUMNS}
                    FROM documents WHERE slug = $1 AND status = 'published'"#,
-            ))
+            )))
             .bind(slug)
             .fetch_optional(pool)
             .await
         }
         Visibility::Owner(owner_id) => {
-            sqlx::query_as::<Postgres, Document>(&format!(
+            sqlx::query_as::<Postgres, Document>(AssertSqlSafe(format!(
                 r#"SELECT {DOCUMENT_COLUMNS}
                    FROM documents
                    WHERE slug = $1 AND (status = 'published' OR owner_id = $2)"#,
-            ))
+            )))
             .bind(slug)
             .bind(owner_id)
             .fetch_optional(pool)
             .await
         }
         Visibility::All => {
-            sqlx::query_as::<Postgres, Document>(&format!(
+            sqlx::query_as::<Postgres, Document>(AssertSqlSafe(format!(
                 r#"SELECT {DOCUMENT_COLUMNS}
                    FROM documents WHERE slug = $1"#,
-            ))
+            )))
             .bind(slug)
             .fetch_optional(pool)
             .await
@@ -958,7 +960,7 @@ pub async fn list_documents_by_month(
     let Some((start, end)) = month_utc_range(year, month) else {
         return Ok(Vec::new());
     };
-    sqlx::query_as::<Postgres, Document>(&format!(
+    sqlx::query_as::<Postgres, Document>(AssertSqlSafe(format!(
         r#"
         SELECT {DOCUMENT_COLUMNS}
         FROM documents
@@ -968,7 +970,7 @@ pub async fn list_documents_by_month(
         ORDER BY created_at DESC, id DESC
         LIMIT $3 OFFSET $4
         "#
-    ))
+    )))
     .bind(start)
     .bind(end)
     .bind(limit as i64)
@@ -987,7 +989,7 @@ pub async fn list_documents_by_month_summary(
     let Some((start, end)) = month_utc_range(year, month) else {
         return Ok(Vec::new());
     };
-    sqlx::query_as::<Postgres, DocumentSummary>(&format!(
+    sqlx::query_as::<Postgres, DocumentSummary>(AssertSqlSafe(format!(
         r#"
         SELECT {DOCUMENT_SUMMARY_COLUMNS}
         FROM documents
@@ -997,7 +999,7 @@ pub async fn list_documents_by_month_summary(
         ORDER BY created_at DESC, id DESC
         LIMIT $3 OFFSET $4
         "#
-    ))
+    )))
     .bind(start)
     .bind(end)
     .bind(limit as i64)
