@@ -60,6 +60,10 @@ pub struct HeadMeta<'a> {
     pub og_type: &'a str,
     pub json_ld: Option<serde_json::Value>,
     pub csp_nonce: Option<&'a str>,
+    /// Active nav item key: "dashboard" | "notes" | "tags" | "graph" | "settings"
+    pub nav_current: Option<&'a str>,
+    /// When true, `.site-main` expands beyond the default 48rem max-width.
+    pub wide_layout: bool,
 }
 
 pub fn normalize_site_url(site_url: Option<&str>) -> String {
@@ -130,7 +134,13 @@ pub(crate) const STYLES: &str = r#"
     background: rgb(251 250 246 / 0.85);
     backdrop-filter: blur(12px);
   }
-  .site-header-inner, .site-main, .site-footer {
+  .site-header-inner {
+    width: min(100%, 1280px);
+    margin: 0 auto;
+    padding-left: 1.25rem;
+    padding-right: 1.25rem;
+  }
+  .site-main, .site-footer {
     width: min(100%, 48rem);
     margin: 0 auto;
     padding-left: 1.25rem;
@@ -355,76 +365,192 @@ pub(crate) const STYLES: &str = r#"
     .editor-grid { grid-template-columns: 1fr 1fr; align-items: start; }
     .preview { border-top: none; border-left: 1px solid rgb(224 232 224); padding-top: 0; padding-left: 2rem; }
   }
+  /* Wide layout: tags graph page overrides the default 48rem cap */
+  .site-main.wide-layout {
+    width: min(100%, 1280px);
+  }
+  /* Tags page header area */
+  .tags-page-header { margin-bottom: 1.5rem; }
+  .tags-page-header h1 { margin-bottom: 0.25rem; }
+  .accent-dot { color: rgb(120 132 123); font-weight: 400; margin: 0 0.4rem; }
+  .accent-title { color: rgb(197 107 71); font-weight: 800; }
+  .tags-subtitle { margin: 0; color: rgb(120 132 123); font-size: 0.95rem; }
   /* Tag graph split-panel layout */
   .tag-graph-layout {
     display: flex;
-    gap: 1.5rem;
+    gap: 2rem;
     align-items: flex-start;
-    min-height: 420px;
+    min-height: 500px;
   }
   .tag-graph-panel {
-    flex: 0 0 60%;
+    flex: 0 0 62%;
     min-width: 0;
   }
-  .tag-graph-panel svg {
+  .tag-graph-svg {
     width: 100%;
     height: auto;
     display: block;
-    border-radius: 1rem;
-    background: rgb(255 255 255);
-    border: 1px solid rgb(224 232 224);
   }
-  .tag-node circle { cursor: pointer; transition: fill 0.15s; }
-  .tag-node circle:hover { fill: rgb(197 107 71); }
-  .tag-node text {
+  /* SVG node colors */
+  .node-center { fill: rgb(47 93 69); cursor: pointer; transition: fill 0.15s; }
+  .node-center:hover { fill: rgb(197 107 71); }
+  .node-satellite { fill: rgb(155 179 154); cursor: pointer; transition: fill 0.15s; }
+  .node-satellite:hover { fill: rgb(197 107 71); }
+  .orbit-ring { stroke: rgb(180 200 180); stroke-width: 1.5; fill: none; }
+  .tag-node .node-label {
     font-family: inherit;
-    font-size: 11px;
+    font-size: 13px;
     font-weight: 700;
     fill: rgb(255 255 255);
     pointer-events: none;
     text-anchor: middle;
-    dominant-baseline: central;
+    dominant-baseline: auto;
   }
-  .tag-edge { stroke: rgb(168 192 170); stroke-opacity: 0.5; }
+  .tag-node .node-count {
+    font-family: inherit;
+    font-size: 10px;
+    font-weight: 500;
+    fill: rgb(255 255 255);
+    pointer-events: none;
+    text-anchor: middle;
+    dominant-baseline: auto;
+    opacity: 0.85;
+  }
+  .tag-edge { stroke: rgb(168 192 170); stroke-opacity: 0.4; fill: none; }
+  /* Sidebar */
   .tag-sidebar-panel {
-    flex: 0 0 40%;
+    flex: 0 0 38%;
     min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+  }
+  .tag-search-wrapper {
+    position: relative;
+    display: flex;
+    align-items: center;
+  }
+  .tag-search-wrapper .search-icon {
+    position: absolute;
+    left: 0.75rem;
+    width: 1rem;
+    height: 1rem;
+    color: rgb(150 162 152);
+    pointer-events: none;
+    flex: none;
   }
   #tag-filter {
     width: 100%;
-    padding: 0.55rem 0.75rem;
+    padding: 0.6rem 0.75rem 0.6rem 2.4rem;
     font-size: 0.9rem;
     font-family: inherit;
-    border: 1px solid rgb(206 220 208);
+    border: 1px solid rgb(210 224 212);
     border-radius: 0.75rem;
-    background: #fff;
+    background: rgb(255 255 255);
     color: inherit;
-    margin-bottom: 0.75rem;
+  }
+  #tag-filter:focus { outline: 2px solid rgb(168 192 170); outline-offset: 1px; border-color: rgb(168 192 170); }
+  .tag-list-header {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+  }
+  .tag-list-title {
+    font-size: 0.95rem;
+    font-weight: 700;
+    color: rgb(54 64 58);
+    white-space: nowrap;
+  }
+  .tag-list-divider {
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+    flex: 1;
+  }
+  .divider-line {
+    flex: 1;
+    height: 1px;
+    background: rgb(210 224 212);
+  }
+  .divider-plant {
+    width: 1.1rem;
+    height: 1.1rem;
+    color: rgb(197 107 71);
+    flex: none;
   }
   #tag-sidebar-list {
     list-style: none;
     padding: 0;
     margin: 0;
-    max-height: 420px;
+    max-height: 440px;
     overflow-y: auto;
-    display: grid;
-    gap: 0.2rem;
+    display: flex;
+    flex-direction: column;
   }
   #tag-sidebar-list li { margin: 0; }
   #tag-sidebar-list a {
     display: flex;
-    justify-content: space-between;
     align-items: center;
-    padding: 0.35rem 0.6rem;
+    gap: 0.6rem;
+    padding: 0.55rem 0.5rem;
     border-radius: 0.5rem;
     text-decoration: none;
-    color: rgb(47 93 69);
+    color: rgb(54 64 58);
     font-size: 0.875rem;
-    font-weight: 600;
+    font-weight: 500;
+    border-bottom: 1px solid rgb(234 240 234);
   }
-  #tag-sidebar-list a:hover { background: rgb(234 241 234); color: rgb(197 107 71); }
-  #tag-sidebar-list .count { color: rgb(120 132 123); font-weight: 400; }
+  #tag-sidebar-list a:hover { background: rgb(242 247 242); }
+  .tag-item-icon {
+    width: 1rem;
+    height: 1rem;
+    color: rgb(120 132 123);
+    flex: none;
+  }
+  #tag-sidebar-list .tag-label { flex: 1; min-width: 0; }
+  #tag-sidebar-list .count {
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: rgb(61 110 78);
+    background: rgb(228 240 230);
+    border: 1px solid rgb(198 222 202);
+    border-radius: 999px;
+    padding: 0.1rem 0.5rem;
+    flex: none;
+  }
+  .tag-sidebar-footer {
+    display: flex;
+    align-items: center;
+    gap: 0.85rem;
+    padding-top: 0.75rem;
+    margin-top: auto;
+  }
+  .pot-icon { width: 3rem; height: 3rem; flex: none; }
+  .sidebar-quote {
+    font-style: italic;
+    color: rgb(197 107 71);
+    font-size: 0.9rem;
+    line-height: 1.5;
+    margin: 0;
+  }
+  /* Full nav header */
+  .site-nav-group {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    flex: 1;
+    justify-content: center;
+  }
+  .site-nav--active {
+    background: rgb(47 93 69) !important;
+    color: rgb(255 255 255) !important;
+    border-color: rgb(47 93 69) !important;
+  }
+  .site-nav--active .ico { color: rgb(200 220 202) !important; }
+  .site-nav--active:hover { background: rgb(38 77 57) !important; border-color: rgb(38 77 57) !important; }
+  .site-header-end { display: flex; align-items: center; }
   @media (max-width: 639px) {
+    .site-nav-group { display: none; }
     .tag-graph-layout { flex-direction: column; }
     .tag-graph-panel, .tag-sidebar-panel { flex: none; width: 100%; }
     #tag-sidebar-list { max-height: 240px; }
@@ -436,6 +562,18 @@ pub(crate) const LEAF_ICON: &str = r##"<svg class="ico" width="20" height="20" v
 
 /// Tag glyph for the nav pill.
 pub(crate) const TAG_ICON: &str = r##"<svg class="ico" width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 4.5h7L20 13l-7 7-9-9V4.5Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><circle cx="8" cy="8.5" r="1.5" fill="currentColor"/></svg>"##;
+
+/// Dashboard (house) glyph for the nav pill.
+pub(crate) const DASHBOARD_ICON: &str = r##"<svg class="ico" width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M3 12L12 4l9 8" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/><path d="M5 10v8a1 1 0 0 0 1 1h4v-4h4v4h4a1 1 0 0 0 1-1v-8" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>"##;
+
+/// Notes (document) glyph for the nav pill.
+pub(crate) const NOTES_ICON: &str = r##"<svg class="ico" width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="4" y="3" width="16" height="18" rx="2" stroke="currentColor" stroke-width="1.7"/><path d="M8 8h8M8 12h8M8 16h5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>"##;
+
+/// Graph (nodes-connected) glyph for the nav pill.
+pub(crate) const GRAPH_ICON: &str = r##"<svg class="ico" width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="2.5" fill="currentColor"/><circle cx="5" cy="7" r="2" fill="currentColor"/><circle cx="19" cy="7" r="2" fill="currentColor"/><circle cx="5" cy="17" r="2" fill="currentColor"/><circle cx="19" cy="17" r="2" fill="currentColor"/><path d="M10 11L7 8.5M14 11l2 -1.5M10 13l-2.5 2.5M14 13l2.5 2.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>"##;
+
+/// Settings (gear) glyph for the nav pill.
+pub(crate) const SETTINGS_ICON: &str = r##"<svg class="ico" width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.7"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M17.66 6.34l-1.41 1.41M6.34 17.66l-1.41 1.41" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>"##;
 
 /// Small sprout glyph for the growth/maturity chip.
 pub(crate) const SPROUT_ICON: &str = r##"<svg class="ico" width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 21v-8" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/><path d="M12 14c0-3.6-2.7-5.6-6.5-5.6C5.5 12 8.2 14 12 14Z" fill="currentColor"/><path d="M12 12.5c0-3 2.2-4.6 5.8-4.6C17.8 11 15.6 12.5 12 12.5Z" fill="currentColor"/></svg>"##;
@@ -524,6 +662,14 @@ pub fn render_page(site: &SiteMeta<'_>, meta: HeadMeta<'_>, main: &str) -> Strin
         })
         .unwrap_or_default();
 
+    let nav_current = meta.nav_current.unwrap_or("");
+    let main_class = if meta.wide_layout { "site-main wide-layout" } else { "site-main" };
+
+    let nav_item = |key: &str, href: &str, icon: &str, label: &str| {
+        let active = if nav_current == key { " site-nav--active" } else { "" };
+        format!(r#"<a class="site-nav{active}" href="{href}">{icon}{label}</a>"#)
+    };
+
     format!(
         r#"<!doctype html>
 <html lang="en">
@@ -537,10 +683,17 @@ pub fn render_page(site: &SiteMeta<'_>, meta: HeadMeta<'_>, main: &str) -> Strin
       <header class="site-header">
         <div class="site-header-inner">
           <a class="site-brand" href="/">{}<span class="brand-name">{}</span></a>
-          <a class="site-nav" href="/tags">{}Tags</a>
+          <nav class="site-nav-group" aria-label="Main navigation">
+            {}
+            {}
+            {}
+            {}
+            {}
+          </nav>
+          <div class="site-header-end"></div>
         </div>
       </header>
-      <main class="site-main">
+      <main class="{}">
 {}
       </main>
       <footer class="site-footer">Published with {}.</footer>
@@ -553,7 +706,12 @@ pub fn render_page(site: &SiteMeta<'_>, meta: HeadMeta<'_>, main: &str) -> Strin
         extra_css,
         LEAF_ICON,
         escape_html(site.name),
-        TAG_ICON,
+        nav_item("dashboard", "/", DASHBOARD_ICON, "Dashboard"),
+        nav_item("notes", "/", NOTES_ICON, "Notes"),
+        nav_item("tags", "/tags", TAG_ICON, "Tags"),
+        nav_item("graph", "/graph", GRAPH_ICON, "Graph"),
+        nav_item("settings", "/settings", SETTINGS_ICON, "Settings"),
+        main_class,
         main,
         escape_html(site.name),
         BOTANICAL_BAND

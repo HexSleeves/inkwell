@@ -132,6 +132,8 @@ pub fn render_media_upload_page(
             og_type: "website",
             json_ld: None,
             csp_nonce,
+            nav_current: None,
+            wide_layout: false,
         },
         &main,
     )

@@ -19,28 +19,48 @@ pub fn render_tag_index_page(
     site: &SiteMeta<'_>,
 ) -> String {
     let main = if tags.is_empty() {
-        r#"<h1>Tags</h1>
+        r#"<div class="tags-page-header">
+          <h1>Tags <span class="accent-dot">·</span> <span class="accent-title">Graph View</span></h1>
+          <p class="tags-subtitle">Visualize how your tags connect.</p>
+        </div>
         <p class="empty">No tags yet.</p>"#
             .to_string()
     } else {
-        let max_count = tags.iter().map(|t| t.count).max().unwrap_or(1);
+        let _max_count = tags.iter().map(|t| t.count).max().unwrap_or(1);
 
-        // Lay out the nodes: the most-used tag (tags[0], the DB already sorts by
-        // count desc) anchors the center; every other tag fans out evenly around
-        // a circle so edges stay readable. Positions feed both nodes and edges.
+        // SVG canvas: 600×600, center at (300,300), satellite orbit radius 195.
+        // tags[0] (most-used, DB sorts count desc) anchors the center.
+        // All other tags fan out evenly on the orbit ring starting from the top.
+        const CX: f64 = 300.0;
+        const CY: f64 = 300.0;
+        const ORBIT_R: f64 = 195.0;
+        const CENTER_R: f64 = 62.0;
+
         let mut positions: HashMap<&str, (f64, f64)> = HashMap::new();
-        positions.insert(tags[0].tag.as_str(), (250.0, 250.0));
+        positions.insert(tags[0].tag.as_str(), (CX, CY));
+
         let n_other = tags.len() - 1;
-        for (i, tag) in tags[1..].iter().enumerate() {
-            let angle = 2.0 * PI * (i as f64) / (n_other as f64);
-            let x = 250.0 + 200.0 * angle.cos();
-            let y = 250.0 + 200.0 * angle.sin();
-            positions.insert(tag.tag.as_str(), (x, y));
+        if n_other > 0 {
+            for (i, tag) in tags[1..].iter().enumerate() {
+                // Start from top (−π/2) going clockwise for natural visual flow.
+                let angle =
+                    -std::f64::consts::FRAC_PI_2 + 2.0 * PI * (i as f64) / (n_other as f64);
+                let x = CX + ORBIT_R * angle.cos();
+                let y = CY + ORBIT_R * angle.sin();
+                positions.insert(tag.tag.as_str(), (x, y));
+            }
         }
 
-        // Edges first so they paint behind the nodes. Stroke-width scales from
-        // 1.0 to 3.0 with the pair's co-occurrence count. A co-occurrence whose
-        // tags are missing from the layout is skipped rather than panicking.
+        // Orbital ring behind everything so edges and nodes paint on top.
+        let ring = if n_other > 0 {
+            format!(
+                r#"<circle class="orbit-ring" cx="{CX:.0}" cy="{CY:.0}" r="{ORBIT_R:.0}"/>"#
+            )
+        } else {
+            String::new()
+        };
+
+        // Edges scaled 1.0–3.0 in stroke-width. Missing positions skipped.
         let max_cooccurrence = cooccurrences.iter().map(|c| c.count).max().unwrap_or(1);
         let edges = cooccurrences
             .iter()
@@ -55,19 +75,32 @@ pub fn render_tag_index_page(
             .collect::<Vec<_>>()
             .join("\n");
 
-        // Nodes: radius scales linearly from 12.0 to 28.0 with the tag's usage.
-        // The visible label is truncated to 10 chars so it stays inside the disc.
+        // Satellite radius: 24–38px based on count among non-center tags.
+        let max_satellite_count = tags[1..].iter().map(|t| t.count).max().unwrap_or(1);
+
         let nodes = tags
             .iter()
-            .map(|tag| {
+            .enumerate()
+            .map(|(idx, tag)| {
                 let (x, y) = positions[tag.tag.as_str()];
-                let radius = 12.0 + 16.0 * (tag.count as f64 / max_count as f64);
+                let is_center = idx == 0;
+                let radius = if is_center {
+                    CENTER_R
+                } else {
+                    24.0 + 14.0 * (tag.count as f64 / max_satellite_count as f64)
+                };
                 let label = escape_html(truncate_on_char_boundary(&tag.tag, 10));
+                let note_word = if tag.count == 1 { "note" } else { "notes" };
+                let node_class = if is_center { "node-center" } else { "node-satellite" };
+                // Offset text up/down from center: name slightly above, count below.
+                let label_y = y - if is_center { 8.0 } else { 6.0 };
+                let count_y = y + if is_center { 12.0 } else { 9.0 };
                 format!(
                     r#"<a href="/tags/{encoded}" class="tag-node" data-tag="{escaped}">
             <title>{escaped} ({count})</title>
-            <circle cx="{x:.1}" cy="{y:.1}" r="{radius:.1}" fill="rgb(47 93 69)"/>
-            <text x="{x:.1}" y="{y:.1}">{label}</text>
+            <circle class="{node_class}" cx="{x:.1}" cy="{y:.1}" r="{radius:.1}"/>
+            <text x="{x:.1}" y="{label_y:.1}" class="node-label">{label}</text>
+            <text x="{x:.1}" y="{count_y:.1}" class="node-count">{count} {note_word}</text>
           </a>"#,
                     encoded = urlencoding::encode(&tag.tag),
                     escaped = escape_html(&tag.tag),
@@ -78,37 +111,67 @@ pub fn render_tag_index_page(
             .join("\n");
 
         let svg = format!(
-            r#"<svg viewBox="0 0 500 500">
+            r#"<svg class="tag-graph-svg" viewBox="0 0 600 600">
+{ring}
 {edges}
 {nodes}
           </svg>"#
         );
 
-        // Sidebar: the same tags (already count-desc) as a filterable list. The
-        // lowercase data-tag attribute is what the inline filter matches against.
+        // Sidebar items: tag-icon + name + pill count badge.
+        let tag_item_icon = r##"<svg class="tag-item-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 4.5h7L20 13l-7 7-9-9V4.5Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><circle cx="8" cy="8.5" r="1.5" fill="currentColor"/></svg>"##;
+
         let sidebar_items = tags
             .iter()
             .map(|tag| {
                 format!(
-                    r#"<li data-tag="{escaped}"><a href="/tags/{encoded}">{escaped} <span class="count">{count}</span></a></li>"#,
+                    r#"<li data-tag="{escaped}"><a href="/tags/{encoded}">{icon}<span class="tag-label">{escaped}</span><span class="count">{count}</span></a></li>"#,
                     escaped = escape_html(&tag.tag),
                     encoded = urlencoding::encode(&tag.tag),
+                    icon = tag_item_icon,
                     count = tag.count,
                 )
             })
             .collect::<Vec<_>>()
             .join("\n");
 
+        let search_icon = r##"<svg class="search-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="11" cy="11" r="8" stroke="currentColor" stroke-width="1.7"/><path d="m21 21-4.35-4.35" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>"##;
+
+        let divider_icon = r##"<svg class="divider-plant" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 21V8" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><path d="M12 14c0-3.6-2.7-5.6-6.5-5.6C5.5 12 8.2 14 12 14Z" fill="currentColor"/><path d="M12 11c0-3 2.2-4.6 5.8-4.6C17.8 9.4 15.6 11 12 11Z" fill="currentColor"/></svg>"##;
+
+        let pot_icon = r##"<svg class="pot-icon" viewBox="0 0 64 64" fill="none" aria-hidden="true"><path d="M32 26v-8" stroke="rgb(91 138 104)" stroke-width="2" stroke-linecap="round"/><path d="M32 20c0-5.5-4-8.5-10-8.5C22 16.5 26 20 32 20Z" fill="rgb(139 185 148)"/><path d="M32 17c0-4.5 3.5-7 9-7C41 14 37.5 17 32 17Z" fill="rgb(100 155 115)"/><path d="M20 32h24l-2.5 18h-19L20 32Z" fill="rgb(197 107 71)"/><path d="M18 30h28a1 1 0 0 1 0 4H18a1 1 0 0 1 0-4Z" fill="rgb(176 90 56)"/></svg>"##;
+
         let nonce = escape_html(csp_nonce);
+
         format!(
-            r#"<h1>Tags</h1>
+            r#"<div class="tags-page-header">
+          <div>
+            <h1>Tags <span class="accent-dot">·</span> <span class="accent-title">Graph View</span></h1>
+            <p class="tags-subtitle">Visualize how your tags connect.</p>
+          </div>
+        </div>
         <div class="tag-graph-layout">
           <div class="tag-graph-panel">{svg}</div>
           <div class="tag-sidebar-panel">
-            <input id="tag-filter" type="search" placeholder="Filter tags…" aria-label="Filter tags" autocomplete="off" />
+            <div class="tag-search-wrapper">
+              {search_icon}
+              <input id="tag-filter" type="search" placeholder="Search tags…" aria-label="Search tags" autocomplete="off" />
+            </div>
+            <div class="tag-list-header">
+              <span class="tag-list-title">All Tags</span>
+              <div class="tag-list-divider">
+                <span class="divider-line"></span>
+                {divider_icon}
+                <span class="divider-line"></span>
+              </div>
+            </div>
             <ul id="tag-sidebar-list">
 {sidebar_items}
             </ul>
+            <div class="tag-sidebar-footer">
+              {pot_icon}
+              <p class="sidebar-quote">&ldquo;Cultivate connections.<br>Grow knowledge.&rdquo;</p>
+            </div>
           </div>
         </div>
         <script nonce="{nonce}">
@@ -138,6 +201,8 @@ pub fn render_tag_index_page(
             og_type: "website",
             json_ld: None,
             csp_nonce: Some(csp_nonce),
+            nav_current: Some("tags"),
+            wide_layout: true,
         },
         &main,
     )
@@ -206,6 +271,8 @@ pub fn render_tag_page(
             og_type: "website",
             json_ld: None,
             csp_nonce: None,
+            nav_current: Some("tags"),
+            wide_layout: false,
         },
         &format!(
             "<h1>Tagged &ldquo;{}&rdquo;</h1>\n        {}{}",
@@ -257,10 +324,13 @@ mod tests {
         assert!(html.contains(r#"<div class="tag-graph-layout">"#));
         assert!(html.contains(r#"<div class="tag-graph-panel">"#));
         assert!(html.contains(r#"<div class="tag-sidebar-panel">"#));
-        assert!(html.contains(r#"<svg viewBox="0 0 500 500">"#));
+        assert!(html.contains(r#"<svg class="tag-graph-svg" viewBox="0 0 600 600">"#));
 
-        // The most-used tag anchors the graph center.
-        assert!(html.contains(r#"<circle cx="250.0" cy="250.0" r="28.0" fill="rgb(47 93 69)"/>"#));
+        // Orbital ring present when there are satellites.
+        assert!(html.contains(r#"class="orbit-ring""#));
+
+        // Center node at (300, 300) with fixed 62px radius.
+        assert!(html.contains(r#"<circle class="node-center" cx="300.0" cy="300.0" r="62.0"/>"#));
 
         // Node link + accessible title for a tag.
         assert!(html.contains(r#"<a href="/tags/rust" class="tag-node" data-tag="rust">"#));
@@ -269,12 +339,18 @@ mod tests {
         // An edge is rendered for the co-occurring pair.
         assert!(html.contains(r#"<line class="tag-edge""#));
 
-        // Sidebar filter input + list items.
+        // Sidebar: search input, list, new structure.
         assert!(html.contains(r#"<input id="tag-filter" type="search""#));
         assert!(html.contains(r#"<ul id="tag-sidebar-list">"#));
-        assert!(html.contains(
-            r#"<li data-tag="rust"><a href="/tags/rust">rust <span class="count">5</span></a></li>"#
-        ));
+        assert!(html.contains(r#"data-tag="rust""#));
+        assert!(html.contains(r#"href="/tags/rust""#));
+        assert!(html.contains(r#"<span class="count">5</span>"#));
+
+        // Page title with accent.
+        assert!(html.contains(r#"<span class="accent-title">Graph View</span>"#));
+
+        // Footer quote.
+        assert!(html.contains("Cultivate connections"));
     }
 
     #[test]
