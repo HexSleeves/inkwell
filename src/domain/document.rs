@@ -186,6 +186,13 @@ pub struct TagCount {
     pub count: i64,
 }
 
+#[derive(Clone, Debug, Serialize, sqlx::FromRow)]
+pub struct TagCooccurrence {
+    pub tag1: String,
+    pub tag2: String,
+    pub count: i64,
+}
+
 /// A year/month bucket of published documents, returned by `list_archive_months`.
 #[derive(Clone, Debug, sqlx::FromRow)]
 pub struct ArchiveMonth {
