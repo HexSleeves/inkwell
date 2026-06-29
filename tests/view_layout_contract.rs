@@ -84,6 +84,8 @@ fn render_page_emits_valid_html_attributes() {
             og_type: "website",
             json_ld: None,
             csp_nonce: None,
+            nav_current: None,
+            wide_layout: false,
         },
         "<p>Body</p>",
     );
@@ -121,6 +123,8 @@ fn render_page_omits_tailwind_browser_build() {
             og_type: "website",
             json_ld: None,
             csp_nonce: None,
+            nav_current: None,
+            wide_layout: false,
         },
         "<p>Body</p>",
     );
@@ -148,6 +152,8 @@ fn render_page_allows_json_ld_with_csp_nonce_and_without_tailwind_runtime() {
                 "name": "Inkwell"
             })),
             csp_nonce: Some("nonce123"),
+            nav_current: None,
+            wide_layout: false,
         },
         "<p>Body</p>",
     );
@@ -282,6 +288,8 @@ fn render_page_uses_configured_site_name_in_brand_and_og_site_name() {
             og_type: "article",
             json_ld: None,
             csp_nonce: None,
+            nav_current: None,
+            wide_layout: false,
         },
         "<p>Body</p>",
     );
@@ -315,6 +323,8 @@ fn render_page_defaults_to_inkwell_when_no_site_name_configured() {
             og_type: "website",
             json_ld: None,
             csp_nonce: None,
+            nav_current: None,
+            wide_layout: false,
         },
         "<p>Body</p>",
     );
@@ -339,6 +349,8 @@ fn render_page_injects_custom_css_link_when_url_is_set() {
             og_type: "website",
             json_ld: None,
             csp_nonce: None,
+            nav_current: None,
+            wide_layout: false,
         },
         "<p>Body</p>",
     );
@@ -360,6 +372,8 @@ fn render_page_omits_extra_stylesheet_when_custom_css_url_is_absent() {
             og_type: "website",
             json_ld: None,
             csp_nonce: None,
+            nav_current: None,
+            wide_layout: false,
         },
         "<p>Body</p>",
     );

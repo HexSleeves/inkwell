@@ -73,6 +73,8 @@ pub fn render_document_page(
                 site.author,
             )),
             csp_nonce: Some(csp_nonce),
+            nav_current: Some("notes"),
+            wide_layout: false,
         },
         &main,
     )
@@ -204,6 +206,8 @@ pub fn render_not_found_page(site_url: Option<&str>) -> String {
             og_type: "website",
             json_ld: None,
             csp_nonce: None,
+            nav_current: None,
+            wide_layout: false,
         },
         r#"<h1>Not found</h1>
         <p>That page does not exist. <a href="/">Back to the index.</a></p>"#,

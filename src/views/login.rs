@@ -112,6 +112,8 @@ pub fn render_login_page(site: &SiteMeta<'_>, csp_nonce: Option<&str>, logged_in
             og_type: "website",
             json_ld: None,
             csp_nonce,
+            nav_current: None,
+            wide_layout: false,
         },
         &main,
     )

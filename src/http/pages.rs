@@ -155,15 +155,29 @@ async fn resolve_snippet_links(
     }
 }
 
-pub async fn tags_index(State(state): State<AppState>, headers: HeaderMap) -> Response {
+pub async fn tags_index(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Extension(csp_nonce): Extension<CspNonce>,
+) -> Response {
     match documents::list_published_tags(&state.pool).await {
         Ok(tags) => {
+            // Co-occurrence edges are a graph nicety, not load-bearing: a query
+            // failure degrades to an empty Vec (a node-only graph) rather than
+            // 500-ing the page, mirroring the backlinks panel on the note page.
+            let cooccurrences = match documents::list_tag_cooccurrences(&state.pool).await {
+                Ok(cooccurrences) => cooccurrences,
+                Err(error) => {
+                    tracing::warn!(%error, "tag co-occurrence query failed; rendering the tag graph without edges");
+                    Vec::new()
+                }
+            };
             let site = SiteMeta::from_config(&state.config);
             cache::html_response(
                 &headers,
                 "tags-index",
                 StatusCode::OK,
-                render_tag_index_page(&tags, &site),
+                render_tag_index_page(&tags, &cooccurrences, csp_nonce.as_str(), &site),
             )
         }
         Err(_) => error_page(&state),

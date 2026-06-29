@@ -1,7 +1,8 @@
 use crate::db::links::Visibility;
 use crate::domain::document::{
     AdjacentDoc, ArchiveMonth, Document, DocumentPatch, DocumentStatus, DocumentSummary,
-    ListByTagOptions, ListOptions, NewDocument, SearchOptions, StatusFilter, TagCount,
+    ListByTagOptions, ListOptions, NewDocument, SearchOptions, StatusFilter, TagCooccurrence,
+    TagCount,
 };
 use sqlx::{AssertSqlSafe, PgPool, Postgres, QueryBuilder};
 use uuid::Uuid;
@@ -604,6 +605,23 @@ pub async fn list_published_tags(pool: &PgPool) -> Result<Vec<TagCount>, sqlx::E
         WHERE status = 'published'
         GROUP BY tag
         ORDER BY count DESC, tag ASC
+        "#,
+    )
+    .fetch_all(pool)
+    .await
+}
+
+pub async fn list_tag_cooccurrences(pool: &PgPool) -> Result<Vec<TagCooccurrence>, sqlx::Error> {
+    sqlx::query_as::<Postgres, TagCooccurrence>(
+        r#"
+        SELECT t1.tag AS tag1, t2.tag AS tag2, count(*)::bigint AS count
+        FROM documents
+        CROSS JOIN LATERAL unnest(tags) AS t1(tag)
+        CROSS JOIN LATERAL unnest(tags) AS t2(tag)
+        WHERE status = 'published'
+          AND t1.tag < t2.tag
+        GROUP BY t1.tag, t2.tag
+        ORDER BY count DESC
         "#,
     )
     .fetch_all(pool)
