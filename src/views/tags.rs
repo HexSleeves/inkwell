@@ -43,8 +43,7 @@ pub fn render_tag_index_page(
         if n_other > 0 {
             for (i, tag) in tags[1..].iter().enumerate() {
                 // Start from top (−π/2) going clockwise for natural visual flow.
-                let angle =
-                    -std::f64::consts::FRAC_PI_2 + 2.0 * PI * (i as f64) / (n_other as f64);
+                let angle = -std::f64::consts::FRAC_PI_2 + 2.0 * PI * (i as f64) / (n_other as f64);
                 let x = CX + ORBIT_R * angle.cos();
                 let y = CY + ORBIT_R * angle.sin();
                 positions.insert(tag.tag.as_str(), (x, y));
@@ -53,9 +52,7 @@ pub fn render_tag_index_page(
 
         // Orbital ring behind everything so edges and nodes paint on top.
         let ring = if n_other > 0 {
-            format!(
-                r#"<circle class="orbit-ring" cx="{CX:.0}" cy="{CY:.0}" r="{ORBIT_R:.0}"/>"#
-            )
+            format!(r#"<circle class="orbit-ring" cx="{CX:.0}" cy="{CY:.0}" r="{ORBIT_R:.0}"/>"#)
         } else {
             String::new()
         };
@@ -91,7 +88,11 @@ pub fn render_tag_index_page(
                 };
                 let label = escape_html(truncate_on_char_boundary(&tag.tag, 10));
                 let note_word = if tag.count == 1 { "note" } else { "notes" };
-                let node_class = if is_center { "node-center" } else { "node-satellite" };
+                let node_class = if is_center {
+                    "node-center"
+                } else {
+                    "node-satellite"
+                };
                 // Offset text up/down from center: name slightly above, count below.
                 let label_y = y - if is_center { 8.0 } else { 6.0 };
                 let count_y = y + if is_center { 12.0 } else { 9.0 };

@@ -663,10 +663,18 @@ pub fn render_page(site: &SiteMeta<'_>, meta: HeadMeta<'_>, main: &str) -> Strin
         .unwrap_or_default();
 
     let nav_current = meta.nav_current.unwrap_or("");
-    let main_class = if meta.wide_layout { "site-main wide-layout" } else { "site-main" };
+    let main_class = if meta.wide_layout {
+        "site-main wide-layout"
+    } else {
+        "site-main"
+    };
 
     let nav_item = |key: &str, href: &str, icon: &str, label: &str| {
-        let active = if nav_current == key { " site-nav--active" } else { "" };
+        let active = if nav_current == key {
+            " site-nav--active"
+        } else {
+            ""
+        };
         format!(r#"<a class="site-nav{active}" href="{href}">{icon}{label}</a>"#)
     };
 
