@@ -54,7 +54,7 @@ impl Visibility {
     /// Call right after the builder has pushed `WHERE ` or `... AND `.
     /// Emits unqualified column names (`status`, `owner_id`); only use at call
     /// sites where `documents` is the sole table providing those columns.
-    pub fn push_where(&self, qb: &mut QueryBuilder<'_, Postgres>) {
+    pub fn push_where(&self, qb: &mut QueryBuilder<Postgres>) {
         match self {
             Visibility::Public => {
                 qb.push("status = 'published'");

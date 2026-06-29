@@ -47,8 +47,8 @@ urlencoding = "2"
 uuid = { version = "1", features = ["serde", "v4"] }
 
 [dependencies.sqlx]
-version  = "0.8"
-features = ["runtime-tokio-rustls", "postgres", "uuid", "time", "migrate"]
+version  = "0.9"
+features = ["runtime-tokio", "tls-rustls-ring", "postgres", "uuid", "time", "migrate"]
 
 [dev-dependencies]
 pretty_assertions = "1"
