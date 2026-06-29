@@ -105,7 +105,7 @@ pub fn render_tag_index_page(
         <div class="tag-graph-layout">
           <div class="tag-graph-panel">{svg}</div>
           <div class="tag-sidebar-panel">
-            <input id="tag-filter" type="search" placeholder="Filter tags…" autocomplete="off" />
+            <input id="tag-filter" type="search" placeholder="Filter tags…" aria-label="Filter tags" autocomplete="off" />
             <ul id="tag-sidebar-list">
 {sidebar_items}
             </ul>
@@ -120,7 +120,8 @@ pub fn render_tag_index_page(
     var q = inp.value.trim().toLowerCase();
     var items = list.querySelectorAll('li');
     items.forEach(function(li){{
-      li.style.display = !q || li.dataset.tag.indexOf(q) !== -1 ? '' : 'none';
+      var tag = (li.dataset.tag || '').toLowerCase();
+      li.style.display = !q || tag.indexOf(q) !== -1 ? '' : 'none';
     }});
   }});
 }})();
