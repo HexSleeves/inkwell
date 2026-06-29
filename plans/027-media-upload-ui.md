@@ -306,7 +306,7 @@ In `src/http/router.rs`, inside the existing `if browser_login { … }` block, a
    - `None` nonce emits a bare `<script>`.
 2. **Router flag tests** in `tests/browser_login.rs` (use the existing `browser_login_router(pool)` helper for flag-on, and the flag-off router for 404):
    - flag ON: `GET /media/new` → `StatusCode::OK`, body contains `Upload media`.
-   - flag OFF: `GET /media/new` → `StatusCode::NOT_FOUND` (route not registered; falls through to `/{slug}`).
+   - flag OFF: `GET /media/new` → `StatusCode::BAD_REQUEST` (400). When the page route is NOT registered, `/media/new` is matched by the dynamic `/media/{id}` serve route, whose `Path<Uuid>` extractor rejects `"new"` with 400 — NOT a 404. (Verified against the live router; `/media` + `/media/{id}` are the only `/media*` routes when the flag is off.) Assert 400 and add a one-line comment explaining the fall-through. This is acceptable: the feature is simply absent.
 
 **Verify**: `cargo nextest run --lib views::media` → all pass; (with DB) `cargo nextest run --test browser_login` → all pass.
 
@@ -317,7 +317,7 @@ In `src/http/router.rs`, inside the existing `if browser_login { … }` block, a
 ## Test plan
 
 - `src/views/media.rs` unit tests (no DB): logged-out vs logged-in markup, script target `/media`, nonce present + escaped, bare-tag fallback. Pattern source: the `#[cfg(test)]` block in `src/views/login.rs`.
-- `tests/browser_login.rs`: `/media/new` is 200 with the flag on and 404 with it off — proves the flag-gating, mirroring the existing `/login` / `/auth/*` flag tests in that file.
+- `tests/browser_login.rs`: `/media/new` is 200 with the flag on and **400 with it off** (the unregistered path falls through to `/media/{id}`'s Uuid extractor) — proves the flag-gating, mirroring the existing `/login` / `/auth/*` flag tests in that file.
 - Manual acceptance (operator, post-merge, flag on): sign in at `/login`, open `/media/new`, drop a ≤5 MiB PNG → see the `/media/{id}` URL + `![](…)` snippet + working copy buttons; an oversized or wrong-type file shows the client-side guard message; an unauthenticated POST (no/expired cookie) surfaces the server 401/403 message.
 
 ## Done criteria

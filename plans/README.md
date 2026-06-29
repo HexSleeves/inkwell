@@ -413,7 +413,13 @@ final `GET /health` → **HTTP 200** (inkwell-production).
 | 046 not_found helper | #66 | DONE (merged) |
 | 047 spike: browser login UI (doc) | #67 | DONE (merged) |
 | 048 write-audit history endpoint | #72 | DONE (merged) |
-| 027 media upload UI | — | READY — rewritten as a full executable plan @ed97b6e (browser session-cookie auth resolved); awaiting execution |
+| 027 media upload UI | #78 | DONE (merged) — browser upload page at `/media/new`, flag-gated, session-cookie auth |
+
+### Plan 027 execution notes (2026-06-28)
+
+- `/wave-ship` (→ ship-card) **stalled** on this environment's known agent-stall bug; fell back to the manual codex-worktree loop that shipped the other 21.
+- Surfaced two real blockers, both fixed: (1) main's **`fmt` CI was red** from a pre-existing unformatted editor-UI merge (CYP-42) → fixed in its own PR **#77** (rustfmt only); (2) the plan's flag-off expectation was wrong — `/media/new` with the route unregistered falls through to `/media/{id}`'s Uuid extractor → **400, not 404** (plan + test corrected).
+- A resumed worker had shipped a backwards fix (a production `else`→404 route hack); coordinator removed it, set the test to 400, dropped the unused import, and force-corrected the PR. Verified in prod: `/health` 200, `/media/new` 400 (flag off).
 
 **Coordinator interventions during the loop (caught by CI + review, fixed at source):**
 - 043: backfill test asserted a *draft* target lights up a stub (false — wikilinks resolve at Public
