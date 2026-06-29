@@ -186,6 +186,16 @@ const BUILD_SCHEMA = {
     localVerify: { type: "string" },
     blocked: { type: "boolean" },
     blockReason: { type: ["string", "null"] },
+    question: {
+      type: ["string", "null"],
+      description:
+        "if blocked specifically on a DECISION (scope/approach ambiguity), the single question that would unblock you; else null",
+    },
+    questionOptions: {
+      type: "array",
+      items: { type: "string" },
+      description: "candidate answers for `question` (may be empty)",
+    },
     summary: { type: "string" },
   },
 };
@@ -286,6 +296,7 @@ If the repo needs node deps and \`pnpm install\` fails on a transient supply-cha
 == Implement ==
 Do the work described by ${WORK}. SCOPE: ${SCOPE}
 Match the repo's conventions (formatter, linter, test layout, Conventional Commits). Do NOT edit plans/README.md or any index the orchestrator owns. Honor any STOP conditions in the plan: if one triggers, set blocked=true, leave the ticket In Progress, do NOT open a PR, and report the reason.
+If you are blocked ONLY because a SCOPE/APPROACH DECISION is genuinely ambiguous (two valid implementations, or whether something is in/out of scope) and you cannot resolve it by reading the repo: set blocked=true, do NOT open a PR, and put the single decisive question in \`question\` with candidate answers in \`questionOptions\`. The coordinator answers it and re-dispatches you. Use this ONLY for a real decision a human/coordinator must make — never for anything resolvable from the repo's own conventions.
 
 == Verify (best-effort; PR CI is authoritative) ==
 Run the repo's gates that you CAN run in the worktree (typecheck, lint, the relevant unit/deno tests, format check). Record exactly which ran + their result in localVerify. If a gate needs a live DB/network you can't provide, note it not-run. If a gate you CAN run fails, fix and re-run; if it cannot pass, STOP (blocked=true, no PR).

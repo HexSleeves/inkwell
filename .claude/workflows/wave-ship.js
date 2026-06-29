@@ -38,6 +38,8 @@ export const meta = {
 //   perCardBudget   : stop dispatching when budget.remaining() drops below this (default 120000)
 //   serializedMerge : wave-ship owns the merge — land PRs one-at-a-time re-checking
 //                     mergeability (default true; false → ship-card self-merges)
+//   answers         : map { cardTitle|cil → answer } resolving decision-gate
+//                     questions on a re-run (default {})
 //   plannerEngine   : model for planner/reconcile agents ("opus"|"sonnet"|"haiku"; default: inherit)
 //   shipCardName    : registry name of the ship-card workflow (default "ship-card")
 //   shipCardPath    : absolute path to ship-card.js (overrides shipCardName)
@@ -86,6 +88,12 @@ const PER_CARD_BUDGET =
 // finishes together can't merge-train-race, and only this single worker touches
 // the base checkout. Set false to restore ship-card self-merge.
 const SERIALIZED_MERGE = a.serializedMerge !== false;
+// Tier-2 E: pre-supplied answers to decision-gate questions, keyed by card title
+// (or cil), fed in on a re-run to resolve questions the resolver couldn't answer.
+const ANSWERS =
+  a.answers && typeof a.answers === "object" && !Array.isArray(a.answers)
+    ? a.answers
+    : {};
 const ENGINE = a.engine;
 const ENGINES = a.engines;
 const DRY_RUN = a.dryRun === true;
@@ -217,6 +225,23 @@ const RECONCILE_SCHEMA = {
       description: "items needing human attention; one line each",
     },
     note: { type: "string" },
+  },
+};
+
+// ── Tier-2 E: decision-gate resolver schema ──────────────────────────────────
+const RESOLVE_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["answered", "answer", "confidence", "rationale"],
+  properties: {
+    answered: {
+      type: "boolean",
+      description:
+        "true ONLY if the question is answerable confidently from the objective/repo conventions (not a product/risk judgment a human must make)",
+    },
+    answer: { type: ["string", "null"] },
+    confidence: { type: "string", enum: ["high", "medium", "low"] },
+    rationale: { type: "string" },
   },
 };
 
@@ -488,6 +513,41 @@ async function reconcile(mode, ctx) {
   );
 }
 
+// ── Tier-2 E: decision-gate resolver ─────────────────────────────────────────
+function resolverPrompt(card, question, options) {
+  return `You are the wave-ship DECISION RESOLVER. A card's executor is blocked on ONE ambiguous decision and needs an answer to proceed. Answer ONLY if it is confidently derivable from the OBJECTIVE or the repo's existing conventions — never invent a product/UX/risk judgment that a human owner must make.
+
+OBJECTIVE:
+${GOAL || PLAN}
+
+CARD: ${card.title}
+SCOPE: ${card.scope}
+QUESTION: ${question}
+${options && options.length ? `CANDIDATE ANSWERS: ${options.map((o, i) => `(${i + 1}) ${o}`).join("  ")}` : "CANDIDATE ANSWERS: (none provided)"}
+
+Inspect the repo if needed (conventions, existing patterns, the plan/objective). If the answer is clear from those, set answered=true with a concrete, actionable answer (pick one option or state the decision) and confidence high|medium. If it requires a human's product/scope/risk call, set answered=false (the coordinator escalates to a human). Return the structured result.`;
+}
+
+async function resolveQuestion(card, question, options) {
+  // 1. Pre-supplied answer (resume path): keyed by card title or its Linear id.
+  const pre = ANSWERS[card.title] || (card.cil && ANSWERS[card.cil]) || null;
+  if (pre) return { answer: String(pre), source: "supplied" };
+  // 2. Auto-resolve from the objective / repo conventions.
+  const res = await agent(
+    resolverPrompt(card, question, options),
+    maybeModel({
+      label: `resolve:${card.title}`,
+      phase: "Reconcile",
+      schema: RESOLVE_SCHEMA,
+      agentType: "general-purpose",
+      effort: "high",
+    }),
+  );
+  if (res?.answered && res.answer && res.confidence !== "low")
+    return { answer: res.answer, source: "resolver" };
+  return null;
+}
+
 // ── Phase 1: plan the waves ──────────────────────────────────────────────────
 phase("Plan");
 let plannedWaves;
@@ -572,6 +632,7 @@ if (DRY_RUN) {
 // survives only as a layering hint (`_wave`), never as an execution gate.
 const allResults = [];
 const reconcileBlockers = [];
+const decisionGates = []; // unresolved decision-gate questions for a human
 const mergedTitles = new Set();
 const failedTitles = new Set(); // terminally not-merged → can never satisfy a dep
 const remCount = new Map(); // card title → remediation attempts already spent
@@ -817,6 +878,60 @@ while (true) {
     (remCount.get(title) || 0) < MAX_REMEDIATION &&
     !budgetLow()
   ) {
+    const cil = out.result?.cil || null;
+    const question = out.result?.detail?.question || null;
+    const options = out.result?.detail?.questionOptions || [];
+
+    // Tier-2 E clarify gate: a card blocked on a DECISION asks one question.
+    // Resolve it (supplied answer → resolver agent); if unresolved, escalate to a
+    // human via decisionGates and DO NOT retry (no guessing past a real decision).
+    if (question) {
+      phase("Reconcile");
+      const resolved = await resolveQuestion(
+        { ...card, cil },
+        question,
+        options,
+      );
+      if (!resolved) {
+        decisionGates.push({ title, cil, question, options });
+        failedTitles.add(title);
+        allResults.push({
+          wave: card._wave || 0,
+          card,
+          result: {
+            status: "needs-decision",
+            cil,
+            pr: null,
+            prUrl: null,
+            note: question,
+          },
+          error: question,
+        });
+        log(`wave-ship: "${title}" needs a HUMAN decision — ${question}`);
+        continue;
+      }
+      remCount.set(title, (remCount.get(title) || 0) + 1);
+      const retry = normCard({
+        title,
+        task: card.task,
+        plan: card.plan,
+        scope: `${card.scope}\n\nRESOLVED DECISION (${resolved.source}) — ${question}\n→ ${resolved.answer}`,
+        labels: card.labels,
+        priority: card.priority,
+        dependsOn: [],
+        cil,
+        migration: card.migration,
+      });
+      retry._wave = card._wave;
+      byTitle.set(title, retry);
+      pool.push(retry);
+      log(
+        `wave-ship: resolved decision for "${title}" (${resolved.source}) — requeued.`,
+      );
+      continue;
+    }
+
+    // No decision question → scope-guess remediation (reconcile refines by cil).
     remCount.set(title, (remCount.get(title) || 0) + 1);
     phase("Reconcile");
     const fix = await reconcile("remediate", {
@@ -824,7 +939,6 @@ while (true) {
       failures: [toFailure(out)],
     });
     if (Array.isArray(fix?.blockers)) reconcileBlockers.push(...fix.blockers);
-    const cil = out.result?.cil || null;
     // Refinement is matched back by cil (stable), never by a hallucinated title;
     // the retry card is rebuilt 1:1 from the original so its identity can't drift.
     const refine =
@@ -914,7 +1028,9 @@ return {
     ...failedCards.map(
       (c) => `${c.title} [${c.status}]${c.error ? `: ${c.error}` : ""}`,
     ),
+    ...decisionGates.map((g) => `${g.title} NEEDS DECISION: ${g.question}`),
     ...reconcileBlockers,
   ].filter((v, i, arr) => v && arr.indexOf(v) === i),
+  decisionGates,
   narrative,
 };
