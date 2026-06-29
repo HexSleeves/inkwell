@@ -18,7 +18,7 @@ coverage/
 *.swp
 
 # Local agent/tool working state
-.claude/
+!.claude/
 .gstack/
 .lavish/
 
