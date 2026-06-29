@@ -312,9 +312,9 @@ async function runCard(c) {
   if (BACKEND === "orca") {
     const out = await runCardViaOrca(c);
     // Spike 003: if the Orca runtime is unreachable (e.g. headless/cron), fall back
-    // to the in-process workflow backend rather than failing the card. Any other
-    // orca error is a real failure and is returned as-is.
-    if (out.error !== "orca runtime unreachable") return out;
+    // to the in-process workflow backend rather than failing the card. Use the
+    // schema-enforced boolean rather than text-matching the free-form note.
+    if (!out.result?.runtimeUnavailable) return out;
     log(
       `wave-ship: orca runtime unreachable for "${c.title}" → workflow-backend fallback.`,
     );
@@ -355,6 +355,9 @@ const ORCA_SCHEMA = {
       description: 'Orca worktree selector for cleanup, e.g. "name:ship-foo"',
     },
     note: { type: "string" },
+    // Set true only on PREFLIGHT failure so the fallback check is a boolean
+    // guard rather than text-matching the free-form note string.
+    runtimeUnavailable: { type: ["boolean", "null"] },
     // Decision-gate fields (status "blocked") — preserved so the unchanged
     // clarify handling (E) can surface the question + options to a human.
     blockReason: { type: ["string", "null"] },
@@ -416,7 +419,7 @@ REPO: ${REPO}    BASE: ${BASE}    WORKTREE NAME: ${name}
 
 Run each step with \`--json\` and read the fields named:
 
-1. PREFLIGHT: \`orca status --json\`. If result.runtime.state != "ready" or not reachable → STOP, return {status:"error", note:"orca runtime unreachable"}.
+1. PREFLIGHT: \`orca status --json\`. If result.runtime.state != "ready" or not reachable → STOP, return {status:"error", runtimeUnavailable:true, note:"orca runtime unreachable"}.
 2. TASK: \`orca orchestration task-create --spec <BRIEF> --task-title ${JSON.stringify(c.title)} --json\` (BRIEF is verbatim below). Capture result.task.id (TASK_ID) and result.task.created_by_terminal_handle (COORDINATOR handle).
 3. WORKER: \`orca worktree create --name ${name} --repo path:${REPO} --agent codex --base-branch origin/${BASE} --no-parent --json\`. Capture result.startupTerminal.handle (WORKER handle) and result.worktree.branch.
 4. WAIT: \`orca terminal wait --terminal <WORKER> --for tui-idle --timeout-ms 90000\`, then \`orca terminal read --terminal <WORKER>\` once to confirm boot (a hooks-trust prompt may auto-resolve; a \`railway\` MCP auth failure is harmless).
@@ -464,6 +467,7 @@ async function runCardViaOrca(c) {
         prUrl: r?.prUrl ?? null,
         branch: r?.branch ?? null,
         worktreeSelector: r?.worktreeSelector || `name:${wtName(c)}`,
+        runtimeUnavailable: r?.runtimeUnavailable ?? false,
         backend: "orca",
         // Carry the ship-card "blocked" contract: clarify (E) reads detail.question/
         // questionOptions, and isRetriable()'s dup-PR guard checks detail.prUrl/
