@@ -110,7 +110,15 @@ const SHIP_REF = SHIP_CARD_PATH
 // Spike 003 (Tier-3): card execution backend. "orca" routes runCard through a thin
 // in-process supervisor that drives a codex worker in an isolated Orca worktree; the
 // scheduler (DAG/migration-serialize/merge/clarify) and landCard (D) are unchanged.
-const BACKEND = a.backend === "orca" ? "orca" : "workflow";
+const BACKEND = (() => {
+  const b = a.backend;
+  if (b === undefined || b === null) return "workflow";
+  if (b === "orca" || b === "workflow") return b;
+  // Reject typos rather than silently routing to the legacy backend.
+  throw new Error(
+    `wave-ship: invalid backend ${JSON.stringify(b)} (expected "workflow" or "orca")`,
+  );
+})();
 
 const PLANNER_MODEL =
   a.plannerEngine && ["opus", "sonnet", "haiku"].includes(a.plannerEngine)
@@ -301,7 +309,16 @@ function cardArgs(c) {
 // shape ({card, result:{status,...}, error}); the scheduler routes on status, so
 // "orca" is invisible to merge (D), retry, and DAG bookkeeping.
 async function runCard(c) {
-  if (BACKEND === "orca") return runCardViaOrca(c);
+  if (BACKEND === "orca") {
+    const out = await runCardViaOrca(c);
+    // Spike 003: if the Orca runtime is unreachable (e.g. headless/cron), fall back
+    // to the in-process workflow backend rather than failing the card. Any other
+    // orca error is a real failure and is returned as-is.
+    if (!(out.error && /unreachable/i.test(out.error))) return out;
+    log(
+      `wave-ship: orca runtime unreachable for "${c.title}" → workflow-backend fallback.`,
+    );
+  }
   try {
     const res = await workflow(SHIP_REF, cardArgs(c));
     return { card: c, result: res, error: null };
@@ -320,15 +337,9 @@ async function runCard(c) {
 const ORCA_SCHEMA = {
   type: "object",
   additionalProperties: false,
-  required: [
-    "status",
-    "pr",
-    "prUrl",
-    "branch",
-    "cil",
-    "worktreeSelector",
-    "note",
-  ],
+  // Only status + note are required: error/blocked/timeout early-returns legitimately
+  // omit pr/branch/etc, and forcing them would make the schema reject a valid stop.
+  required: ["status", "note"],
   properties: {
     status: {
       type: "string",
@@ -344,6 +355,14 @@ const ORCA_SCHEMA = {
       description: 'Orca worktree selector for cleanup, e.g. "name:ship-foo"',
     },
     note: { type: "string" },
+    // Decision-gate fields (status "blocked") — preserved so the unchanged
+    // clarify handling (E) can surface the question + options to a human.
+    blockReason: { type: ["string", "null"] },
+    question: {
+      type: ["string", "null"],
+      description: "decision-gate question when status is blocked",
+    },
+    questionOptions: { type: "array", items: { type: "string" } },
   },
 };
 
@@ -354,8 +373,13 @@ function wtName(c) {
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, "-")
       .replace(/^-+|-+$/g, "")
-      .slice(0, 32) || "card";
-  return `ship-${s}`;
+      .slice(0, 28) || "card";
+  // Deterministic suffix from stable card identity (no Math.random in scripts) so
+  // cards whose titles collide after slug/truncation still get distinct worktrees.
+  const seed = `${c.title || ""}|${c.cil || ""}|${c.plan || ""}`;
+  let h = 0;
+  for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) >>> 0;
+  return `ship-${s}-${h.toString(36).slice(0, 6)}`;
 }
 
 // The self-contained ship brief handed to the codex worker (the proven task_2659…
@@ -371,7 +395,7 @@ function orcaBrief(c) {
     `Read .mex/ROUTER.md for repo conventions before editing. ${work}`,
     `Scope: ${c.scope || "Keep the change minimal and focused on the task."}`,
     ``,
-    `VERIFY exactly as this repo does (run what applies): \`cargo fmt --all -- --check\`, \`cargo clippy --all-targets -- -D warnings\`, \`cargo test --all\`. Enumerate each pass/fail. If any required check fails, FIX it before opening a PR.`,
+    `VERIFY exactly as this repo's CI does (run all that apply): \`cargo fmt --all -- --check\`, \`cargo clippy --all-targets --all-features --locked -- -D warnings\`, \`cargo test --all --locked\`. Enumerate each pass/fail. If any required check fails, FIX it before opening a PR.`,
     `SHIP: commit on this worktree's branch with a conventional-commit message, then open a PR with \`gh pr create --base ${BASE}\` (clear title + body). Do NOT merge — leave it merge-ready.`,
     `REPORT: send EXACTLY ONE worker_done message to the coordinator with a JSON body {taskId, dispatchId, pr, prUrl, branch, cil, filesModified}. pr = the PR number; prUrl = its URL.`,
     `DECISIONS: do NOT use the \`ask\` verb (broken here). If you must ask, \`orca orchestration send --type decision_gate\` to the coordinator with the question + options, then poll \`orca orchestration check --wait\` for the reply and continue.`,
@@ -399,7 +423,7 @@ Run each step with \`--json\` and read the fields named:
 5. DISPATCH: \`orca orchestration dispatch --task <TASK_ID> --to <WORKER> --from <COORDINATOR> --inject --json\`. codex auto-submits the injected brief. If a follow-up \`terminal read\` shows the brief unsent in the composer, run \`orca terminal send --terminal <WORKER> --text "\\n"\` once.
 6. SUPERVISE — loop up to ~20 windows (~20 min): \`orca orchestration check --terminal <COORDINATOR> --wait --types worker_done,escalation,decision_gate --timeout-ms 60000 --json\`. Emit one short log line after EACH call so you stay active.
    - worker_done → parse its JSON body → return {status:"merge-ready", pr:<number>, prUrl:<url>, branch:<branch>, cil:${c.cil ? JSON.stringify(c.cil) : "null"}, worktreeSelector:"name:${name}", note:"opened PR"}.
-   - decision_gate → if the answer is clear from repo conventions / the task, \`orca orchestration reply --id <msgId> --body <answer>\` and keep polling; if it needs a human product/scope call, STOP and return {status:"blocked", pr:null, prUrl:null, branch:null, cil:${c.cil ? JSON.stringify(c.cil) : "null"}, worktreeSelector:"name:${name}", note:"<the question>"}.
+   - decision_gate → if the answer is clear from repo conventions / the task, \`orca orchestration reply --id <msgId> --body <answer>\` and keep polling; if it needs a human product/scope call, STOP and return {status:"blocked", question:"<the question>", questionOptions:[<options as strings>], blockReason:"<short why blocked>", note:"<the question>", cil:${c.cil ? JSON.stringify(c.cil) : "null"}, worktreeSelector:"name:${name}"}.
    - escalation → STOP, return {status:"error", note:"<escalation text>", worktreeSelector:"name:${name}"}.
    - no worker_done after the windows → return {status:"error", note:"worker timeout (no worker_done in ~20m)", worktreeSelector:"name:${name}"}.
 
@@ -438,9 +462,20 @@ async function runCardViaOrca(c) {
         branch: r?.branch ?? null,
         worktreeSelector: r?.worktreeSelector || `name:${wtName(c)}`,
         backend: "orca",
-        // detail.note carries the blocked question / error text; no prUrl/prNumber
-        // here keeps isRetriable() true for "blocked" (a no-PR, safe-to-retry stop).
-        detail: { note: r?.note || "" },
+        // Carry the ship-card "blocked" contract: clarify (E) reads detail.question/
+        // questionOptions, and isRetriable()'s dup-PR guard checks detail.prUrl/
+        // prNumber — so a "blocked" that somehow has a PR is NOT auto-retried.
+        detail: {
+          note: r?.note || "",
+          prUrl: r?.prUrl ?? null,
+          prNumber: r?.pr ?? null,
+          question: r?.question ?? null,
+          questionOptions: Array.isArray(r?.questionOptions)
+            ? r.questionOptions
+            : [],
+          blockReason:
+            r?.blockReason ?? (s === "blocked" ? (r?.note ?? null) : null),
+        },
       },
       error: s === "error" ? r?.note || "orca worker error" : null,
     };
@@ -483,12 +518,12 @@ This PR already passed CI + CodeRabbit in its ship-card run. You OWN the merge s
 
 == Pre-flight (re-check — the base may have moved since this PR went green) ==
 cd ${REPO}; git fetch origin. Inspect: gh pr view ${r.pr} --json state,mergeable,mergeStateStatus  and  gh pr checks ${r.pr}.
-- If state is already MERGED → idempotent success: return merged=true with the existing squash SHA (git log --oneline -10 on ${BASE}; the subject contains "(#${r.pr})").
+- If state is already MERGED → idempotent success: return merged=true with the existing squash SHA from \`gh pr view ${r.pr} --json mergeCommit --jq .mergeCommit.oid\` (no checkout).
 - Treat these check names as non-blocking: ${ignoreLine}. Also ignore "skipping"/"neutral". Every OTHER check must be "pass".
 - If mergeable is CONFLICTING, or a required check regressed/failed → DO NOT force and DO NOT rebase+re-wait here (re-running CI would stall the serialized merge queue). Return merged=false with a one-line note naming the conflict/check so a human can rebase ${r.branch} and re-land.
 
 == Merge (squash) ==
-gh pr merge ${r.pr} --squash --delete-branch. Then sync the base: git checkout ${BASE} && git pull --ff-only. Capture the squash commit SHA on ${BASE} (its subject contains "(#${r.pr})").
+gh pr merge ${r.pr} --squash --delete-branch. Capture the squash commit SHA WITHOUT touching any working tree: \`gh pr view ${r.pr} --json mergeCommit --jq .mergeCommit.oid\`. Do NOT run \`git checkout\` or \`git pull\` in ${REPO} — wave-ship may be running from the user's working checkout and must never switch its branch. GitHub advances origin/${BASE} on merge, so sibling workers (which base off origin/${BASE}) still see the new base.
 
 == Close ticket + cleanup ==
 ${ticketStep}

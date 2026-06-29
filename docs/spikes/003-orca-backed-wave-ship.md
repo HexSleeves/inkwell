@@ -84,7 +84,7 @@ the Workflow watchdog. The poller stays active across short `check --wait` windo
 | blocked retry / `MAX_REMEDIATION` | task `failed` → re-dispatch; orca circuit-breaks after 3 strikes |
 | `mergedTitles` readiness | unchanged (in-process); set after the in-process merge |
 | serialized merge (D) | unchanged (in-process `landCard`) |
-| isolated `/tmp/ship-<cil>` worktree | orca-managed worktree; cleanup via `orca worktree remove` |
+| isolated `/tmp/ship-<cil>` worktree | orca-managed worktree; cleanup via `orca worktree rm` |
 
 ## Worker brief + protocol
 
@@ -128,9 +128,9 @@ async function runCardViaOrca(c) {
 --agent codex`, `terminal wait --for tui-idle`, `dispatch --inject`, then loop
 `check --wait worker_done,escalation,decision_gate --timeout-ms 60000` (log each
 poll to stay active), reply to `decision_gate` via the Spike-E resolver, and on
-`worker_done` return `{status:"merge-ready", pr, branch, cil, worktreePath}`.
+`worker_done` return `{status:"merge-ready", pr, prUrl, branch, cil, worktreeSelector}`.
 `landCard` (D) is unchanged — it merges the PR in-process, serialized, then
-`orca worktree remove` to clean up.
+`orca worktree rm --worktree <worktreeSelector>` to clean up.
 
 ## Env specifics (this machine)
 
@@ -150,7 +150,7 @@ poll to stay active), reply to `decision_gate` via the Spike-E resolver, and on
    Linear-free already; do Ticket in-process or skip (the proven brief uses `/ship`,
    no Linear).
 3. **Worktree cleanup** — orca worktrees, not `/tmp`; `landCard` must `orca worktree
-   remove` after merge to avoid sprawl.
+   rm` after merge to avoid sprawl.
 4. **Concurrency** — bound dispatch with the existing `maxConcurrent`, or orca's
    `run --max-concurrent`. Avoid spawning a terminal per card unbounded.
 5. **Resume/journaling** — orca task-state is durable (feeds Tier-3 G), but the
@@ -171,6 +171,27 @@ poll to stay active), reply to `decision_gate` via the Spike-E resolver, and on
 
 **De-risk gate**: do not proceed past P1 until a stall that kills the `workflow`
 backend is shown NOT to kill the `orca` backend. That is the entire justification.
+
+## Outcome — P0 + P1 validated (2026-06-29)
+
+- **P0 (loop mechanics)** — hand-drove one card through the exact CLI sequence; the
+  codex worker opened a doc-only PR in ~45s, caught by a decoupled poller. Coordinator
+  and worker were separate processes throughout. (Finding: codex 0.142 auto-submits
+  `dispatch --inject`, so the old "extra Enter" quirk no longer applies.)
+- **P1 (`backend:"orca"`)** — implemented in `.claude/workflows/wave-ship.js`
+  (`runCard` → `runCardViaOrca` supervisor; backend-aware `landCard` cleanup; default
+  backend unchanged).
+- **De-risk gate CLEARED** — ran one card via `backend:"orca"` whose VERIFY forced a
+  cold `cargo build`/clippy (a multi-minute, low-output Build). Result: merged 1/1, PR
+  squash-merged to `main`, ~10 min. The in-process supervisor stayed alive **~338s
+  across 7 `check --wait` poll windows, never reaped** — well past the ~180s
+  no-progress watchdog that would have killed a silent builder in the `workflow`
+  backend. The orca backend completes work the workflow backend stalls on — the
+  spike's justification, proven.
+- **Wart fixed** — the validation run revealed `landCard`'s `git checkout ${BASE} &&
+  git pull` switched the caller's working branch. `landCard` now captures the squash
+  SHA via `gh pr view <pr> --json mergeCommit` with no checkout, so wave-ship never
+  mutates the user's working tree.
 
 ## Open questions — RESOLVED for P1
 
