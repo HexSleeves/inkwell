@@ -1,15 +1,19 @@
 use axum::Json;
-use axum::extract::{Path, State};
-use axum::http::{HeaderMap, Method, StatusCode};
+use axum::extract::{Extension, Path, State};
+use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use serde::Serialize;
 
 use crate::db::documents;
-use crate::db::links::{self, Backlink, Graph, GraphEdge, GraphNode};
+use crate::db::links::{self, Backlink, Graph, GraphEdge, GraphNode, Visibility};
 use crate::error::AppError;
 use crate::http::AppState;
 use crate::http::auth::resolve_visibility;
+use crate::http::cache;
 use crate::http::documents::document_not_found;
+use crate::http::security_headers::CspNonce;
+use crate::views::graph::render_graph_page;
+use crate::views::layout::SiteMeta;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -144,24 +148,70 @@ pub async fn document_backlinks(
     Ok((StatusCode::OK, Json(response)).into_response())
 }
 
-/// `GET /graph` — the whole garden's bounded link graph as JSON.
+/// `GET /graph` — the whole garden's bounded link graph.
+///
+/// Content-negotiated: a browser (any `Accept` containing `text/html`) gets the
+/// interactive HTML graph page; every other caller (`application/json`, `*/*`,
+/// no `Accept` — i.e. curl and API clients) gets the historical JSON envelope,
+/// byte-for-byte unchanged, so the documented wire contract is preserved.
 ///
 /// Visibility follows the same rule as document reads: an authenticated caller
-/// sees every note (`All`), an anonymous one only published notes (`Public`).
-/// The query itself enforces the no-draft-leak invariant — a public graph never
-/// returns a draft node nor an edge touching one — and is hard bounded by the
-/// node/edge caps in [`links`]. GET only; any other method 405s.
+/// sees every note (`All`/`Owner`), an anonymous one only published notes
+/// (`Public`). The query itself enforces the no-draft-leak invariant — a public
+/// graph never returns a draft node nor an edge touching one — and is hard
+/// bounded by the node/edge caps in [`links`]. GET only; any other method 405s.
 pub async fn graph(
     State(state): State<AppState>,
     method: Method,
     headers: HeaderMap,
+    Extension(csp_nonce): Extension<CspNonce>,
 ) -> Result<Response, AppError> {
     if method != Method::GET {
         return Err(AppError::MethodNotAllowed(vec!["GET"]));
     }
     let visibility = resolve_visibility(&headers, &state).await;
     let graph = links::garden_graph(&state.pool, visibility).await?;
+
+    if wants_html(&headers) {
+        let site = SiteMeta::from_config(&state.config);
+        let html = render_graph_page(&graph, csp_nonce.as_str(), &site);
+        // The public graph is identical for everyone, so it rides the shared
+        // HTML cache. An authenticated graph can contain the caller's drafts, so
+        // it must never be stored where another visitor could be served it.
+        if matches!(visibility, Visibility::Public) {
+            return Ok(cache::html_response(
+                &headers,
+                "graph",
+                StatusCode::OK,
+                html,
+            ));
+        }
+        return Ok((
+            StatusCode::OK,
+            [
+                (
+                    header::CONTENT_TYPE,
+                    HeaderValue::from_static("text/html; charset=utf-8"),
+                ),
+                (header::CACHE_CONTROL, HeaderValue::from_static("no-store")),
+            ],
+            html,
+        )
+            .into_response());
+    }
+
     Ok((StatusCode::OK, Json(GraphEnvelope::from(graph))).into_response())
+}
+
+/// Whether the caller prefers HTML (a browser) over the default JSON. We treat
+/// any `Accept` value mentioning `text/html` as a browser; `application/json`,
+/// `*/*`, and a missing `Accept` all fall through to JSON, so curl, fetch
+/// defaults, and the documented API contract are unaffected.
+fn wants_html(headers: &HeaderMap) -> bool {
+    headers
+        .get(header::ACCEPT)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.contains("text/html"))
 }
 
 /// `GET /documents/{slug}/graph` — the one-hop neighborhood graph around a note.
