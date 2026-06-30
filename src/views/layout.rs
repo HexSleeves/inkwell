@@ -94,7 +94,7 @@ pub fn escape_xml(value: &str) -> String {
         .replace('\'', "&apos;")
 }
 
-fn json_for_script(value: serde_json::Value) -> String {
+pub(crate) fn json_for_script(value: serde_json::Value) -> String {
     value
         .to_string()
         .replace('<', r#"\u003c"#)
@@ -660,6 +660,57 @@ pub(crate) const STYLES: &str = r#"
     border-radius: 1rem;
   }
   .account-noscope { color: rgb(120 132 123); font-style: italic; }
+  /* Graph page */
+  .graph-page-header { margin-bottom: 1.25rem; }
+  .graph-page-header h1 { margin-bottom: 0.25rem; }
+  .graph-subtitle { margin: 0; color: rgb(120 132 123); font-size: 0.95rem; }
+  /* No-JS fallback: a plain note list, hidden once the script activates. */
+  ul.graph-fallback { columns: 2 18rem; gap: 1.25rem; list-style: none; margin: 0; padding: 0; }
+  ul.graph-fallback li { margin: 0.3rem 0; break-inside: avoid; }
+  ul.graph-fallback a { color: rgb(47 93 69); text-decoration: none; }
+  ul.graph-fallback a:hover { color: rgb(197 107 71); }
+  .graph-canvas { display: none; }
+  .js-graph-active .graph-canvas { display: block; }
+  /* Once JS activates, the SVG canvas is aria-hidden, so keep the fallback link
+     list reachable by keyboard and screen readers — visually hide it rather than
+     removing it from the accessibility tree with display:none. */
+  .js-graph-active ul.graph-fallback {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+    border: 0;
+  }
+  .graph-canvas {
+    margin-top: 0.5rem;
+    border: 1px solid rgb(224 232 224);
+    border-radius: 0.85rem;
+    background:
+      radial-gradient(circle at 1px 1px, rgb(224 232 224) 1px, transparent 0) 0 0 / 22px 22px,
+      rgb(252 253 251);
+    overflow: hidden;
+  }
+  .graph-svg { width: 100%; height: 70vh; min-height: 420px; display: block; cursor: grab; touch-action: none; }
+  .graph-svg:active { cursor: grabbing; }
+  .graph-edge { stroke: rgb(190 206 191); stroke-width: 1.2; }
+  .graph-node circle { fill: rgb(91 138 104); stroke: rgb(252 253 251); stroke-width: 1.5; cursor: pointer; transition: fill 0.15s; }
+  .graph-node:hover circle { fill: rgb(197 107 71); }
+  .graph-node-label {
+    font-family: inherit; font-size: 11px; font-weight: 700; fill: rgb(61 84 68);
+    text-anchor: middle; pointer-events: none;
+    opacity: 0; transition: opacity 0.15s;
+  }
+  .graph-node:hover .graph-node-label { opacity: 1; }
+  /* Hover focus: dim the rest, surface the node + its neighborhood. */
+  .graph-hovering .graph-edge { stroke-opacity: 0.25; }
+  .graph-edge--hi { stroke: rgb(197 107 71) !important; stroke-opacity: 0.9 !important; stroke-width: 2; }
+  .graph-node--dim { opacity: 0.3; }
+  .graph-node--hi circle { fill: rgb(47 93 69); }
+  .graph-node--hi .graph-node-label { opacity: 1; }
   /* Full nav header */
   .site-nav-group {
     display: flex;
