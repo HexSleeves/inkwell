@@ -25,35 +25,32 @@ pub async fn settings(
     headers: HeaderMap,
     Extension(csp_nonce): Extension<CspNonce>,
 ) -> Response {
-    let published = match documents::count_documents(
-        &state.pool,
-        StatusFilter {
-            status: Some(DocumentStatus::Published),
-        },
-    )
-    .await
-    {
-        Ok(count) => Some(count),
-        Err(error) => {
-            tracing::warn!(%error, "settings: published-note count failed; showing —");
-            None
-        }
-    };
-    let tags = match documents::count_published_tags(&state.pool).await {
-        Ok(count) => Some(count),
-        Err(error) => {
-            tracing::warn!(%error, "settings: tag count failed; showing —");
-            None
-        }
-    };
-    let link_count =
-        match links::count_resolved_internal_links(&state.pool, Visibility::Public).await {
-            Ok(count) => Some(count),
-            Err(error) => {
-                tracing::warn!(%error, "settings: internal-link count failed; showing —");
-                None
-            }
-        };
+    // The three counts are independent reads — run them concurrently so the page
+    // waits one round-trip instead of three. Each still degrades to `None` (→ "—")
+    // independently rather than failing the page.
+    let (published_result, tags_result, links_result) = tokio::join!(
+        documents::count_documents(
+            &state.pool,
+            StatusFilter {
+                status: Some(DocumentStatus::Published),
+            },
+        ),
+        documents::count_published_tags(&state.pool),
+        links::count_resolved_internal_links(&state.pool, Visibility::Public),
+    );
+    let published = published_result
+        .inspect_err(
+            |error| tracing::warn!(%error, "settings: published-note count failed; showing —"),
+        )
+        .ok();
+    let tags = tags_result
+        .inspect_err(|error| tracing::warn!(%error, "settings: tag count failed; showing —"))
+        .ok();
+    let link_count = links_result
+        .inspect_err(
+            |error| tracing::warn!(%error, "settings: internal-link count failed; showing —"),
+        )
+        .ok();
     let stats = GardenStats {
         published,
         tags,

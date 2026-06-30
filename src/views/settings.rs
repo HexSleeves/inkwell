@@ -221,8 +221,13 @@ fn render_account_panel(account: &AccountPanel, csp_nonce: &str) -> String {
   if (!btn) return;
   btn.addEventListener('click', function () {{
     btn.disabled = true;
-    fetch('/auth/logout', {{ method: 'POST' }}).then(function () {{
-      window.location.assign('/settings');
+    fetch('/auth/logout', {{ method: 'POST' }}).then(function (response) {{
+      if (response.ok) {{
+        window.location.assign('/settings');
+        return;
+      }}
+      btn.disabled = false;
+      if (status) status.textContent = 'Logout failed. Please try again.';
     }}).catch(function () {{
       btn.disabled = false;
       if (status) status.textContent = 'Logout failed. Please try again.';
@@ -376,6 +381,8 @@ mod tests {
         assert!(html.contains(r#"<button id="logout""#));
         assert!(html.contains(r#"<script nonce="nonce123">"#));
         assert!(html.contains("/auth/logout"));
+        // Logout redirect is gated on a successful response, not just fetch resolving.
+        assert!(html.contains("response.ok"));
     }
 
     #[test]
