@@ -219,19 +219,30 @@ pub fn render_graph_page(graph: &Graph, csp_nonce: &str, site: &SiteMeta<'_>) ->
     if (dragNode) {{
       var p = toLocal(evt);
       dragNode.x = (p.x - tx) / scale; dragNode.y = (p.y - ty) / scale;
-      moved = true; reheat(); paint();
+      // Only count as a drag past a small threshold, so a click with tiny
+      // pointer jitter still navigates instead of being treated as a drag.
+      if (Math.abs(p.x - downPt.x) > 4 || Math.abs(p.y - downPt.y) > 4) moved = true;
+      reheat(); paint();
     }} else if (panning && last) {{
       tx += evt.clientX - last.x; ty += evt.clientY - last.y;
       last = {{ x: evt.clientX, y: evt.clientY }}; moved = true; applyView();
     }}
   }});
-  function endPointer(evt) {{
-    var g = evt.target.closest ? evt.target.closest('.graph-node') : null;
-    if (dragNode && !moved && g) {{ window.location.assign('/' + encodeURIComponent(nodes[+g.dataset.i].slug)); }}
+  function resetPointer() {{
     if (dragNode) dragNode.fixed = false;
     dragNode = null; panning = false; last = null;
   }}
+  function endPointer() {{
+    // Use the node captured on pointerdown, not evt.target: setPointerCapture
+    // retargets pointerup to the <svg>, so closest('.graph-node') would be null
+    // and the click-to-open would never fire.
+    if (dragNode && !moved) {{ window.location.assign('/' + encodeURIComponent(dragNode.slug)); }}
+    resetPointer();
+  }}
   svg.addEventListener('pointerup', endPointer);
+  // A cancelled pointer (interrupted touch/OS gesture) never fires pointerup, so
+  // reset state here too — otherwise a node stays pinned and panning stuck.
+  svg.addEventListener('pointercancel', resetPointer);
   svg.addEventListener('wheel', function (evt) {{
     evt.preventDefault();
     var p = toLocal(evt);
