@@ -12,6 +12,7 @@ use crate::views::archive::{render_archive_index_page, render_archive_month_page
 use crate::views::document::{render_document_page, render_not_found_page};
 use crate::views::index::render_index_page;
 use crate::views::layout::{PAGE_SIZE, SiteMeta};
+use crate::views::notes::render_notes_index_page;
 use crate::views::tags::{render_tag_index_page, render_tag_page};
 
 pub async fn index(State(state): State<AppState>, headers: HeaderMap) -> Response {
@@ -153,6 +154,55 @@ async fn resolve_snippet_links(
             std::collections::HashSet::new()
         }
     }
+}
+
+/// Upper bound on rows rendered by the `/notes` index. A complete garden is
+/// small, but this caps the worst case (and mirrors the graph's node bound) so
+/// the page never streams thousands of rows; a truncation note is shown when
+/// the published count exceeds this.
+const NOTES_INDEX_CAP: u32 = 1000;
+
+/// `GET /notes` — a complete, filterable index of every published note. Pinned
+/// to public (published-only) visibility, exactly like the Dashboard feed, so a
+/// draft never appears. Client-side filter + sort run over the rendered rows.
+pub async fn notes_index(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Extension(csp_nonce): Extension<CspNonce>,
+) -> Response {
+    let total = match documents::count_documents(
+        &state.pool,
+        StatusFilter {
+            status: Some(DocumentStatus::Published),
+        },
+    )
+    .await
+    {
+        Ok(total) => total,
+        Err(_) => return error_page(&state),
+    };
+
+    let docs = match documents::list_document_summaries(
+        &state.pool,
+        ListOptions {
+            limit: Some(NOTES_INDEX_CAP),
+            offset: None,
+            status: Some(DocumentStatus::Published),
+        },
+    )
+    .await
+    {
+        Ok(docs) => docs,
+        Err(_) => return error_page(&state),
+    };
+
+    let site = SiteMeta::from_config(&state.config);
+    cache::html_response(
+        &headers,
+        "notes-index",
+        StatusCode::OK,
+        render_notes_index_page(&docs, total, csp_nonce.as_str(), &site),
+    )
 }
 
 pub async fn tags_index(
