@@ -18,7 +18,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
-use rmcp::model::{CallToolResult, Content, ErrorData};
+use rmcp::model::{CallToolResult, ContentBlock, ErrorData};
 use rmcp::{ServerHandler, ServiceExt, tool, tool_handler, tool_router};
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -216,7 +216,7 @@ impl ServerHandler for InkwellMcpServer {}
 
 /// Serialize a value into a single structured-JSON tool result.
 fn ok_json<T: serde::Serialize>(value: &T) -> Result<CallToolResult, ErrorData> {
-    let content = Content::json(value)?;
+    let content = ContentBlock::json(value)?;
     Ok(CallToolResult::success(vec![content]))
 }
 
