@@ -597,6 +597,69 @@ pub(crate) const STYLES: &str = r#"
   .note-row-meta { color: rgb(120 132 123); font-size: 0.85rem; white-space: nowrap; }
   .notes-truncation { color: rgb(120 132 123); font-size: 0.9rem; font-style: italic; margin: 0 0 1rem; }
   .notes-no-matches { margin-top: 1rem; }
+  /* Settings page */
+  .settings-page-header { margin-bottom: 1.5rem; }
+  .settings-page-header h1 { margin-bottom: 0.25rem; }
+  .settings-subtitle { margin: 0; color: rgb(120 132 123); font-size: 0.95rem; }
+  .settings-section { margin: 0 0 2rem; }
+  .settings-section h2 { font-size: 1.2rem; margin: 0 0 0.75rem; }
+  dl.settings-list {
+    display: grid;
+    grid-template-columns: minmax(7rem, max-content) 1fr;
+    gap: 0.45rem 1.25rem;
+    margin: 0;
+  }
+  dl.settings-list dt { color: rgb(120 132 123); font-weight: 700; }
+  dl.settings-list dd { margin: 0; word-break: break-word; }
+  ul.capabilities { list-style: none; margin: 0; padding: 0; }
+  ul.capabilities li {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 0.55rem 0;
+    border-bottom: 1px solid rgb(232 240 232);
+  }
+  .cap-label { min-width: 0; }
+  .cap-state {
+    flex: none;
+    font-size: 0.8rem;
+    font-weight: 700;
+    padding: 0.15rem 0.6rem;
+    border-radius: 1rem;
+    border: 1px solid transparent;
+  }
+  .cap-on { color: rgb(61 110 78); background: rgb(228 240 230); border-color: rgb(198 222 202); }
+  .cap-off { color: rgb(120 132 123); background: rgb(238 240 238); border-color: rgb(220 226 220); }
+  .cap-value { color: rgb(80 96 84); background: rgb(238 244 238); border-color: rgb(214 226 215); }
+  .settings-stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr));
+    gap: 0.85rem;
+  }
+  .stat-card {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+    padding: 1rem;
+    border: 1px solid rgb(224 232 224);
+    border-radius: 0.85rem;
+    background: rgb(252 253 251);
+  }
+  .stat-value { font-size: 1.6rem; font-weight: 800; color: rgb(47 93 69); line-height: 1.1; }
+  .stat-label { color: rgb(120 132 123); font-size: 0.85rem; }
+  .account-panel p { margin: 0 0 0.75rem; }
+  .account-scopes { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; }
+  .scope-chip {
+    font-size: 0.8rem;
+    font-weight: 700;
+    color: rgb(61 84 68);
+    background: rgb(234 241 234);
+    border: 1px solid rgb(206 224 208);
+    padding: 0.1rem 0.55rem;
+    border-radius: 1rem;
+  }
+  .account-noscope { color: rgb(120 132 123); font-style: italic; }
   /* Full nav header */
   .site-nav-group {
     display: flex;
