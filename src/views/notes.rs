@@ -80,7 +80,7 @@ pub fn render_notes_index_page(
         <ul class="notes-list" id="notes-list">
 {rows}
         </ul>
-        <p class="empty notes-no-matches" id="notes-no-matches" hidden>No notes match your filter.</p>
+        <p class="empty notes-no-matches" id="notes-no-matches" role="status" aria-live="polite" hidden>No notes match your filter.</p>
         <script nonce="{nonce}">
 (function () {{
   var input = document.getElementById('notes-filter');
