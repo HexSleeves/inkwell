@@ -25,6 +25,7 @@ pub mod request_id;
 pub mod router;
 pub mod search;
 pub mod security_headers;
+pub mod settings;
 pub mod sitemap;
 pub mod webmention;
 pub mod webmention_send;

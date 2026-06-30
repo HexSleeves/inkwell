@@ -7,4 +7,5 @@ pub mod login;
 pub mod media;
 pub mod notes;
 pub mod search;
+pub mod settings;
 pub mod tags;

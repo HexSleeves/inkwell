@@ -566,6 +566,67 @@ pub async fn garden_graph(pool: &PgPool, visibility: Visibility) -> Result<Graph
     Ok(Graph { nodes, edges })
 }
 
+/// Count resolved internal links (note→note edges) visible at `visibility`.
+///
+/// Unlike [`garden_graph`] this is a true statistic, so it is deliberately
+/// uncapped (no `MAX_GRAPH_EDGES`). Both endpoints must be visible, mirroring
+/// the graph's no-draft-leak rule: a public count never includes an edge that
+/// touches a draft.
+pub async fn count_resolved_internal_links(
+    pool: &PgPool,
+    visibility: Visibility,
+) -> Result<i64, sqlx::Error> {
+    match visibility {
+        Visibility::Public => {
+            sqlx::query_scalar::<Postgres, i64>(
+                r#"
+                SELECT count(*)::bigint
+                FROM links
+                JOIN documents AS src ON src.id = links.source_note_id
+                JOIN documents AS tgt ON tgt.id = links.target_note_id
+                WHERE links.target_kind = 'internal'
+                  AND links.resolved = true
+                  AND src.status = 'published'
+                  AND tgt.status = 'published'
+                "#,
+            )
+            .fetch_one(pool)
+            .await
+        }
+        Visibility::Owner(owner_id) => {
+            sqlx::query_scalar::<Postgres, i64>(
+                r#"
+                SELECT count(*)::bigint
+                FROM links
+                JOIN documents AS src ON src.id = links.source_note_id
+                JOIN documents AS tgt ON tgt.id = links.target_note_id
+                WHERE links.target_kind = 'internal'
+                  AND links.resolved = true
+                  AND (src.status = 'published' OR src.owner_id = $1)
+                  AND (tgt.status = 'published' OR tgt.owner_id = $1)
+                "#,
+            )
+            .bind(owner_id)
+            .fetch_one(pool)
+            .await
+        }
+        Visibility::All => {
+            sqlx::query_scalar::<Postgres, i64>(
+                r#"
+                SELECT count(*)::bigint
+                FROM links
+                JOIN documents AS src ON src.id = links.source_note_id
+                JOIN documents AS tgt ON tgt.id = links.target_note_id
+                WHERE links.target_kind = 'internal'
+                  AND links.resolved = true
+                "#,
+            )
+            .fetch_one(pool)
+            .await
+        }
+    }
+}
+
 /// A one-hop neighborhood graph around the note `slug`: the note itself plus
 /// every visible note one resolved internal link away (in either direction),
 /// and the edges among that set. Visibility-filtered exactly like

@@ -13,7 +13,7 @@ use crate::http::AppState;
 
 use super::{
     admin, ai, assets, auth_session, documents, editor, feed, graph, media, pages, preview,
-    publish, rate_limit, request_id, search, security_headers, sitemap, webmention,
+    publish, rate_limit, request_id, search, security_headers, settings, sitemap, webmention,
 };
 
 pub fn build_router(config: Arc<Config>, pool: sqlx::PgPool) -> Router {
@@ -106,6 +106,7 @@ pub fn build_router_with_providers(
         .route("/assets/fonts/nunito.woff2", get(assets::nunito_font))
         .route("/search", get(search::search))
         .route("/notes", get(pages::notes_index))
+        .route("/settings", get(settings::settings))
         .route("/tags", get(pages::tags_index))
         .route("/tags/{tag}", get(pages::tag_page))
         .route("/tags/{tag}/page/{page}", get(pages::tag_page_numbered))
