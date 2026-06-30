@@ -88,18 +88,62 @@ async fn no_accept_and_json_and_wildcard_all_get_json() -> anyhow::Result<()> {
     };
     seed_published_and_draft(&router).await?;
 
-    for accept in [None, Some("application/json"), Some("*/*")] {
+    // Includes a quality-value case: `text/html;q=0` lists HTML but refuses it,
+    // and a JSON-preferred header — both must fall through to JSON.
+    for accept in [
+        None,
+        Some("application/json"),
+        Some("*/*"),
+        Some("application/json, text/html;q=0"),
+        Some("text/html;q=0.3, application/json;q=0.9"),
+    ] {
         let response = get_graph(&router, accept, None).await?;
         assert_eq!(response.status(), StatusCode::OK);
         assert!(
             header_str(&response, header::CONTENT_TYPE).contains("application/json"),
             "Accept {accept:?} must yield JSON, not HTML"
         );
+        // The same URL is content-negotiated, so caches must key on Accept.
+        assert!(
+            header_str(&response, header::VARY).contains("Accept"),
+            "Accept {accept:?} response must carry Vary: Accept"
+        );
         let body = to_bytes(response.into_body(), usize::MAX).await?;
         let json: serde_json::Value = serde_json::from_slice(&body)?;
         assert!(json["nodes"].is_array(), "JSON envelope has a nodes array");
         assert!(json["edges"].is_array(), "JSON envelope has an edges array");
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn authenticated_json_graph_is_no_store() -> anyhow::Result<()> {
+    let _guard = db_guard().await;
+    let Some(router) = common::maybe_router().await? else {
+        return Ok(());
+    };
+    seed_published_and_draft(&router).await?;
+
+    // Authenticated JSON can include the caller's drafts, so it must not be
+    // shared-cached even though it is the API representation.
+    let response = get_graph(&router, Some("application/json"), Some(SHARED_KEY)).await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(header_str(&response, header::CONTENT_TYPE).contains("application/json"));
+    assert!(header_str(&response, header::CACHE_CONTROL).contains("no-store"));
+    assert!(header_str(&response, header::VARY).contains("Accept"));
+
+    let body = to_bytes(response.into_body(), usize::MAX).await?;
+    let json: serde_json::Value = serde_json::from_slice(&body)?;
+    let slugs: Vec<&str> = json["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|node| node["slug"].as_str().unwrap())
+        .collect();
+    assert!(
+        slugs.contains(&"draft-note"),
+        "owner JSON includes the draft"
+    );
     Ok(())
 }
 
@@ -121,6 +165,7 @@ async fn browser_accept_gets_the_html_page_and_hides_drafts() -> anyhow::Result<
     assert!(header_str(&response, header::CONTENT_TYPE).starts_with("text/html"));
     // Anonymous HTML graph is the same for everyone, so it rides the shared cache.
     assert!(header_str(&response, header::CACHE_CONTROL).contains("public"));
+    assert!(header_str(&response, header::VARY).contains("Accept"));
 
     let body = to_bytes(response.into_body(), usize::MAX).await?;
     let html = String::from_utf8(body.to_vec())?;

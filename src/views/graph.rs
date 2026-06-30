@@ -93,11 +93,13 @@ pub fn render_graph_page(graph: &Graph, csp_nonce: &str, site: &SiteMeta<'_>) ->
     var a = 2 * Math.PI * i / n;
     return {{ slug: d.slug, title: d.title, x: CX + 240 * Math.cos(a), y: CY + 240 * Math.sin(a), vx: 0, vy: 0, fixed: false }};
   }});
-  var index = {{}};
+  // Null-prototype maps: keys come from note slugs/indices, so a slug like
+  // `__proto__` must not collide with Object.prototype and corrupt lookups.
+  var index = Object.create(null);
   nodes.forEach(function (nd, i) {{ index[nd.slug] = i; }});
 
   var edges = [];
-  var deg = {{}};
+  var deg = Object.create(null);
   (data.edges || []).forEach(function (e) {{
     var a = index[e.s], b = index[e.t];
     if (a === undefined || b === undefined || a === b) return;
@@ -105,7 +107,7 @@ pub fn render_graph_page(graph: &Graph, csp_nonce: &str, site: &SiteMeta<'_>) ->
     deg[a] = (deg[a] || 0) + 1;
     deg[b] = (deg[b] || 0) + 1;
   }});
-  var neighbors = nodes.map(function () {{ return {{}}; }});
+  var neighbors = nodes.map(function () {{ return Object.create(null); }});
   edges.forEach(function (e) {{ neighbors[e[0]][e[1]] = 1; neighbors[e[1]][e[0]] = 1; }});
 
   // Build SVG: edges first so nodes paint on top. Keep element refs.

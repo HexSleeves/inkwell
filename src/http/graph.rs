@@ -172,46 +172,74 @@ pub async fn graph(
     let visibility = resolve_visibility(&headers, &state).await;
     let graph = links::garden_graph(&state.pool, visibility).await?;
 
-    if wants_html(&headers) {
+    let mut response = if wants_html(&headers) {
         let site = SiteMeta::from_config(&state.config);
         let html = render_graph_page(&graph, csp_nonce.as_str(), &site);
-        // The public graph is identical for everyone, so it rides the shared
-        // HTML cache. An authenticated graph can contain the caller's drafts, so
-        // it must never be stored where another visitor could be served it.
+        // The public graph is identical for everyone, so it rides the shared HTML
+        // cache (with an ETag). Authenticated representations get `no-store` below.
         if matches!(visibility, Visibility::Public) {
-            return Ok(cache::html_response(
-                &headers,
-                "graph",
+            cache::html_response(&headers, "graph", StatusCode::OK, html)
+        } else {
+            (
                 StatusCode::OK,
-                html,
-            ));
-        }
-        return Ok((
-            StatusCode::OK,
-            [
-                (
+                [(
                     header::CONTENT_TYPE,
                     HeaderValue::from_static("text/html; charset=utf-8"),
-                ),
-                (header::CACHE_CONTROL, HeaderValue::from_static("no-store")),
-            ],
-            html,
-        )
-            .into_response());
-    }
+                )],
+                html,
+            )
+                .into_response()
+        }
+    } else {
+        (StatusCode::OK, Json(GraphEnvelope::from(graph))).into_response()
+    };
 
-    Ok((StatusCode::OK, Json(GraphEnvelope::from(graph))).into_response())
+    // The same URL serves multiple representations (HTML vs JSON by `Accept`), so
+    // a shared cache must key on `Accept` or it could replay one representation to
+    // a client that asked for the other and break the JSON wire contract.
+    let response_headers = response.headers_mut();
+    response_headers.insert(header::VARY, HeaderValue::from_static("Accept"));
+    // Any authenticated representation — HTML or JSON — can contain the caller's
+    // own drafts, so it must never be stored where another visitor could see it.
+    if !matches!(visibility, Visibility::Public) {
+        response_headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    }
+    Ok(response)
 }
 
-/// Whether the caller prefers HTML (a browser) over the default JSON. We treat
-/// any `Accept` value mentioning `text/html` as a browser; `application/json`,
-/// `*/*`, and a missing `Accept` all fall through to JSON, so curl, fetch
-/// defaults, and the documented API contract are unaffected.
+/// Whether the caller prefers HTML (a browser) over the default JSON.
+///
+/// Honors `Accept` quality values: HTML is served only when `text/html` is
+/// explicitly acceptable (`q > 0`) AND at least as preferred as
+/// `application/json`. A wildcard-only (`*/*`), JSON, or absent `Accept` — curl,
+/// fetch defaults, and API clients — always gets JSON, preserving the documented
+/// wire contract; `text/html;q=0` (listed but refused) also falls through to JSON.
 fn wants_html(headers: &HeaderMap) -> bool {
-    headers
+    let Some(accept) = headers
         .get(header::ACCEPT)
         .and_then(|value| value.to_str().ok())
-        .is_some_and(|value| value.contains("text/html"))
+    else {
+        return false;
+    };
+    let mut html_q: Option<f32> = None;
+    let mut json_q: Option<f32> = None;
+    for part in accept.split(',') {
+        let mut fields = part.split(';').map(str::trim);
+        let media = fields.next().unwrap_or("").to_ascii_lowercase();
+        let q = fields
+            .find_map(|field| field.strip_prefix("q="))
+            .and_then(|value| value.parse::<f32>().ok())
+            .unwrap_or(1.0);
+        match media.as_str() {
+            "text/html" => html_q = Some(html_q.map_or(q, |existing| existing.max(q))),
+            "application/json" => json_q = Some(json_q.map_or(q, |existing| existing.max(q))),
+            _ => {}
+        }
+    }
+    match html_q {
+        Some(hq) if hq > 0.0 => json_q.is_none_or(|jq| hq >= jq),
+        _ => false,
+    }
 }
 
 /// `GET /documents/{slug}/graph` — the one-hop neighborhood graph around a note.

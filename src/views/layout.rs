@@ -671,7 +671,20 @@ pub(crate) const STYLES: &str = r#"
   ul.graph-fallback a:hover { color: rgb(197 107 71); }
   .graph-canvas { display: none; }
   .js-graph-active .graph-canvas { display: block; }
-  .js-graph-active ul.graph-fallback { display: none; }
+  /* Once JS activates, the SVG canvas is aria-hidden, so keep the fallback link
+     list reachable by keyboard and screen readers — visually hide it rather than
+     removing it from the accessibility tree with display:none. */
+  .js-graph-active ul.graph-fallback {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+    border: 0;
+  }
   .graph-canvas {
     margin-top: 0.5rem;
     border: 1px solid rgb(224 232 224);
