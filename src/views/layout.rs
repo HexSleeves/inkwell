@@ -533,6 +533,70 @@ pub(crate) const STYLES: &str = r#"
     line-height: 1.5;
     margin: 0;
   }
+  /* Notes index page */
+  .notes-page-header { margin-bottom: 1.25rem; }
+  .notes-page-header h1 { margin-bottom: 0.25rem; }
+  .notes-subtitle { margin: 0; color: rgb(120 132 123); font-size: 0.95rem; }
+  .notes-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.75rem;
+    margin-bottom: 1.25rem;
+  }
+  #notes-filter {
+    flex: 1 1 14rem;
+    min-width: 0;
+    padding: 0.5rem 0.85rem;
+    border: 1px solid rgb(199 216 201);
+    border-radius: 0.6rem;
+    background: rgb(252 253 251);
+    font: inherit;
+    color: inherit;
+  }
+  #notes-filter:focus {
+    outline: none;
+    border-color: rgb(120 160 132);
+    box-shadow: 0 0 0 3px rgb(168 192 170 / 0.35);
+  }
+  .notes-sort { display: flex; gap: 0.25rem; }
+  .notes-sort button {
+    padding: 0.4rem 0.8rem;
+    border: 1px solid rgb(199 216 201);
+    border-radius: 0.6rem;
+    background: rgb(252 253 251);
+    font: inherit;
+    font-size: 0.9rem;
+    color: rgb(80 96 84);
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s, color 0.15s;
+  }
+  .notes-sort button:hover { background: rgb(247 251 247); border-color: rgb(168 192 170); }
+  .notes-sort button[aria-pressed="true"] {
+    background: rgb(47 93 69);
+    border-color: rgb(47 93 69);
+    color: rgb(255 255 255);
+  }
+  ul.notes-list { list-style: none; margin: 0; padding: 0; }
+  .note-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.5rem 0.85rem;
+    padding: 0.7rem 0;
+    border-bottom: 1px solid rgb(232 240 232);
+  }
+  .note-row-title {
+    font-weight: 700;
+    color: rgb(47 93 69);
+    text-decoration: none;
+    flex: 1 1 16rem;
+    min-width: 0;
+  }
+  .note-row-title:hover { color: rgb(197 107 71); }
+  .note-row-meta { color: rgb(120 132 123); font-size: 0.85rem; white-space: nowrap; }
+  .notes-truncation { color: rgb(120 132 123); font-size: 0.9rem; font-style: italic; margin: 0 0 1rem; }
+  .notes-no-matches { margin-top: 1rem; }
   /* Full nav header */
   .site-nav-group {
     display: flex;
@@ -715,7 +779,7 @@ pub fn render_page(site: &SiteMeta<'_>, meta: HeadMeta<'_>, main: &str) -> Strin
         LEAF_ICON,
         escape_html(site.name),
         nav_item("dashboard", "/", DASHBOARD_ICON, "Dashboard"),
-        nav_item("notes", "/", NOTES_ICON, "Notes"),
+        nav_item("notes", "/notes", NOTES_ICON, "Notes"),
         nav_item("tags", "/tags", TAG_ICON, "Tags"),
         nav_item("graph", "/graph", GRAPH_ICON, "Graph"),
         nav_item("settings", "/settings", SETTINGS_ICON, "Settings"),

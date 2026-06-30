@@ -105,6 +105,7 @@ pub fn build_router_with_providers(
         .route("/assets/site.css", get(assets::site_css))
         .route("/assets/fonts/nunito.woff2", get(assets::nunito_font))
         .route("/search", get(search::search))
+        .route("/notes", get(pages::notes_index))
         .route("/tags", get(pages::tags_index))
         .route("/tags/{tag}", get(pages::tag_page))
         .route("/tags/{tag}/page/{page}", get(pages::tag_page_numbered))

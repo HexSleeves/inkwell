@@ -5,5 +5,6 @@ pub mod index;
 pub mod layout;
 pub mod login;
 pub mod media;
+pub mod notes;
 pub mod search;
 pub mod tags;

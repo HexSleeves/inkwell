@@ -100,6 +100,9 @@ fn render_page_emits_valid_html_attributes() {
     // opening tag and the trailing label rather than the bare old markup.
     assert!(html.contains(r#"<a class="site-nav" href="/tags">"#));
     assert!(html.contains(r#"Tags</a>"#));
+    // Notes nav points at the dedicated /notes index (not aliased to "/").
+    assert!(html.contains(r#"<a class="site-nav" href="/notes">"#));
+    assert!(html.contains(r#"Notes</a>"#));
     assert!(html.contains(r#"<span class="brand-name">Inkwell</span>"#));
     assert!(html.contains(r#"<div class="botanical-band" aria-hidden="true">"#));
     assert!(html.contains(r#"<main class="site-main">"#));
