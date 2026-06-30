@@ -226,8 +226,13 @@ fn wants_html(headers: &HeaderMap) -> bool {
     for part in accept.split(',') {
         let mut fields = part.split(';').map(str::trim);
         let media = fields.next().unwrap_or("").to_ascii_lowercase();
+        // The `q` parameter name is case-insensitive per RFC 9110, so match it
+        // on the key rather than a literal `q=` prefix (`Q=0.5` is valid).
         let q = fields
-            .find_map(|field| field.strip_prefix("q="))
+            .find_map(|field| {
+                let (key, value) = field.split_once('=')?;
+                key.trim().eq_ignore_ascii_case("q").then(|| value.trim())
+            })
             .and_then(|value| value.parse::<f32>().ok())
             .unwrap_or(1.0);
         match media.as_str() {

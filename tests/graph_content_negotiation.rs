@@ -96,6 +96,8 @@ async fn no_accept_and_json_and_wildcard_all_get_json() -> anyhow::Result<()> {
         Some("*/*"),
         Some("application/json, text/html;q=0"),
         Some("text/html;q=0.3, application/json;q=0.9"),
+        // `q` parameter name is case-insensitive; uppercase Q=0 still refuses HTML.
+        Some("application/json, text/html;Q=0"),
     ] {
         let response = get_graph(&router, accept, None).await?;
         assert_eq!(response.status(), StatusCode::OK);
