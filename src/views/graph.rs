@@ -228,15 +228,21 @@ pub fn render_graph_page(graph: &Graph, csp_nonce: &str, site: &SiteMeta<'_>) ->
       last = {{ x: evt.clientX, y: evt.clientY }}; moved = true; applyView();
     }}
   }});
+  function resetPointer() {{
+    if (dragNode) dragNode.fixed = false;
+    dragNode = null; panning = false; last = null;
+  }}
   function endPointer() {{
     // Use the node captured on pointerdown, not evt.target: setPointerCapture
     // retargets pointerup to the <svg>, so closest('.graph-node') would be null
     // and the click-to-open would never fire.
     if (dragNode && !moved) {{ window.location.assign('/' + encodeURIComponent(dragNode.slug)); }}
-    if (dragNode) dragNode.fixed = false;
-    dragNode = null; panning = false; last = null;
+    resetPointer();
   }}
   svg.addEventListener('pointerup', endPointer);
+  // A cancelled pointer (interrupted touch/OS gesture) never fires pointerup, so
+  // reset state here too — otherwise a node stays pinned and panning stuck.
+  svg.addEventListener('pointercancel', resetPointer);
   svg.addEventListener('wheel', function (evt) {{
     evt.preventDefault();
     var p = toLocal(evt);
