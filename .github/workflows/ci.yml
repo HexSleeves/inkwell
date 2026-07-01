@@ -52,7 +52,7 @@ jobs:
         # pgvector tracks pg17 (no pg18 tag yet). Pinned by immutable digest
         # (linux/amd64, the ubuntu-latest runner arch) for supply-chain
         # reproducibility; refresh alongside the pg17 tag when it moves.
-        image: pgvector/pgvector:pg17@sha256:3226977dafcdf8f8a8079c8e31763dab1d7e52a8c7e008fc04bc33234fce45bb
+        image: pgvector/pgvector:pg17@sha256:da864cc9983d6a346c39c55c8c5250d752a9b573bbac06b1c3ad5d72f20f5be6
         env:
           POSTGRES_USER: inkwell
           POSTGRES_PASSWORD: inkwell
