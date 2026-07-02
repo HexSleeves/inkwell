@@ -10,7 +10,7 @@ anyhow = "1"
 async-trait = "0.1.89"
 axum = { version = "0.8", features = ["json"] }
 clap = { version = "4", features = ["derive"] }
-comrak = { version = "0.52", default-features = false }
+comrak = { version = "0.53", default-features = false }
 dotenvy = "0.15"
 form_urlencoded = "1"
 futures-util = { version = "0.3", default-features = false }
