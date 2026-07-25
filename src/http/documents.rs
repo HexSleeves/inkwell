@@ -5,7 +5,6 @@ use axum::http::{HeaderMap, HeaderValue, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
 use serde::Serialize;
 use serde_json::Value;
-use tokio::time::{Duration, timeout};
 
 use crate::db::audit::{self, AuditAction};
 use crate::db::documents;
@@ -113,31 +112,6 @@ pub struct ListQuery {
 pub struct HistoryQuery {
     limit: Option<String>,
     offset: Option<String>,
-}
-
-pub async fn health(
-    State(state): State<AppState>,
-    method: Method,
-) -> Result<(StatusCode, Json<serde_json::Value>), AppError> {
-    if method != Method::GET {
-        return Err(AppError::MethodNotAllowed(vec!["GET"]));
-    }
-    let query = timeout(
-        Duration::from_millis(1000),
-        sqlx::query("SELECT 1").execute(&state.pool),
-    )
-    .await;
-    if matches!(query, Ok(Ok(_))) {
-        Ok((
-            StatusCode::OK,
-            Json(serde_json::json!({"status": "ok", "db": "up"})),
-        ))
-    } else {
-        Ok((
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(serde_json::json!({"status": "error", "db": "down"})),
-        ))
-    }
 }
 
 pub async fn documents(

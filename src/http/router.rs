@@ -4,16 +4,17 @@ use axum::Router;
 use axum::middleware;
 use axum::routing::{any, get};
 use tower_http::compression::CompressionLayer;
-use tower_http::trace::TraceLayer;
 
 use crate::ai as semantic;
 use crate::ai::{Embedder, Llm};
 use crate::config::Config;
 use crate::http::AppState;
+use crate::http::metrics::Metrics;
 
 use super::{
-    admin, ai, assets, auth_session, documents, editor, feed, graph, media, pages, preview,
-    publish, rate_limit, request_id, search, security_headers, settings, sitemap, webmention,
+    admin, ai, assets, auth_session, documents, editor, feed, graph, health, media, observability,
+    pages, preview, publish, rate_limit, request_id, search, security_headers, settings, sitemap,
+    webmention,
 };
 
 pub fn build_router(config: Arc<Config>, pool: sqlx::PgPool) -> Router {
@@ -37,6 +38,11 @@ pub fn build_router_with_providers(
     llm: Option<Arc<dyn Llm>>,
 ) -> Router {
     let browser_login = config.browser_login;
+    let metrics_enabled = config.metrics_enabled;
+    // One registry per router, shared by the recording middleware and the
+    // `/metrics` handler. Built even when the endpoint is off so enabling it is
+    // a pure exposure change, not a behavior change.
+    let metrics = Arc::new(Metrics::new());
     // One shared GCRA limiter for the whole process. It validates credentials
     // via `authenticate`, so it gets clones of `config`/`pool` before `state`
     // takes ownership. Internally a no-op when `write_rate_limit == 0`.
@@ -49,9 +55,15 @@ pub fn build_router_with_providers(
         pool,
         embedder,
         llm,
+        metrics: metrics.clone(),
     };
     let mut router = Router::new()
-        .route("/health", any(documents::health))
+        // `/health` predates the liveness/readiness split and stays wired to the
+        // readiness probe: deploy configs and runbooks point at it and its body
+        // is a documented wire contract.
+        .route("/health", any(health::readiness))
+        .route("/healthz", any(health::liveness))
+        .route("/readyz", any(health::readiness))
         .route("/ask", any(ai::ask))
         .route("/webmention", any(webmention::webmention))
         .route("/documents", any(documents::documents))
@@ -120,6 +132,14 @@ pub fn build_router_with_providers(
         .route("/{slug}", get(pages::document_page))
         .route("/", get(pages::index));
 
+    // `/metrics` exists only when `INKWELL_METRICS_ENABLED=true`, so a default
+    // install exposes no scrape surface at all (the path falls through to the
+    // `/{slug}` document route, i.e. a 404 unless a note owns that slug). When
+    // on, `INKWELL_METRICS_TOKEN` gates it. See ADR 0012.
+    if metrics_enabled {
+        router = router.route("/metrics", any(observability::metrics));
+    }
+
     // Register the login page + login/logout routes only when the flag is on.
     // When off, `/auth/*` hits the fallback and `/login` falls through to the
     // `/{slug}` document route (a 404 unless a doc owns that slug) — no auth
@@ -141,21 +161,6 @@ pub fn build_router_with_providers(
 
     router
         .layer(CompressionLayer::new())
-        // Add the correlation id to the per-request span so EVERY log line for
-        // the request carries `request_id`. The id is read from the task-local
-        // populated by `propagate_request_id`, which sits outside this layer and
-        // is therefore already in scope when the span is built.
-        .layer(
-            TraceLayer::new_for_http().make_span_with(|request: &axum::extract::Request| {
-                let request_id = request_id::current().unwrap_or_default();
-                tracing::info_span!(
-                    "http_request",
-                    method = %request.method(),
-                    uri = %request_span_uri(request),
-                    %request_id,
-                )
-            }),
-        )
         // Rate limiting sits inside the security-headers layer so a 429 still
         // gets the standard security headers, but outside the handlers so an
         // over-limit write is rejected before any DB or AI work runs.
@@ -166,29 +171,19 @@ pub fn build_router_with_providers(
         .layer(middleware::from_fn(
             security_headers::apply_security_headers,
         ))
+        // Observability wraps the rate limiter and security headers so a 429 or
+        // an error response is still counted and logged with its final status.
+        // It builds the per-request span — so EVERY log line for the request
+        // carries `request_id` and the route template — and emits the single
+        // request-completed event. It reads the correlation id from the
+        // task-local populated by `propagate_request_id`, which sits outside it
+        // and is therefore already in scope.
+        .layer(middleware::from_fn_with_state(
+            metrics,
+            observability::observe,
+        ))
         // Outermost app layer: assign/propagate the correlation id before any
-        // other layer (notably TraceLayer) runs, and echo it on the response.
+        // other layer runs, and echo it on the response.
         .layer(middleware::from_fn(request_id::propagate_request_id))
         .with_state(state)
-}
-
-fn request_span_uri(request: &axum::extract::Request) -> &str {
-    request.uri().path()
-}
-
-#[cfg(test)]
-mod tests {
-    use axum::body::Body;
-
-    use super::request_span_uri;
-
-    #[test]
-    fn request_span_uri_excludes_query_string() {
-        let request = axum::extract::Request::builder()
-            .uri("/documents/post/preview?token=pvw_secret")
-            .body(Body::empty())
-            .expect("request builds");
-
-        assert_eq!(request_span_uri(&request), "/documents/post/preview");
-    }
 }

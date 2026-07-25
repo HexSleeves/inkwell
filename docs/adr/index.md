@@ -16,3 +16,4 @@ Inkwell's development, including the context, decision, and consequences.
 | [ADR 0009](0009-scoped-author-tokens.md) | Scoped author tokens and write audit |
 | [ADR 0010](0010-browser-login.md) | Flag-gated browser session login |
 | [ADR 0011](0011-slug-rename-redirect.md) | Slug rename with 301 alias redirect |
+| [ADR 0012](0012-observability.md) | Observability: structured logs, request ids, `/metrics` |

@@ -126,7 +126,8 @@ Route groups:
 
 | Group | Routes |
 |-------|--------|
-| **Health** | `GET /health` |
+| **Health** | `GET /healthz` (liveness), `GET /readyz` (readiness), `GET /health` (alias of `/readyz`) |
+| **Metrics** | `GET /metrics` (off unless `INKWELL_METRICS_ENABLED=true`; see [Observability](docs/OBSERVABILITY.md)) |
 | **Documents** | `POST/GET /documents`, `GET/PATCH/PUT/DELETE /documents/{slug}` |
 | **State** | `POST /documents/{slug}/publish`, `POST /documents/{slug}/unpublish` |
 | **Linked surfaces** | `GET /documents/{slug}/backlinks`, `GET /documents/{slug}/graph`, `GET /graph` |

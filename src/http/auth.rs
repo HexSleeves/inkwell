@@ -231,6 +231,8 @@ mod tests {
             site_description: None,
             site_author: None,
             custom_css_url: None,
+            metrics_enabled: false,
+            metrics_token: None,
         }
     }
 

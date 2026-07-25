@@ -75,6 +75,16 @@ pub struct Config {
     /// injected after the built-in styles so operators can apply a custom theme
     /// without touching source code. Optional; nothing injected when absent.
     pub custom_css_url: Option<String>,
+    /// Whether to register the `/metrics` Prometheus endpoint
+    /// (`INKWELL_METRICS_ENABLED`). Conservative default: **off** — metrics are
+    /// not publicly scrapeable on a default install; the route simply does not
+    /// exist. See ADR 0012 and `docs/OBSERVABILITY.md`.
+    pub metrics_enabled: bool,
+    /// Optional bearer token required to scrape `/metrics`
+    /// (`INKWELL_METRICS_TOKEN`). When `None`, an enabled `/metrics` is open and
+    /// the operator is relying on network isolation instead. Secret: redacted in
+    /// [`Debug`].
+    pub metrics_token: Option<String>,
 }
 
 impl std::fmt::Debug for Config {
@@ -105,6 +115,11 @@ impl std::fmt::Debug for Config {
             .field("site_description", &self.site_description)
             .field("site_author", &self.site_author)
             .field("custom_css_url", &self.custom_css_url)
+            .field("metrics_enabled", &self.metrics_enabled)
+            .field(
+                "metrics_token",
+                &self.metrics_token.as_ref().map(|_| "<redacted>"),
+            )
             .finish()
     }
 }
@@ -166,6 +181,17 @@ impl Config {
         let site_description = trimmed_env("INKWELL_SITE_DESCRIPTION");
         let site_author = trimmed_env("INKWELL_SITE_AUTHOR");
         let custom_css_url = trimmed_env("INKWELL_CUSTOM_CSS_URL");
+        // Metrics exposure is opt-in: same strict "true"-only parse rule as the
+        // other flags, so a typo leaves the endpoint unregistered rather than
+        // silently publishing operational data.
+        let metrics_enabled = trimmed_env("INKWELL_METRICS_ENABLED")
+            .is_some_and(|value| value.eq_ignore_ascii_case("true"));
+        let metrics_token = trimmed_env("INKWELL_METRICS_TOKEN");
+        if metrics_enabled && metrics_token.is_none() {
+            tracing::warn!(
+                "INKWELL_METRICS_ENABLED is on without INKWELL_METRICS_TOKEN: /metrics is unauthenticated. Set a token or keep the port private."
+            );
+        }
 
         Ok(Self {
             database_url,
@@ -185,6 +211,8 @@ impl Config {
             site_description,
             site_author,
             custom_css_url,
+            metrics_enabled,
+            metrics_token,
         })
     }
 }
@@ -287,11 +315,14 @@ mod tests {
             site_description: None,
             site_author: None,
             custom_css_url: None,
+            metrics_enabled: true,
+            metrics_token: Some("sentinel-metrics-value".to_string()),
         };
         let rendered = format!("{config:?}");
         assert!(!rendered.contains("sentinel-key-value"));
         assert!(!rendered.contains("sentinel-voyage-value"));
         assert!(!rendered.contains("sentinel-anthropic-value"));
+        assert!(!rendered.contains("sentinel-metrics-value"));
         assert!(!rendered.contains("supersecret"));
         assert!(rendered.contains("<redacted>"));
     }
@@ -316,6 +347,8 @@ mod tests {
             site_description: Some("A digital garden.".to_string()),
             site_author: Some("Alice".to_string()),
             custom_css_url: Some("https://example.com/custom.css".to_string()),
+            metrics_enabled: false,
+            metrics_token: None,
         };
         let rendered = format!("{config:?}");
         assert!(rendered.contains("My Garden"));

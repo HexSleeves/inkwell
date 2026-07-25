@@ -98,6 +98,10 @@ pub fn test_config(database_url: String) -> Arc<Config> {
         site_description: None,
         site_author: None,
         custom_css_url: None,
+        // `/metrics` stays unregistered by default, matching production. The
+        // observability contract test opts in via `router_for_with_metrics`.
+        metrics_enabled: false,
+        metrics_token: None,
     })
 }
 
@@ -127,6 +131,17 @@ pub fn router_for_with_rate_limit(pool: PgPool, write_rate_limit: u32) -> axum::
     let database_url = std::env::var("DATABASE_URL").unwrap_or_default();
     let mut config = (*test_config(database_url)).clone();
     config.write_rate_limit = write_rate_limit;
+    build_router(Arc::new(config), pool)
+}
+
+/// Build a router with `/metrics` registered, optionally behind a scrape token.
+/// Mirrors an operator setting `INKWELL_METRICS_ENABLED=true` (plus
+/// `INKWELL_METRICS_TOKEN`) without touching process env.
+pub fn router_for_with_metrics(pool: PgPool, metrics_token: Option<&str>) -> axum::Router {
+    let database_url = std::env::var("DATABASE_URL").unwrap_or_default();
+    let mut config = (*test_config(database_url)).clone();
+    config.metrics_enabled = true;
+    config.metrics_token = metrics_token.map(str::to_string);
     build_router(Arc::new(config), pool)
 }
 

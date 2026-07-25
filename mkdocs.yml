@@ -70,6 +70,7 @@ nav:
     - Deployment Guide: DEPLOYMENT.md
     - Railway: RAILWAY.md
     - Staging: STAGING.md
+    - Observability: OBSERVABILITY.md
     - Backup & Restore: BACKUP-RESTORE.md
   - Releases:
     - Release Process: RELEASES.md
@@ -92,3 +93,4 @@ nav:
       - ADR 0009 — Scoped Tokens: adr/0009-scoped-author-tokens.md
       - ADR 0010 — Browser Login: adr/0010-browser-login.md
       - ADR 0011 — Slug Rename: adr/0011-slug-rename-redirect.md
+      - ADR 0012 — Observability: adr/0012-observability.md

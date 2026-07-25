@@ -220,9 +220,19 @@ All error responses use this JSON shape:
 
 ### Health
 
-#### `GET /health`
+#### `GET /healthz`
 
-Returns the service status and database connectivity. No authentication required.
+Liveness. Consults nothing external, so a Postgres outage never fails it. No
+authentication required.
+
+**Response `200 OK`:**
+```json
+{ "status": "ok" }
+```
+
+#### `GET /readyz`
+
+Readiness. Runs `SELECT 1` under a 1 s timeout. No authentication required.
 
 **Response `200 OK`:**
 ```json
@@ -233,6 +243,25 @@ Returns the service status and database connectivity. No authentication required
 ```json
 { "status": "error", "db": "down" }
 ```
+
+#### `GET /health`
+
+Retained alias of `GET /readyz`, byte-for-byte identical. Deploy configs and
+runbooks point at it.
+
+---
+
+### Metrics
+
+#### `GET /metrics`
+
+Prometheus text exposition (version 0.0.4). **Not registered** unless
+`INKWELL_METRICS_ENABLED=true`, so a default install returns `404`. When
+`INKWELL_METRICS_TOKEN` is set, requires `Authorization: Bearer <token>` and
+returns `401` otherwise.
+
+See [Observability](OBSERVABILITY.md) for the metric reference, label semantics,
+and scrape configuration.
 
 ---
 

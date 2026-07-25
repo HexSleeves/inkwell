@@ -38,7 +38,9 @@ tokio = { version = "1", features = [
   "time",
 ] }
 tower = { version = "0.5", features = ["util"] }
-tower-http = { version = "0.7", features = ["compression-full", "trace"] }
+# `trace` is deliberately absent: request logging is our own middleware
+# (`http::observability`), which emits exactly one event per request. See ADR 0012.
+tower-http = { version = "0.7", features = ["compression-full"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 unicode-normalization = "0.1"

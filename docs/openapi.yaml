@@ -506,6 +506,76 @@ paths:
                 status: error
                 db: down
 
+  /healthz:
+    get:
+      summary: Liveness probe
+      description: >-
+        Consults no dependency. Returns 200 whenever the HTTP stack can serve, so
+        a transient database outage never fails it.
+      operationId: liveness
+      tags: [Meta]
+      responses:
+        "200":
+          description: Process is alive.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [ok]
+              example:
+                status: ok
+
+  /readyz:
+    get:
+      summary: Readiness probe
+      description: Runs `SELECT 1` under a 1 s timeout. Identical to `GET /health`.
+      operationId: readiness
+      tags: [Meta]
+      responses:
+        "200":
+          description: Database is reachable.
+          content:
+            application/json:
+              example:
+                status: ok
+                db: up
+        "503":
+          description: Database unreachable.
+          content:
+            application/json:
+              example:
+                status: error
+                db: down
+
+  /metrics:
+    get:
+      summary: Prometheus metrics
+      description: >-
+        Prometheus text exposition (version 0.0.4). Not registered unless
+        `INKWELL_METRICS_ENABLED=true`, so a default install returns 404. When
+        `INKWELL_METRICS_TOKEN` is set, a matching `Authorization: Bearer <token>`
+        is required. See docs/OBSERVABILITY.md.
+      operationId: metrics
+      tags: [Meta]
+      responses:
+        "200":
+          description: Metrics exposition.
+          content:
+            text/plain:
+              schema:
+                type: string
+              example: |
+                # HELP inkwell_http_requests_total HTTP requests handled, by method, route template, and status.
+                # TYPE inkwell_http_requests_total counter
+                inkwell_http_requests_total{method="GET",route="/healthz",status="200"} 2
+        "401":
+          description: Missing or wrong scrape token.
+        "404":
+          description: Metrics are disabled on this instance.
+
   /documents:
     get:
       summary: List documents

@@ -125,9 +125,40 @@ async fn shutdown_signal() {
     }
 }
 
+/// Default log directive when neither `INKWELL_LOG` nor `RUST_LOG` is set.
+const DEFAULT_LOG_FILTER: &str = "inkwell=info,tower_http=warn";
+
+/// Initialise the tracing subscriber (CYP-46).
+///
+/// - **Level/targets**: `INKWELL_LOG` wins, else `RUST_LOG`, else
+///   [`DEFAULT_LOG_FILTER`]. Both use `tracing-subscriber`'s `EnvFilter` syntax
+///   (e.g. `inkwell=debug,inkwell::http::observability=info`).
+/// - **Format**: newline-delimited JSON by default, one object per event, so a
+///   log shipper can parse it. Set `INKWELL_LOG_FORMAT=pretty` for the
+///   human-readable formatter while developing locally.
+/// - **Writer**: stdout, except under `inkwell mcp`, which owns stdout for its
+///   JSON-RPC stream and therefore logs to stderr.
 fn init_tracing(mcp_mode: bool) {
-    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| "inkwell=info,tower_http=info".into());
+    let directives = std::env::var("INKWELL_LOG")
+        .or_else(|_| std::env::var("RUST_LOG"))
+        .unwrap_or_else(|_| DEFAULT_LOG_FILTER.to_string());
+    let filter = tracing_subscriber::EnvFilter::try_new(&directives)
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(DEFAULT_LOG_FILTER));
+
+    // `pretty` is opt-in for local dev; production/staging keep machine-parsable
+    // JSON so `request_id`, `route`, `status`, and `latency_ms` stay queryable.
+    if std::env::var("INKWELL_LOG_FORMAT")
+        .map(|value| value.trim().eq_ignore_ascii_case("pretty"))
+        .unwrap_or(false)
+    {
+        let builder = tracing_subscriber::fmt().with_env_filter(filter).pretty();
+        if mcp_mode {
+            builder.with_writer(std::io::stderr).init();
+        } else {
+            builder.init();
+        }
+        return;
+    }
 
     let builder = tracing_subscriber::fmt()
         .with_env_filter(filter)

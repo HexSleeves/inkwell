@@ -30,7 +30,8 @@ All routes in the "HTTP surface" section of the README are stable:
 | Admin | `POST /admin/tokens`, `GET /admin/tokens`, `POST /admin/tokens/:prefix/revoke`, `POST /admin/tokens/prune` |
 | Preview tokens | `GET /documents/:slug/preview-tokens`, `POST /documents/:slug/preview-tokens`, `DELETE /documents/:slug/preview-tokens/:prefix` |
 | Preview read | `GET /documents/:slug/preview` |
-| Health | `GET /health` |
+| Health | `GET /health`, `GET /healthz`, `GET /readyz` |
+| Metrics | `GET /metrics` (only when `INKWELL_METRICS_ENABLED=true`) |
 | Public HTML | `GET /`, `GET /page/:page`, `GET /:slug`, `GET /tags`, `GET /tags/:tag`, `GET /tags/:tag/page/:page` |
 | Archive | `GET /archive`, `GET /archive/:year/:month`, `GET /archive/:year/:month/page/:page` |
 | Feeds | `GET /feed.xml`, `GET /sitemap.xml` |
@@ -139,11 +140,16 @@ Every response carries `X-Request-Id`. A well-formed inbound `X-Request-Id` is
 echoed unchanged; a missing or malformed one is replaced with a fresh UUID v4.
 The header name and the presence of `requestId` in the error envelope are stable.
 
-### Health Endpoint
+### Health Endpoints
 
 `GET /health` returns `200 OK` with body `{"status":"ok","db":"up"}` when the
 database is reachable, or `503 Service Unavailable` with
 `{"status":"error","db":"down"}` otherwise. Both field names are stable.
+
+`GET /readyz` is identical to `GET /health`. `GET /healthz` is liveness only: it
+consults no dependency and returns `200 OK` with `{"status":"ok"}` (no `db`
+field). The split is additive — `/health` is unchanged. See
+[ADR 0012](adr/0012-observability.md).
 
 ### Wikilink HTML Output
 

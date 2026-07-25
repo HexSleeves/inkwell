@@ -16,7 +16,10 @@ pub mod editor;
 pub mod extractors;
 pub mod feed;
 pub mod graph;
+pub mod health;
 pub mod media;
+pub mod metrics;
+pub mod observability;
 pub mod pages;
 pub mod preview;
 pub mod publish;
@@ -42,4 +45,7 @@ pub struct AppState {
     /// `ANTHROPIC_API_KEY` is unset, in which case `/ask` reports "AI features
     /// not configured" instead of 500ing.
     pub llm: Option<Arc<dyn Llm>>,
+    /// Process-wide HTTP metrics registry. Written by the
+    /// [`observability::observe`] middleware, rendered by `GET /metrics`.
+    pub metrics: Arc<metrics::Metrics>,
 }

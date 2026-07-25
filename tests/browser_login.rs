@@ -154,6 +154,8 @@ fn browser_login_router(pool: sqlx::PgPool) -> axum::Router {
             site_description: None,
             site_author: None,
             custom_css_url: None,
+            metrics_enabled: false,
+            metrics_token: None,
         }),
         pool,
     )
