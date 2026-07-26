@@ -7,12 +7,9 @@ use tower_http::compression::CompressionLayer;
 
 use crate::ai as semantic;
 use crate::ai::{Embedder, Llm};
-use crate::config::{Config, MediaBackend};
+use crate::config::Config;
 use crate::http::AppState;
 use crate::http::metrics::Metrics;
-use crate::media::MediaStore;
-use crate::media::local::LocalFsStore;
-use crate::media::pg::PgBlobStore;
 
 use super::{
     admin, ai, assets, auth_session, documents, editor, feed, graph, health, media, observability,
@@ -57,7 +54,7 @@ pub fn build_router_with_providers(
     // upload before the handler's own check runs, so the route carries the
     // configured cap. Read before `state` takes ownership of `config`.
     let media_max_bytes = config.media_max_bytes;
-    let media_store = build_media_store(&config, &pool);
+    let media_store = crate::media::build_store(&config, &pool);
     let state = AppState {
         config,
         pool,
@@ -198,16 +195,4 @@ pub fn build_router_with_providers(
         // other layer runs, and echo it on the response.
         .layer(middleware::from_fn(request_id::propagate_request_id))
         .with_state(state)
-}
-
-/// Build the media blob store the config selects (ADR 0013).
-///
-/// The trait keeps this the ONLY place a backend is chosen: handlers, URLs, and
-/// stored keys are identical across backends, so adding an object store later is
-/// a new arm here plus a new impl — no API change.
-fn build_media_store(config: &Config, pool: &sqlx::PgPool) -> Arc<dyn MediaStore> {
-    match config.media_backend {
-        MediaBackend::Local => Arc::new(LocalFsStore::new(config.media_dir.clone())),
-        MediaBackend::Postgres => Arc::new(PgBlobStore::new(pool.clone())),
-    }
 }

@@ -215,6 +215,22 @@ pub fn router_for_with_ai(pool: PgPool) -> axum::Router {
     build_router_with_providers(test_config(database_url), pool, embedder, llm)
 }
 
+/// Mock-AI router pinned to an explicit local media directory.
+///
+/// [`test_config`] mints a *fresh* media dir per call, which is right for a test
+/// that only needs isolation but wrong for one that must read back what an
+/// earlier router wrote (backup/restore). Pass the same dir to both routers to
+/// share a store, or different dirs to prove blobs actually moved.
+pub fn router_for_with_ai_and_media_dir(pool: PgPool, media_dir: &Path) -> axum::Router {
+    let database_url = std::env::var("DATABASE_URL").unwrap_or_default();
+    let mut config = (*test_config(database_url)).clone();
+    config.media_backend = MediaBackend::Local;
+    config.media_dir = media_dir.to_string_lossy().into_owned();
+    let embedder: Arc<dyn Embedder> = Arc::new(MockEmbedder);
+    let llm: Option<Arc<dyn Llm>> = Some(Arc::new(MockLlm));
+    build_router_with_providers(Arc::new(config), pool, embedder, llm)
+}
+
 /// Build a router whose embedder returns an error on any call. Pass the SAME
 /// pool used by a seeding router (built with [`router_for_with_ai`]) so the
 /// route operates over real chunk data while the embedder is provably unused.
@@ -222,4 +238,102 @@ pub fn router_for_with_failing_embedder(pool: PgPool) -> axum::Router {
     let database_url = std::env::var("DATABASE_URL").unwrap_or_default();
     let embedder: Arc<dyn Embedder> = Arc::new(FailingEmbedder);
     build_router_with_providers(test_config(database_url), pool, embedder, None)
+}
+
+// ---------------------------------------------------------------------------
+// Scratch databases (backup/restore contract tests)
+// ---------------------------------------------------------------------------
+
+/// A throwaway database that stands in for "wipe to a clean volume".
+///
+/// The backup/restore contract needs a *second* deployment to restore into —
+/// truncating the shared test database would only prove that restore can undo
+/// its own delete, and would fight the `maybe_pool()` truncation other tests
+/// rely on. So each test creates its own database, migrates it (or not, when the
+/// point is an unmigrated target), and drops it at the end.
+///
+/// Call [`ScratchDb::cleanup`] when done. A leaked scratch database is harmless
+/// — names are unique per process and test — but leaving them behind on a
+/// developer machine is rude.
+pub struct ScratchDb {
+    pub url: String,
+    name: String,
+    maintenance_url: String,
+}
+
+impl ScratchDb {
+    /// Create and migrate an empty deployment. Returns `Ok(None)` when
+    /// `DATABASE_URL` is unset, matching [`maybe_pool`]'s skip behaviour.
+    pub async fn create_migrated(label: &str) -> Result<Option<Self>> {
+        let Some(scratch) = Self::create(label).await? else {
+            return Ok(None);
+        };
+        let pool = create_pool(&scratch.url)?;
+        migrations::migrate(&pool).await?;
+        pool.close().await;
+        Ok(Some(scratch))
+    }
+
+    /// Create an empty database with no schema at all.
+    pub async fn create(label: &str) -> Result<Option<Self>> {
+        let Ok(database_url) = std::env::var("DATABASE_URL") else {
+            if std::env::var("INKWELL_REQUIRE_DB_TESTS").as_deref() == Ok("1") {
+                return Err(anyhow!(
+                    "DATABASE_URL is required when INKWELL_REQUIRE_DB_TESTS=1"
+                ));
+            }
+            eprintln!("Skipping scratch-database test: set DATABASE_URL to run it locally.");
+            return Ok(None);
+        };
+
+        // Unique per process and per call so parallel test binaries can't collide.
+        static COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let seq = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let name = format!("inkwell_scratch_{label}_{}_{seq}", std::process::id());
+
+        let mut url = url::Url::parse(&database_url)?;
+        // `CREATE DATABASE` cannot run from inside the database being created,
+        // so issue it against the `postgres` maintenance database.
+        url.set_path("/postgres");
+        let maintenance_url = url.to_string();
+
+        let admin = create_pool(&maintenance_url)?;
+        // Identifier is built from a fixed prefix + pid + counter, so it cannot
+        // contain a quote; guard anyway since this is concatenated SQL.
+        assert!(
+            name.chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_'),
+            "scratch database name must be a bare identifier: {name}"
+        );
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "DROP DATABASE IF EXISTS \"{name}\" WITH (FORCE)"
+        )))
+        .execute(&admin)
+        .await?;
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE DATABASE \"{name}\"")))
+            .execute(&admin)
+            .await?;
+        admin.close().await;
+
+        let mut scratch_url = url::Url::parse(&database_url)?;
+        scratch_url.set_path(&format!("/{name}"));
+
+        Ok(Some(Self {
+            url: scratch_url.to_string(),
+            name,
+            maintenance_url,
+        }))
+    }
+
+    pub async fn cleanup(self) -> Result<()> {
+        let admin = create_pool(&self.maintenance_url)?;
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "DROP DATABASE IF EXISTS \"{}\" WITH (FORCE)",
+            self.name
+        )))
+        .execute(&admin)
+        .await?;
+        admin.close().await;
+        Ok(())
+    }
 }

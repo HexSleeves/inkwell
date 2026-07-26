@@ -31,8 +31,41 @@ pub mod local;
 pub mod pg;
 pub mod sniff;
 
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use sha2::{Digest, Sha256};
+
+use crate::config::{Config, MediaBackend};
+
+/// Build the media blob store the config selects (ADR 0013).
+///
+/// The trait keeps this the ONLY place a backend is chosen: handlers, URLs, and
+/// stored keys are identical across backends, so adding an object store later is
+/// a new arm here plus a new impl — no API change. Shared by the HTTP router and
+/// by `inkwell backup`/`inkwell restore`, which must read and write blobs through
+/// whichever backend the deployment is configured for.
+pub fn build_store(config: &Config, pool: &sqlx::PgPool) -> Arc<dyn MediaStore> {
+    match config.media_backend {
+        MediaBackend::Local => Arc::new(local::LocalFsStore::new(config.media_dir.clone())),
+        MediaBackend::Postgres => Arc::new(pg::PgBlobStore::new(pool.clone())),
+    }
+}
+
+/// The SHA-256 digest embedded in a content-addressed storage key.
+///
+/// Returns `None` for a malformed key. Lets a restore verify that the bytes it
+/// is about to write actually match the key they arrived under, so a corrupted
+/// or tampered bundle fails instead of quietly installing wrong image data.
+pub fn digest_in_storage_key(key: &str) -> Option<&str> {
+    if !is_valid_storage_key(key) {
+        return None;
+    }
+    key.rsplit_once('/')?
+        .1
+        .split_once('.')
+        .map(|(digest, _)| digest)
+}
 
 /// MIME types accepted on upload.
 ///

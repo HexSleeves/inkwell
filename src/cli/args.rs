@@ -27,6 +27,31 @@ pub enum Command {
         command: AuthorCommand,
     },
     Import(ImportCommand),
+    /// Write a restorable bundle (documents, media, tags, links, search corpus,
+    /// tokens, audit trail) plus a manifest recording the schema and Inkwell
+    /// versions. See docs/BACKUP-RESTORE.md.
+    Backup(BackupCommand),
+    /// Load a bundle written by `inkwell backup` into this deployment.
+    Restore(RestoreCommand),
+}
+
+#[derive(Debug, Args)]
+pub struct BackupCommand {
+    /// Bundle path to write. Defaults to
+    /// `inkwell-backup-<UTC timestamp>.inkwell.gz` in the current directory;
+    /// pass `-` to stream the bundle to stdout.
+    #[arg(short = 'o', long = "out")]
+    pub out: Option<PathBuf>,
+}
+
+#[derive(Debug, Args)]
+pub struct RestoreCommand {
+    /// Bundle to restore. Pass `-` to read from stdin.
+    pub bundle: PathBuf,
+    /// Replace existing data. Without it, restoring into a deployment that
+    /// already holds documents, media, or authors fails and changes nothing.
+    #[arg(long)]
+    pub overwrite: bool,
 }
 
 #[derive(Debug, Subcommand)]

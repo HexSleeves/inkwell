@@ -77,13 +77,33 @@ pub struct AppliedMigration {
     pub description: String,
 }
 
-pub async fn status(pool: &PgPool) -> Result<Vec<AppliedMigration>> {
+/// Generic over the executor so callers can read migration state from inside an
+/// open transaction (`inkwell backup` records it in the bundle manifest from the
+/// same snapshot as the rows).
+pub async fn status<'e, E>(executor: E) -> Result<Vec<AppliedMigration>>
+where
+    E: sqlx::PgExecutor<'e>,
+{
     sqlx::query_as::<Postgres, AppliedMigration>(
         "SELECT version, description FROM _sqlx_migrations ORDER BY version ASC",
     )
-    .fetch_all(pool)
+    .fetch_all(executor)
     .await
     .map_err(Into::into)
+}
+
+/// Highest migration version this binary carries, regardless of what is applied.
+///
+/// This is the ceiling `inkwell restore` compares a bundle against: a bundle
+/// whose schema version exceeds it was written by a newer Inkwell and cannot be
+/// restored faithfully here.
+pub fn latest_known_schema_version() -> i64 {
+    MIGRATOR
+        .migrations
+        .iter()
+        .map(|migration| migration.version)
+        .max()
+        .unwrap_or(0)
 }
 
 #[cfg(test)]

@@ -6,7 +6,7 @@ use tokio::net::TcpListener;
 use tracing::info;
 
 use clap::Parser;
-use inkwell::cli::args::{Cli, Command, DbCommand};
+use inkwell::cli::args::{BackupCommand, Cli, Command, DbCommand, RestoreCommand};
 use inkwell::cli::author;
 use inkwell::cli::import;
 use inkwell::cli::migrate::{db_migrate, db_reindex_embeddings, db_rollback, db_status};
@@ -60,7 +60,85 @@ async fn main() -> Result<()> {
         }
         Command::Author { command } => author::run(command).await,
         Command::Import(command) => import::run(command).await,
+        Command::Backup(command) => backup(command).await,
+        Command::Restore(command) => restore(command).await,
     }
+}
+
+/// `inkwell backup`: dump the deployment to a bundle and report what was
+/// written. Progress goes to stderr so `--out -` stays a clean pipe.
+async fn backup(command: BackupCommand) -> Result<()> {
+    let config = Config::from_env()?;
+    let pool = create_pool(&config.database_url)?;
+
+    let destination = match command.out {
+        Some(path) => Some(path),
+        // An explicit default filename beats writing to stdout by accident.
+        None => Some(std::path::PathBuf::from(
+            inkwell::backup::create::default_bundle_name(time::OffsetDateTime::now_utc())?,
+        )),
+    };
+
+    let media_store = inkwell::media::build_store(&config, &pool);
+    let summary = inkwell::backup::create::run(&pool, media_store.as_ref(), destination).await?;
+    let target = summary
+        .path
+        .as_ref()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|| "<stdout>".to_string());
+    if summary.blobs_written < summary.manifest.blobs {
+        eprintln!(
+            "warning: {} media row(s) had no bytes in storage and were backed up without them",
+            summary.manifest.blobs - summary.blobs_written
+        );
+    }
+    eprintln!(
+        "Backed up {} rows across {} tables and {} media blob(s) from the {} backend \
+         (schema version {}, inkwell {}) to {}",
+        summary.rows_written,
+        summary.manifest.tables.len(),
+        summary.blobs_written,
+        summary.manifest.media_backend,
+        summary.manifest.schema_version,
+        summary.manifest.inkwell_version,
+        target
+    );
+    Ok(())
+}
+
+/// `inkwell restore`: migrate the target, then load the bundle in one
+/// transaction. Refuses a non-empty target without `--overwrite`.
+async fn restore(command: RestoreCommand) -> Result<()> {
+    let config = Config::from_env()?;
+    let pool = create_pool(&config.database_url)?;
+
+    let media_store = inkwell::media::build_store(&config, &pool);
+    let summary = inkwell::backup::restore::run(
+        &pool,
+        media_store.as_ref(),
+        Some(command.bundle),
+        inkwell::backup::restore::RestoreOptions {
+            overwrite: command.overwrite,
+        },
+    )
+    .await?;
+
+    for warning in &summary.warnings {
+        eprintln!("warning: {warning}");
+    }
+    eprintln!(
+        "Restored {} rows and {} media blob(s) into the {} backend \
+         (removed {} superseded blob(s)) from a bundle written {} by inkwell {} \
+         (schema version {})",
+        summary.rows_restored,
+        summary.blobs_restored,
+        media_store.backend(),
+        summary.blobs_removed,
+        summary.manifest.created_at,
+        summary.manifest.inkwell_version,
+        summary.manifest.schema_version
+    );
+    Ok(())
 }
 
 /// Run the MCP server over stdio. It is a thin HTTP client: it authenticates

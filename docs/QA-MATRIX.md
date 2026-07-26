@@ -426,6 +426,42 @@ INKWELL_REQUIRE_DB_TESTS=1 cargo test --test archive_nav_contract
 
 ---
 
+## 18. Backup and Restore (CYP-49)
+
+### 18a. Automated (DB-backed)
+
+| Test | Pass criterion | Evidence field |
+|------|----------------|----------------|
+| `backup_restore_contract::backup_then_restore_into_a_clean_deployment_reproduces_every_read_surface` | seed → publish → backup → fresh database + empty media root → restore; published pages, tags, archive, search JSON, graph, `/related`, feed, sitemap, and media bytes all identical; per-table row counts equal | [ ] |
+| `backup_restore_contract::restore_into_a_non_empty_deployment_without_overwrite_fails_and_changes_nothing` | error names the occupied tables and `--overwrite`; not one row or blob written | [ ] |
+| `backup_restore_contract::restore_with_overwrite_replaces_existing_data` | target's own note gone (not merged); superseded blob deleted and its URL 404s | [ ] |
+| `backup_restore_contract::empty_deployment_backs_up_and_restores` | empty → bundle → empty succeeds; restored deployment lists 0 documents | [ ] |
+| `backup_restore_contract::restore_refuses_a_bundle_from_a_newer_schema_and_changes_nothing` | refusal names both versions; row counts and migration state unchanged | [ ] |
+| `backup::*` unit tests | manifest/blob round-trip, content-address verification, FK-safe table order, identifier quoting | [ ] |
+| `clap_cli_contract::{backup_out_is_optional_and_accepts_stdout, restore_requires_a_bundle_and_defaults_to_not_overwriting}` | `--overwrite` defaults off; `restore` requires a bundle path | [ ] |
+
+Run with:
+```
+INKWELL_REQUIRE_DB_TESTS=1 cargo test --test backup_restore_contract
+cargo test --lib backup --test clap_cli_contract
+```
+
+### 18b. Manual smoke
+
+Uses the composed stack. This is the disaster-recovery rehearsal — do it against
+a stack that has real content and at least one uploaded image.
+
+| Step | Env | Pass criterion | Evidence field |
+|------|-----|----------------|----------------|
+| `docker compose exec -T app inkwell backup --out - > bundle.inkwell.gz` | compose | exits 0; stderr summary reports rows, blob count, and schema version; file is non-empty | [ ] |
+| `docker compose exec -T app inkwell restore /dev/stdin < bundle.inkwell.gz` (no flag, live stack) | compose | exits **1**; message names occupied tables and `--overwrite`; site still serves normally afterwards | [ ] |
+| `docker compose down -v` then `docker compose up -d db` | compose | both `inkwell-pgdata` and `inkwell-media` volumes destroyed | [ ] |
+| `docker compose run --rm -T app inkwell restore - < bundle.inkwell.gz` | compose | exits 0 with no `--overwrite`; migrations run automatically | [ ] |
+| `docker compose up -d app`, then browse the site | compose | published pages, tags, search, and every embedded image resolve as before the wipe | [ ] |
+| Run the [post-restore smoke checks](BACKUP-RESTORE.md#post-restore-smoke-checks) | compose | all ten pass | [ ] |
+
+---
+
 ## Known Gaps
 
 The following areas lack automated coverage at v0.2.  They are manual-only

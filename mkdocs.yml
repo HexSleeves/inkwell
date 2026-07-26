@@ -94,3 +94,5 @@ nav:
       - ADR 0010 — Browser Login: adr/0010-browser-login.md
       - ADR 0011 — Slug Rename: adr/0011-slug-rename-redirect.md
       - ADR 0012 — Observability: adr/0012-observability.md
+      - ADR 0013 — Media Storage: adr/0013-media-storage.md
+      - ADR 0014 — Backup & Restore: adr/0014-backup-restore.md

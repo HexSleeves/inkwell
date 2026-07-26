@@ -22,6 +22,7 @@ Local preview: `pip install -r requirements-docs.txt && mkdocs serve`.
 | **Author CLI** | `inkwell author` — `new`, `push`, `publish`, `unpublish`, `upload`; `inkwell import` for bulk Markdown import |
 | **Scoped tokens** | Per-author bearer tokens (`ink_<prefix>_<secret>`); scopes: `read`, `write`, `publish`, `admin`; `inkwell author token` CLI |
 | **Media** | `POST /media`, `GET /media/{id}`, `DELETE /media/{id}` — content-addressed image upload behind a pluggable storage backend (local filesystem by default, Postgres optional); magic-byte type verification, immutable cache + `ETag`; insert from the authoring UI or `inkwell author upload <file>` |
+| **Backup / restore** | `inkwell backup` writes one bundle (database + media bytes + a manifest recording schema/Inkwell versions); `inkwell restore` loads it, refusing a non-empty target without `--overwrite` and a bundle from a newer schema outright — see [`docs/BACKUP-RESTORE.md`](docs/BACKUP-RESTORE.md) |
 | **Draft preview** | `POST /documents/{slug}/preview-tokens` mints a shareable `pvw_…` token; anonymous `GET /documents/{slug}/preview?token=…` renders the draft |
 | **Archive nav** | `GET /archive` lists year/month buckets; `GET /archive/{year}/{month}` shows paginated docs; prev/next bar on each document page |
 | **Site metadata** | `INKWELL_SITE_TITLE`, `INKWELL_SITE_DESCRIPTION`, `INKWELL_SITE_AUTHOR`, `INKWELL_CUSTOM_CSS_URL` for brand/SEO configuration |

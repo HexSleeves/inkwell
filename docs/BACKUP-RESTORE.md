@@ -1,23 +1,254 @@
-# Database Backup and Restore Runbook
+# Backup and Restore Runbook
 
-Inkwell stores all data in a single PostgreSQL database. This runbook covers
-backup cadence, restore procedures for local and Railway (production) environments,
-migration compatibility, and post-restore smoke checks.
+Inkwell keeps authored documents in PostgreSQL and uploaded media bytes behind a
+[pluggable storage backend](adr/0013-media-storage.md) — the local filesystem by
+default, or the `media_blobs` table. A complete backup needs **both**.
+
+`inkwell backup` and `inkwell restore` do that in one step, producing a single
+bundle file. The `pg_dump`/`pg_restore` runbook further down remains the
+physical-fidelity alternative, and the one to reach for when you want
+Railway's own snapshot tooling or partial table recovery.
 
 ---
 
 ## Table of Contents
 
-1. [Backup Cadence](#backup-cadence)
-2. [Taking a Backup](#taking-a-backup)
+1. [`inkwell backup` / `inkwell restore`](#inkwell-backup--inkwell-restore)
+   - [What is and is not backed up](#what-is-and-is-not-backed-up)
+   - [Taking a bundle](#taking-a-bundle)
+   - [Restoring a bundle](#restoring-a-bundle)
+   - [Version compatibility](#version-compatibility)
+   - [Docker Compose](#docker-compose)
+   - [Railway](#railway)
+   - [Scheduling with cron](#scheduling-with-cron)
+2. [Backup Cadence](#backup-cadence)
+3. [`pg_dump` / `pg_restore` (physical alternative)](#taking-a-backup)
    - [Local (Docker Compose)](#local-docker-compose)
    - [Railway (Production)](#railway-production)
-3. [Restoring](#restoring)
+4. [Restoring](#restoring)
    - [Prerequisites: pgvector Extension](#prerequisites-pgvector-extension)
    - [Restore — Local](#restore-local)
    - [Restore — Railway (Production)](#restore-railway-production)
-4. [Migration Compatibility](#migration-compatibility)
-5. [Post-Restore Smoke Checks](#post-restore-smoke-checks)
+5. [Migration Compatibility](#migration-compatibility)
+6. [Post-Restore Smoke Checks](#post-restore-smoke-checks)
+
+---
+
+## `inkwell backup` / `inkwell restore`
+
+A bundle is a single gzipped JSON Lines file: a manifest line recording the
+Inkwell version, the schema (migration) version, per-table row counts, and the
+source media backend; then every table row; then every media blob, base64-encoded
+and verified against its content-addressed key on the way back in.
+
+The dump runs inside one `REPEATABLE READ` transaction, so a bundle is a
+consistent snapshot even if the server keeps serving writes while it runs. You do
+not need to stop the app to take a backup. You *do* need to stop writes before a
+restore.
+
+### What is and is not backed up
+
+**Included:**
+
+| Data | Where it lives |
+|------|----------------|
+| Documents (published and draft), titles, bodies, tags, status, version | `documents` |
+| Slug history so old URLs keep redirecting | `slug_aliases` |
+| Wikilink graph | `links` |
+| Search corpus | recomputed from `documents` on restore (`search_vector` is a generated column) |
+| Embedding chunks and vectors for `/ask` and `/related` | `note_chunks` |
+| Authors, scoped API tokens, browser sessions | `authors`, `author_tokens`, `sessions` |
+| Write audit trail | `write_audit` |
+| Received webmentions | `webmentions` |
+| Preview tokens | `preview_tokens` |
+| Media metadata **and image bytes** | `media` + the configured media store |
+
+**Not included — and why:**
+
+- **Configuration and secrets.** `INKWELL_API_KEY`, `DATABASE_URL`, AI provider
+  keys, `INKWELL_SITE_URL`, and everything else from the environment. A bundle is
+  data, not a deployment; keep your env in your own secret store. This is
+  deliberate: bundles get copied to laptops and object stores, and a bundle that
+  carried credentials would be a credential leak waiting to happen.
+- **Migration state.** The target deployment owns its own; the bundle records the
+  source's version in the manifest so a mismatch can be detected.
+- **The `media_blobs` table as such.** Blobs are dumped through the storage trait
+  instead, which is what makes a bundle portable across backends: back up a
+  filesystem-backed deployment and restore it onto a Postgres-backed one (or the
+  reverse) and every `/media/{id}` URL still resolves.
+- **Postgres roles, extensions, and indexes.** `inkwell restore` runs migrations
+  on the target first, which recreates all of them. The target's Postgres must
+  have `pgvector` available (see [Prerequisites](#prerequisites-pgvector-extension)).
+
+### Taking a bundle
+
+```bash
+# Writes ./inkwell-backup-<UTC timestamp>.inkwell.gz
+inkwell backup
+
+# Explicit destination
+inkwell backup --out /backups/inkwell-nightly.inkwell.gz
+
+# Stream to stdout: pipe into gpg, object storage, or ssh
+inkwell backup --out - | gpg --encrypt -r ops@example.com > inkwell.inkwell.gz.gpg
+inkwell backup --out - | aws s3 cp - s3://my-backups/inkwell/$(date -u +%Y%m%dT%H%M%SZ).inkwell.gz
+```
+
+`inkwell backup` reads `DATABASE_URL`, `INKWELL_MEDIA_BACKEND`, and
+`INKWELL_MEDIA_DIR` from the environment — the same variables the server uses, so
+run it with the same env (or the same container) as your deployment. Progress and
+the summary go to **stderr**, which keeps `--out -` a clean pipe.
+
+### Restoring a bundle
+
+```bash
+# Into an empty deployment. Migrations run automatically first.
+inkwell restore /backups/inkwell-nightly.inkwell.gz
+
+# Into a deployment that already holds data: --overwrite is required
+inkwell restore /backups/inkwell-nightly.inkwell.gz --overwrite
+
+# From stdin
+gpg --decrypt inkwell.inkwell.gz.gpg | inkwell restore -
+```
+
+Stop the app first so nothing writes mid-restore:
+
+```bash
+docker compose stop app        # compose
+# Railway: set replicas to 0, or redeploy without `inkwell serve`
+```
+
+Two safety properties, both covered by
+[`tests/backup_restore_contract.rs`](https://github.com/HexSleeves/inkwell/blob/main/tests/backup_restore_contract.rs):
+
+- **Never silently clobber.** Without `--overwrite`, restoring into a deployment
+  that holds any documents, media, or authors beyond the seeded bootstrap admin
+  fails before the first write and changes nothing — not a row, not a blob.
+- **All or nothing.** Every database write happens in one transaction. A bad row,
+  a checksum failure, or a missing column aborts the whole restore and leaves the
+  target exactly as it was.
+
+With `--overwrite`, the backed-up tables are truncated and replaced wholesale
+(not merged), and blobs the previous deployment referenced that the bundle does
+not contain are deleted **after** the transaction commits — so a failed restore
+never leaves you with neither the old data nor the new.
+
+### Version compatibility
+
+`inkwell restore` **refuses** a bundle whose schema version is newer than the
+binary knows, and says so explicitly rather than failing on a missing column
+halfway through:
+
+```
+Error: bundle schema version 27 is newer than this binary knows (25). The bundle
+was written by Inkwell 0.3.0; upgrade to that version or later before restoring.
+Nothing was changed.
+```
+
+Restoring an **older** bundle works and is the normal upgrade path: migrations run
+on the target first, then rows load into the current schema. Columns added since
+the bundle was written take their schema defaults, and `inkwell restore` prints a
+warning naming each one. Review those warnings — a column with no sensible
+default is a real data gap, not noise.
+
+### Docker Compose
+
+The composed stack keeps two volumes:
+
+| Volume | Container path | Holds |
+|--------|----------------|-------|
+| `inkwell-pgdata` | `/var/lib/postgresql/data` | The database |
+| `inkwell-media` | `/app/data/media` | Media blobs (`INKWELL_MEDIA_DIR`) |
+
+Run backup and restore **inside the app container**, which already has
+`DATABASE_URL`, `INKWELL_MEDIA_DIR`, and the media volume mounted:
+
+```bash
+# Back up to your host's current directory
+docker compose exec -T app inkwell backup --out - > "inkwell-$(date -u +%Y%m%dT%H%M%SZ).inkwell.gz"
+
+# Restore from the host
+docker compose stop app
+docker compose run --rm -T app inkwell restore - --overwrite < inkwell-20260725T140309Z.inkwell.gz
+docker compose start app
+```
+
+`docker compose run --rm` is used for the restore because `exec` needs the
+service running, and the point of the restore is that it is not.
+
+To rehearse the "disk loss" case end to end, wipe both volumes and restore into
+the fresh stack:
+
+```bash
+docker compose down -v          # destroys inkwell-pgdata AND inkwell-media
+docker compose up -d db
+docker compose run --rm -T app inkwell restore - < inkwell-20260725T140309Z.inkwell.gz
+docker compose up -d app
+```
+
+No `--overwrite` is needed there: the deployment is genuinely empty.
+
+### Railway
+
+Railway's filesystem is ephemeral, so set `INKWELL_MEDIA_BACKEND=postgres` there
+(the default `local` backend would lose uploads on every redeploy) and the bundle
+covers everything with no volume to think about.
+
+```bash
+# Requires: railway login && railway link <project>
+railway run --service inkwell inkwell backup --out - > "inkwell-prod-$(date -u +%Y%m%dT%H%M%SZ).inkwell.gz"
+```
+
+Restore is the same command against the production environment. Scale the service
+to 0 replicas first, restore, then scale back up — see
+[Restore — Railway](#restore-railway-production) for the scaling steps.
+
+### Scheduling with cron
+
+Copy-pasteable: nightly at 03:15 UTC, 14 days of retention, logged.
+
+```cron
+# /etc/cron.d/inkwell-backup
+# Nightly Inkwell backup at 03:15 UTC, keeping 14 days.
+SHELL=/bin/bash
+PATH=/usr/local/bin:/usr/bin:/bin
+15 3 * * * inkwell /usr/local/bin/inkwell-backup.sh >> /var/log/inkwell-backup.log 2>&1
+```
+
+```bash
+#!/usr/bin/env bash
+# /usr/local/bin/inkwell-backup.sh
+set -euo pipefail
+
+BACKUP_DIR=/var/backups/inkwell
+RETAIN_DAYS=14
+STAMP=$(date -u +%Y%m%dT%H%M%SZ)
+
+# Same environment the server runs with: DATABASE_URL, INKWELL_MEDIA_BACKEND,
+# INKWELL_MEDIA_DIR. Keep this file mode 0600 — it references secrets.
+source /etc/inkwell/backup.env
+
+mkdir -p "$BACKUP_DIR"
+
+# Write to a .partial name and rename on success, so a crashed or truncated run
+# can never leave a half-written file that looks like a valid backup.
+inkwell backup --out "$BACKUP_DIR/inkwell-$STAMP.inkwell.gz.partial"
+mv "$BACKUP_DIR/inkwell-$STAMP.inkwell.gz.partial" "$BACKUP_DIR/inkwell-$STAMP.inkwell.gz"
+
+find "$BACKUP_DIR" -name 'inkwell-*.inkwell.gz' -mtime "+$RETAIN_DAYS" -delete
+find "$BACKUP_DIR" -name '*.partial' -mtime +1 -delete
+
+echo "$(date -u +%FT%TZ) backup ok: inkwell-$STAMP.inkwell.gz"
+```
+
+For Docker Compose, replace the `inkwell backup` line with the
+`docker compose exec -T app …` form above.
+
+**A backup you have never restored is not a backup.** Restore into a scratch
+deployment (`docker compose down -v` then restore, or a throwaway database) on
+some regular cadence, and run the
+[post-restore smoke checks](#post-restore-smoke-checks).
 
 ---
 
@@ -264,8 +495,8 @@ and idempotent (already-applied ones are skipped).
   ORDER BY version;
   ```
   The highest `version` in the table should match the highest numbered file in
-  `migrations/`. As of this writing, the latest migration is
-  `0022_create_preview_tokens.sql`.
+  `migrations/`. `inkwell db status` prints the same list without a psql session,
+  and `inkwell backup` records it in the bundle manifest.
 
 - **pgvector column:** Migration 0009 adds `note_chunks.embedding vector(1024)`.
   If `pg_restore` fails on this column, the pgvector extension was not installed

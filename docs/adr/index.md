@@ -18,3 +18,4 @@ Inkwell's development, including the context, decision, and consequences.
 | [ADR 0011](0011-slug-rename-redirect.md) | Slug rename with 301 alias redirect |
 | [ADR 0012](0012-observability.md) | Observability: structured logs, request ids, `/metrics` |
 | [ADR 0013](0013-media-storage.md) | Media upload and hosting |
+| [ADR 0014](0014-backup-restore.md) | Tested backup and restore |

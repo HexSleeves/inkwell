@@ -1,5 +1,9 @@
 use clap::{CommandFactory, Parser};
-use inkwell::cli::args::{AuthorCommand, Cli, Command, DbCommand, ImportCommand, TokenCommand};
+use inkwell::cli::args::{
+    AuthorCommand, BackupCommand, Cli, Command, DbCommand, ImportCommand, RestoreCommand,
+    TokenCommand,
+};
+use std::path::Path;
 
 #[test]
 fn top_level_cli_parses_nested_subcommands() {
@@ -42,6 +46,46 @@ fn help_lists_the_real_command_tree() {
     assert!(help.contains("author"));
     assert!(help.contains("import"));
     assert!(help.contains("mcp"));
+    assert!(help.contains("backup"));
+    assert!(help.contains("restore"));
+}
+
+/// `inkwell backup` defaults to a generated filename; `--out -` means stdout.
+#[test]
+fn backup_out_is_optional_and_accepts_stdout() {
+    assert!(matches!(
+        Cli::parse_from(["inkwell", "backup"]).command,
+        Command::Backup(BackupCommand { out: None })
+    ));
+    assert!(matches!(
+        Cli::parse_from(["inkwell", "backup", "--out", "-"]).command,
+        Command::Backup(BackupCommand { ref out }) if out.as_deref() == Some(Path::new("-"))
+    ));
+    assert!(matches!(
+        Cli::parse_from(["inkwell", "backup", "-o", "/tmp/bundle.inkwell.gz"]).command,
+        Command::Backup(BackupCommand { ref out })
+            if out.as_deref() == Some(Path::new("/tmp/bundle.inkwell.gz"))
+    ));
+}
+
+/// `inkwell restore` requires a bundle and defaults `--overwrite` off, so the
+/// destructive path is never the one you get by forgetting a flag.
+#[test]
+fn restore_requires_a_bundle_and_defaults_to_not_overwriting() {
+    assert!(matches!(
+        Cli::parse_from(["inkwell", "restore", "bundle.inkwell.gz"]).command,
+        Command::Restore(RestoreCommand { ref bundle, overwrite: false })
+            if bundle == Path::new("bundle.inkwell.gz")
+    ));
+    assert!(matches!(
+        Cli::parse_from(["inkwell", "restore", "-", "--overwrite"]).command,
+        Command::Restore(RestoreCommand { ref bundle, overwrite: true })
+            if bundle == Path::new("-")
+    ));
+    assert!(
+        Cli::try_parse_from(["inkwell", "restore"]).is_err(),
+        "restore must require a bundle path"
+    );
 }
 
 #[test]

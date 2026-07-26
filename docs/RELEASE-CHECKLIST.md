@@ -66,8 +66,11 @@ strip it.
 
 ## Phase 2 — Migration and backup checks
 
-> The database backup and restore procedure is documented in
-> `docs/BACKUP-RESTORE.md` (CIL-126). Read it before proceeding.
+> The backup and restore procedure is documented in `docs/BACKUP-RESTORE.md`
+> (CIL-126, CYP-49). Read it before proceeding. Note that a rollback across a
+> non-backwards-compatible migration needs a bundle taken by a binary at or
+> before the target schema version — `inkwell restore` refuses a bundle newer
+> than the running binary.
 
 ### Verify pending migrations
 
@@ -85,16 +88,28 @@ this release. Each migration must be:
 - Not modifying an already-applied migration file (SQLx checksums these; a changed
   file will abort the deploy).
 
-### Pre-deploy database backup
+### Pre-deploy backup
 
-Take a backup of production **before** triggering the deploy, using the procedure
-in `docs/BACKUP-RESTORE.md`. Record the backup location and timestamp here:
+Take a backup of production **before** triggering the deploy. One command covers
+the database and media bytes together:
+
+```bash
+railway run --service inkwell inkwell backup --out - > "inkwell-prod-$(date -u +%Y%m%dT%H%M%SZ).inkwell.gz"
+# Compose: docker compose exec -T app inkwell backup --out - > inkwell-prod-<stamp>.inkwell.gz
+```
+
+Record the location, timestamp, and the schema version the summary line printed
+(you need it to know which binary can restore this bundle):
 
 ```
 Backup taken: <timestamp>
 Backup location: <path or Railway backup name>
+Bundle schema version: <n>
 Migration count before deploy: <n>
 ```
+
+Full procedure, including restore and the `pg_dump` alternative:
+`docs/BACKUP-RESTORE.md`.
 
 On Railway, enable automatic daily backups via the Postgres service settings and
 confirm the most recent backup is no older than 24 hours before deploying.
