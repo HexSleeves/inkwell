@@ -21,6 +21,9 @@ const REQUIRED_FORWARDED: &[&str] = &[
     "INKWELL_MEDIA_BACKEND",
     "INKWELL_MEDIA_DIR",
     "INKWELL_MEDIA_MAX_BYTES",
+    "INKWELL_WEBHOOKS_ENABLED",
+    "INKWELL_WEBHOOK_URLS",
+    "INKWELL_WEBHOOK_SECRET",
 ];
 
 /// Feature flags that must stay off in a stock stack: the Compose default has to
@@ -33,6 +36,12 @@ const OFF_BY_DEFAULT: &[(&str, &str)] = &[
         "${INKWELL_METRICS_ENABLED:-false}",
     ),
     ("INKWELL_METRICS_TOKEN", "${INKWELL_METRICS_TOKEN:-}"),
+    (
+        "INKWELL_WEBHOOKS_ENABLED",
+        "${INKWELL_WEBHOOKS_ENABLED:-false}",
+    ),
+    ("INKWELL_WEBHOOK_URLS", "${INKWELL_WEBHOOK_URLS:-}"),
+    ("INKWELL_WEBHOOK_SECRET", "${INKWELL_WEBHOOK_SECRET:-}"),
 ];
 
 #[test]
@@ -61,6 +70,7 @@ fn env_example_documents_the_forwarded_feature_flags() {
         "INKWELL_BROWSER_LOGIN",
         "INKWELL_METRICS_ENABLED",
         "INKWELL_MEDIA_BACKEND",
+        "INKWELL_WEBHOOKS_ENABLED",
     ] {
         assert!(
             ENV_EXAMPLE.contains(key),

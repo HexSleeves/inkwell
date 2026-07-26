@@ -28,6 +28,7 @@ Local preview: `pip install -r requirements-docs.txt && mkdocs serve`.
 | **Archive nav** | `GET /archive` lists year/month buckets; `GET /archive/{year}/{month}` shows paginated docs; prev/next bar on each document page |
 | **Site metadata** | `INKWELL_SITE_TITLE`, `INKWELL_SITE_DESCRIPTION`, `INKWELL_SITE_AUTHOR`, `INKWELL_CUSTOM_CSS_URL` for brand/SEO configuration |
 | **Webmentions** | Receiving always-on (`POST /webmention`); sending opt-in (`INKWELL_WEBMENTION_SEND=true`) |
+| **Webhooks** | Signed outbound POST on publish/unpublish, opt-in (`INKWELL_WEBHOOKS_ENABLED=true`); see [Webhooks](docs/WEBHOOKS.md) |
 | **Rate limiting** | GCRA per-principal (validated credential or client IP), configurable, 429 + `Retry-After` |
 | **Request IDs** | Every request gets `X-Request-Id`; echoed in response headers and `error.requestId` |
 | **HTML site** | Index, paginated, document, tag, search, archive, RSS feed, sitemap; Botanical Soft design |
@@ -74,6 +75,9 @@ Copy `.env.example` to `.env` before local development. `.env` is gitignored.
 | `INKWELL_MEDIA_BACKEND` | `local` | Where uploaded images are stored: `local` (filesystem) or `postgres` (`media_blobs` table). See [ADR 0013](docs/adr/0013-media-storage.md). |
 | `INKWELL_MEDIA_DIR` | `./data/media` | Root directory for the `local` media backend. **Must be persistent** — compose mounts the `inkwell-media` volume at `/app/data/media`. |
 | `INKWELL_MEDIA_MAX_BYTES` | `5242880` | Maximum upload size in bytes (5 MiB). Ceiling 256 MiB. |
+| `INKWELL_WEBHOOKS_ENABLED` | `false` | POST signed webhooks on publish/unpublish. See [Webhooks](docs/WEBHOOKS.md). |
+| `INKWELL_WEBHOOK_URLS` | _(none)_ | Comma-separated `http(s)` receiver endpoints (max 10). Required when webhooks are enabled. |
+| `INKWELL_WEBHOOK_SECRET` | _(none)_ | HMAC-SHA256 key for the `X-Inkwell-Signature` header (min 16 chars). Required when webhooks are enabled. |
 
 ### Optional — observability
 

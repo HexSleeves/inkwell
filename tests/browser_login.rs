@@ -162,6 +162,9 @@ fn browser_login_router(pool: sqlx::PgPool) -> axum::Router {
                 .to_string_lossy()
                 .into_owned(),
             media_max_bytes: inkwell::config::DEFAULT_MEDIA_MAX_BYTES,
+            webhooks_enabled: false,
+            webhook_urls: Vec::new(),
+            webhook_secret: None,
         }),
         pool,
     )

@@ -1405,6 +1405,8 @@ dependencies = [
  "form_urlencoded",
  "futures-util",
  "governor",
+ "hex",
+ "hmac",
  "http",
  "pretty_assertions",
  "reqwest",

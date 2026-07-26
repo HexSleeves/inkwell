@@ -77,10 +77,34 @@ struct Series {
     buckets: [u64; BUCKETS.len()],
 }
 
+/// Label set for the outbound-webhook counters (CYP-53). Both label values come
+/// from a fixed set — `event` from [`crate::webhooks::Event::as_str`] and
+/// `result` from [`WEBHOOK_RESULTS`] — so this can never leak cardinality.
+#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+struct WebhookKey {
+    event: &'static str,
+    result: &'static str,
+}
+
+/// The two possible `result` label values for webhook counters.
+const WEBHOOK_RESULTS: [&str; 2] = ["success", "failure"];
+
+fn webhook_result(success: bool) -> &'static str {
+    if success {
+        WEBHOOK_RESULTS[0]
+    } else {
+        WEBHOOK_RESULTS[1]
+    }
+}
+
 #[derive(Default)]
 struct Inner {
     series: HashMap<SeriesKey, Series>,
     dropped: u64,
+    /// Individual delivery attempts, including retries.
+    webhook_attempts: HashMap<WebhookKey, u64>,
+    /// Terminal outcome per delivery (one per endpoint per event).
+    webhook_deliveries: HashMap<WebhookKey, u64>,
 }
 
 /// Snapshot of runtime gauges the registry can't observe itself. Supplied by
@@ -149,6 +173,37 @@ impl Metrics {
         if let Some(index) = BUCKETS.iter().position(|bound| seconds <= *bound) {
             series.buckets[index] += 1;
         }
+    }
+
+    /// Record one outbound-webhook delivery *attempt* (retries included).
+    pub fn record_webhook_attempt(&self, event: &'static str, success: bool) {
+        let mut inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *inner
+            .webhook_attempts
+            .entry(WebhookKey {
+                event,
+                result: webhook_result(success),
+            })
+            .or_default() += 1;
+    }
+
+    /// Record the *terminal* outcome of one webhook delivery to one endpoint:
+    /// success, or failure after the retry cap.
+    pub fn record_webhook_delivery(&self, event: &'static str, success: bool) {
+        let mut inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *inner
+            .webhook_deliveries
+            .entry(WebhookKey {
+                event,
+                result: webhook_result(success),
+            })
+            .or_default() += 1;
     }
 
     /// Number of distinct series currently tracked.
@@ -263,8 +318,52 @@ impl Metrics {
             );
         }
 
+        // Outbound webhooks (CYP-53). HELP/TYPE are emitted unconditionally so a
+        // scrape from a deployment that has never delivered still declares the
+        // families; series appear once something has been recorded.
+        out.push_str(
+            "# HELP inkwell_webhook_attempts_total Outbound webhook delivery attempts, including retries, by event and result.\n",
+        );
+        out.push_str("# TYPE inkwell_webhook_attempts_total counter\n");
+        for (key, count) in sorted_webhook_counters(&inner.webhook_attempts) {
+            let _ = writeln!(
+                out,
+                "inkwell_webhook_attempts_total{{{}}} {count}",
+                webhook_labels(key)
+            );
+        }
+
+        out.push_str(
+            "# HELP inkwell_webhook_deliveries_total Outbound webhook deliveries by terminal outcome, one per endpoint per event.\n",
+        );
+        out.push_str("# TYPE inkwell_webhook_deliveries_total counter\n");
+        for (key, count) in sorted_webhook_counters(&inner.webhook_deliveries) {
+            let _ = writeln!(
+                out,
+                "inkwell_webhook_deliveries_total{{{}}} {count}",
+                webhook_labels(key)
+            );
+        }
+
         out
     }
+}
+
+/// Counter entries in sorted key order, so exposition output stays deterministic.
+fn sorted_webhook_counters(counters: &HashMap<WebhookKey, u64>) -> Vec<(&WebhookKey, u64)> {
+    let mut entries: Vec<(&WebhookKey, u64)> =
+        counters.iter().map(|(key, count)| (key, *count)).collect();
+    entries.sort_by(|a, b| a.0.cmp(b.0));
+    entries
+}
+
+/// The `event`/`result` label set for a webhook counter.
+fn webhook_labels(key: &WebhookKey) -> String {
+    format!(
+        "event=\"{}\",result=\"{}\"",
+        escape_label(key.event),
+        escape_label(key.result)
+    )
 }
 
 /// The shared `method`/`route`/`status` label set for a series.
@@ -424,6 +523,8 @@ mod tests {
             "inkwell_http_metrics_series_dropped_total",
             "inkwell_http_requests_total",
             "inkwell_http_request_duration_seconds",
+            "inkwell_webhook_attempts_total",
+            "inkwell_webhook_deliveries_total",
         ] {
             assert!(
                 body.contains(&format!("# HELP {family} ")),
@@ -434,6 +535,44 @@ mod tests {
                 "missing TYPE for {family}"
             );
         }
+    }
+
+    #[test]
+    fn webhook_counters_separate_attempts_from_terminal_outcomes() {
+        let metrics = Metrics::new();
+        // One delivery that failed twice then succeeded: 3 attempts, 1 delivery.
+        metrics.record_webhook_attempt("document.published", false);
+        metrics.record_webhook_attempt("document.published", false);
+        metrics.record_webhook_attempt("document.published", true);
+        metrics.record_webhook_delivery("document.published", true);
+        // One delivery that exhausted its retries.
+        metrics.record_webhook_attempt("document.unpublished", false);
+        metrics.record_webhook_delivery("document.unpublished", false);
+
+        let body = metrics.render(gauges());
+        assert!(body.contains(
+            "inkwell_webhook_attempts_total{event=\"document.published\",result=\"failure\"} 2"
+        ));
+        assert!(body.contains(
+            "inkwell_webhook_attempts_total{event=\"document.published\",result=\"success\"} 1"
+        ));
+        assert!(body.contains(
+            "inkwell_webhook_deliveries_total{event=\"document.published\",result=\"success\"} 1"
+        ));
+        assert!(body.contains(
+            "inkwell_webhook_deliveries_total{event=\"document.unpublished\",result=\"failure\"} 1"
+        ));
+        // Webhook counters are their own families and never touch HTTP series.
+        assert_eq!(metrics.series_count(), 0);
+    }
+
+    #[test]
+    fn webhook_families_are_declared_before_anything_is_delivered() {
+        let body = Metrics::new().render(gauges());
+        assert!(body.contains("# TYPE inkwell_webhook_attempts_total counter"));
+        assert!(body.contains("# TYPE inkwell_webhook_deliveries_total counter"));
+        // ...with no series until a delivery happens.
+        assert!(!body.contains("inkwell_webhook_attempts_total{"));
     }
 
     #[test]

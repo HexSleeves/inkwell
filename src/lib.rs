@@ -13,6 +13,7 @@ pub mod mcp;
 pub mod media;
 pub mod rendering;
 pub mod views;
+pub mod webhooks;
 
 pub use config::Config;
 pub use db::pool::create_pool;

@@ -72,8 +72,11 @@ nav:
     - Railway: RAILWAY.md
     - Staging: STAGING.md
     - Observability: OBSERVABILITY.md
+    - Webhooks: WEBHOOKS.md
     - Backup & Restore: BACKUP-RESTORE.md
   - Releases:
+    # The canonical changelog lives at the repo root (CHANGELOG.md), outside
+    # docs_dir, so it is not part of this nav.
     - Release Process: RELEASES.md
     - Release Checklist: RELEASE-CHECKLIST.md
     - Release Notes v0.2: RELEASE-NOTES-v0.2.0.md

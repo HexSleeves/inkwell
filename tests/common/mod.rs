@@ -109,6 +109,12 @@ pub fn test_config(database_url: String) -> Arc<Config> {
         media_backend: MediaBackend::Local,
         media_dir: media_test_dir().to_string_lossy().into_owned(),
         media_max_bytes: inkwell::config::DEFAULT_MEDIA_MAX_BYTES,
+        // Outbound webhooks stay OFF, matching production. Every publish/unpublish
+        // test therefore also asserts the default-inert contract; the webhook
+        // contract test opts in via `router_for_with_webhooks`.
+        webhooks_enabled: false,
+        webhook_urls: Vec::new(),
+        webhook_secret: None,
     })
 }
 
@@ -184,6 +190,24 @@ pub fn router_for_with_metrics(pool: PgPool, metrics_token: Option<&str>) -> axu
     let mut config = (*test_config(database_url)).clone();
     config.metrics_enabled = true;
     config.metrics_token = metrics_token.map(str::to_string);
+    build_router(Arc::new(config), pool)
+}
+
+/// Build a router with outbound webhooks enabled, delivering to `urls` and
+/// signing with `secret`. Mirrors an operator setting `INKWELL_WEBHOOKS_ENABLED`,
+/// `INKWELL_WEBHOOK_URLS`, and `INKWELL_WEBHOOK_SECRET`.
+///
+/// `/metrics` is registered (unauthenticated) alongside, so a webhook test can
+/// assert the delivery counters the same scrape an operator would see. Webhooks
+/// stay OFF and `/metrics` unregistered in the shared [`test_config`], so the
+/// default-off contract is still asserted by every other test.
+pub fn router_for_with_webhooks(pool: PgPool, urls: &[&str], secret: &str) -> axum::Router {
+    let database_url = std::env::var("DATABASE_URL").unwrap_or_default();
+    let mut config = (*test_config(database_url)).clone();
+    config.webhooks_enabled = true;
+    config.webhook_urls = urls.iter().map(|url| (*url).to_string()).collect();
+    config.webhook_secret = Some(secret.to_string());
+    config.metrics_enabled = true;
     build_router(Arc::new(config), pool)
 }
 

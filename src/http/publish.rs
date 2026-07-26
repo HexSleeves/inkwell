@@ -40,6 +40,10 @@ pub async fn publish_document(
     // links to. Fully inert unless INKWELL_WEBMENTION_SEND=true; always
     // best-effort and detached, so it never blocks or fails the publish.
     crate::http::webmention_send::maybe_send(&state, &document.slug, &document.body_markdown);
+    // Opt-in outbound webhook (default OFF): notify operator-configured endpoints
+    // that this document went public. Detached and best-effort — see
+    // `crate::webhooks` and CYP-53.
+    crate::webhooks::maybe_dispatch(&state, crate::webhooks::Event::Published, &document);
     record_audit(
         &state,
         &principal,
@@ -74,6 +78,9 @@ pub async fn unpublish_document(
     };
     // No longer publicly resolvable: downgrade links pointing at this slug to stubs.
     garden::backfill_after_change(&state.pool, document.id, &document.slug).await;
+    // Opt-in outbound webhook (default OFF), mirroring publish so a receiver can
+    // drop the note from its own index.
+    crate::webhooks::maybe_dispatch(&state, crate::webhooks::Event::Unpublished, &document);
     record_audit(
         &state,
         &principal,

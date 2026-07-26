@@ -214,6 +214,8 @@ traffic, so scrape every replica.
 | `inkwell_build_info` | gauge | `version` | Always `1`; the label carries the running crate version. Use it to confirm a rollout. |
 | `inkwell_http_metrics_series` | gauge | — | Distinct label sets tracked in this process. Should sit near the size of the route table. |
 | `inkwell_http_metrics_series_dropped_total` | counter | — | Requests folded into the `<overflow>` series after the 2000-series cap. Should stay `0`; anything else means a cardinality bug. |
+| `inkwell_webhook_attempts_total` | counter | `event`, `result` | Outbound webhook delivery attempts, retries included. Only present once webhooks are enabled and something has been delivered. See [Webhooks](WEBHOOKS.md). |
+| `inkwell_webhook_deliveries_total` | counter | `event`, `result` | Terminal webhook outcomes, one per endpoint per event. `result="failure"` means the retry cap was exhausted and the event was dropped. |
 
 ### Label values
 
@@ -248,6 +250,9 @@ inkwell_db_pool_connections{state="total"} - inkwell_db_pool_connections{state="
 
 # Cardinality alarm
 increase(inkwell_http_metrics_series_dropped_total[1h]) > 0
+
+# Webhook receivers dropping events (retry cap exhausted)
+increase(inkwell_webhook_deliveries_total{result="failure"}[1h]) > 0
 ```
 
 ### Smoke-testing it locally

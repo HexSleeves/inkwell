@@ -272,6 +272,9 @@ mod tests {
             media_backend: crate::config::MediaBackend::Local,
             media_dir: crate::config::DEFAULT_MEDIA_DIR.to_string(),
             media_max_bytes: crate::config::DEFAULT_MEDIA_MAX_BYTES,
+            webhooks_enabled: false,
+            webhook_urls: Vec::new(),
+            webhook_secret: None,
         }
     }
 

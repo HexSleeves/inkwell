@@ -61,6 +61,13 @@ services:
       # is unauthenticated.
       INKWELL_METRICS_ENABLED: ${INKWELL_METRICS_ENABLED:-false}
       INKWELL_METRICS_TOKEN: ${INKWELL_METRICS_TOKEN:-}
+      # Outbound signed webhooks on publish/unpublish (docs/WEBHOOKS.md). Off by
+      # default, forwarded so a Compose operator can enable it from .env. Turning
+      # the flag on REQUIRES both a secret and at least one endpoint URL —
+      # startup fails otherwise rather than delivering unsigned or nowhere.
+      INKWELL_WEBHOOKS_ENABLED: ${INKWELL_WEBHOOKS_ENABLED:-false}
+      INKWELL_WEBHOOK_URLS: ${INKWELL_WEBHOOK_URLS:-}
+      INKWELL_WEBHOOK_SECRET: ${INKWELL_WEBHOOK_SECRET:-}
     volumes:
       - inkwell-media:/app/data/media
     depends_on:

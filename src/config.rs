@@ -28,6 +28,16 @@ pub const DEFAULT_MEDIA_MAX_BYTES: usize = 5 * 1024 * 1024;
 /// memory, so an unbounded cap would be a trivial memory-exhaustion lever.
 pub const MEDIA_MAX_BYTES_CEILING: usize = 256 * 1024 * 1024;
 
+/// Maximum outbound webhook endpoints (`INKWELL_WEBHOOK_URLS`). One publish
+/// fans out to every endpoint, so the list is capped exactly like every other
+/// fan-out surface. Raise deliberately, not by accident.
+pub const MAX_WEBHOOK_ENDPOINTS: usize = 10;
+
+/// Minimum accepted length for `INKWELL_WEBHOOK_SECRET`. A short shared secret
+/// makes the HMAC signature brute-forceable, which defeats the point of signing,
+/// so a too-short secret fails startup rather than shipping a weak signature.
+pub const MIN_WEBHOOK_SECRET_LEN: usize = 16;
+
 /// Where uploaded media bytes are stored (`INKWELL_MEDIA_BACKEND`). See ADR 0013.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MediaBackend {
@@ -138,6 +148,20 @@ pub struct Config {
     /// [`MEDIA_MAX_BYTES_CEILING`]. Also sets the router's body limit for
     /// `POST /media`, so an over-cap request is refused before it is buffered.
     pub media_max_bytes: usize,
+    /// Whether to POST outbound webhooks on publish/unpublish
+    /// (`INKWELL_WEBHOOKS_ENABLED`). Conservative default: **off** — with the
+    /// flag off the delivery path is fully inert (no payload built, no task
+    /// spawned, no outbound request). See `docs/WEBHOOKS.md` and CYP-53.
+    pub webhooks_enabled: bool,
+    /// Endpoints that receive webhook deliveries (`INKWELL_WEBHOOK_URLS`,
+    /// comma-separated). Validated at startup; capped at
+    /// [`MAX_WEBHOOK_ENDPOINTS`]. Not secret — endpoint URLs are logged with
+    /// each delivery so failures are debuggable.
+    pub webhook_urls: Vec<String>,
+    /// Shared secret used as the HMAC-SHA256 key over each raw request body
+    /// (`INKWELL_WEBHOOK_SECRET`). Secret: redacted in [`Debug`], never logged,
+    /// never sent in a header or payload.
+    pub webhook_secret: Option<String>,
 }
 
 impl std::fmt::Debug for Config {
@@ -176,6 +200,12 @@ impl std::fmt::Debug for Config {
             .field("media_backend", &self.media_backend)
             .field("media_dir", &self.media_dir)
             .field("media_max_bytes", &self.media_max_bytes)
+            .field("webhooks_enabled", &self.webhooks_enabled)
+            .field("webhook_urls", &self.webhook_urls)
+            .field(
+                "webhook_secret",
+                &self.webhook_secret.as_ref().map(|_| "<redacted>"),
+            )
             .finish()
     }
 }
@@ -276,6 +306,55 @@ impl Config {
             }
             None => DEFAULT_MEDIA_MAX_BYTES,
         };
+        // Outbound webhooks are opt-in: same strict "true"-only parse rule as the
+        // other flags, so a typo leaves the path inert instead of quietly POSTing
+        // publish events off-box.
+        let webhooks_enabled = trimmed_env("INKWELL_WEBHOOKS_ENABLED")
+            .is_some_and(|value| value.eq_ignore_ascii_case("true"));
+        let webhook_urls = trimmed_env("INKWELL_WEBHOOK_URLS")
+            .map(|raw| {
+                raw.split(',')
+                    .map(str::trim)
+                    .filter(|url| !url.is_empty())
+                    .map(str::to_string)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let webhook_secret = trimmed_env("INKWELL_WEBHOOK_SECRET");
+        // Misconfiguration fails startup rather than silently never delivering
+        // (or, worse, delivering unsigned). An operator who explicitly turned the
+        // flag on gets told exactly what is missing.
+        if webhooks_enabled {
+            if webhook_urls.is_empty() {
+                return Err(anyhow!(
+                    "INKWELL_WEBHOOKS_ENABLED is true but INKWELL_WEBHOOK_URLS is empty: set one or more comma-separated http(s) endpoints."
+                ));
+            }
+            if webhook_urls.len() > MAX_WEBHOOK_ENDPOINTS {
+                return Err(anyhow!(
+                    "INKWELL_WEBHOOK_URLS has {} endpoints: at most {MAX_WEBHOOK_ENDPOINTS} are allowed.",
+                    webhook_urls.len()
+                ));
+            }
+            for url in &webhook_urls {
+                if let Some(problem) = crate::webhooks::endpoint_url_problem(url) {
+                    return Err(anyhow!("Invalid INKWELL_WEBHOOK_URLS entry: {problem}."));
+                }
+            }
+            match webhook_secret.as_deref() {
+                None => {
+                    return Err(anyhow!(
+                        "INKWELL_WEBHOOKS_ENABLED is true but INKWELL_WEBHOOK_SECRET is unset: deliveries must be signed."
+                    ));
+                }
+                Some(secret) if secret.len() < MIN_WEBHOOK_SECRET_LEN => {
+                    return Err(anyhow!(
+                        "INKWELL_WEBHOOK_SECRET is too short: use at least {MIN_WEBHOOK_SECRET_LEN} characters."
+                    ));
+                }
+                Some(_) => {}
+            }
+        }
 
         Ok(Self {
             database_url,
@@ -300,6 +379,9 @@ impl Config {
             media_backend,
             media_dir,
             media_max_bytes,
+            webhooks_enabled,
+            webhook_urls,
+            webhook_secret,
         })
     }
 }
@@ -382,9 +464,11 @@ fn trimmed_env(name: &str) -> Option<String> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn debug_does_not_leak_api_key_or_dsn_password() {
-        let config = Config {
+    /// A server config with every secret set to a recognisable sentinel, so a
+    /// redaction assertion fails loudly if a new field starts leaking. Tests that
+    /// care about one behavior clone this and mutate the fields they exercise.
+    fn config_with_sentinel_secrets() -> Config {
+        Config {
             database_url: "postgres://user:supersecret@localhost/db".to_string(),
             host: "0.0.0.0".to_string(),
             port: 3000,
@@ -407,14 +491,46 @@ mod tests {
             media_backend: MediaBackend::Local,
             media_dir: DEFAULT_MEDIA_DIR.to_string(),
             media_max_bytes: DEFAULT_MEDIA_MAX_BYTES,
-        };
+            webhooks_enabled: true,
+            webhook_urls: vec!["https://hooks.example.com/inkwell".to_string()],
+            webhook_secret: Some("sentinel-webhook-value".to_string()),
+        }
+    }
+
+    #[test]
+    fn debug_does_not_leak_api_key_or_dsn_password() {
+        let config = config_with_sentinel_secrets();
         let rendered = format!("{config:?}");
         assert!(!rendered.contains("sentinel-key-value"));
+        assert!(!rendered.contains("sentinel-webhook-value"));
         assert!(!rendered.contains("sentinel-voyage-value"));
         assert!(!rendered.contains("sentinel-anthropic-value"));
         assert!(!rendered.contains("sentinel-metrics-value"));
         assert!(!rendered.contains("supersecret"));
         assert!(rendered.contains("<redacted>"));
+        // Endpoint URLs are NOT secret and stay visible for debuggability.
+        assert!(rendered.contains("hooks.example.com"));
+    }
+
+    #[test]
+    fn webhooks_active_requires_flag_urls_and_secret() {
+        let configured = config_with_sentinel_secrets();
+        assert!(configured.webhooks_active());
+
+        // Flag off ⇒ inert even when fully configured.
+        let mut off = configured.clone();
+        off.webhooks_enabled = false;
+        assert!(!off.webhooks_active());
+
+        // No endpoints ⇒ nothing to deliver to.
+        let mut no_urls = configured.clone();
+        no_urls.webhook_urls = Vec::new();
+        assert!(!no_urls.webhooks_active());
+
+        // No secret ⇒ we would have to send unsigned; refuse instead.
+        let mut no_secret = configured.clone();
+        no_secret.webhook_secret = None;
+        assert!(!no_secret.webhooks_active());
     }
 
     #[test]
@@ -442,6 +558,9 @@ mod tests {
             media_backend: MediaBackend::Postgres,
             media_dir: "/srv/media".to_string(),
             media_max_bytes: DEFAULT_MEDIA_MAX_BYTES,
+            webhooks_enabled: false,
+            webhook_urls: Vec::new(),
+            webhook_secret: None,
         };
         let rendered = format!("{config:?}");
         assert!(rendered.contains("Postgres"));
