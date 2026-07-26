@@ -4,22 +4,29 @@
 //! `INKWELL_BROWSER_LOGIN=true`. The page reuses the shared [`render_page`]
 //! chrome and carries the per-request CSP nonce on its inline uploader script.
 
-use super::layout::{HeadMeta, SiteMeta, escape_html, render_page};
+use super::layout::{HeadMeta, SiteMeta, escape_html, format_mib, render_page};
 
 /// Render the media-upload page through the shared layout.
 ///
 /// When `logged_in` is false, show a prompt to sign in. When true, show the
 /// drag-drop / file-picker uploader. The actual upload is auth-enforced by
 /// `POST /media`; this view only chooses which browser UI to render.
+///
+/// `max_bytes` mirrors the server's `INKWELL_MEDIA_MAX_BYTES` (CYP-54) so the
+/// label and the pre-flight check match the cap `POST /media` actually enforces.
 pub fn render_media_upload_page(
     site: &SiteMeta<'_>,
     csp_nonce: Option<&str>,
     logged_in: bool,
+    max_bytes: usize,
 ) -> String {
+    let max_label = format_mib(max_bytes);
+
     let body = if logged_in {
-        r#"<h1>Upload media</h1>
+        format!(
+            r#"<h1>Upload media</h1>
         <form id="upload-form" class="upload">
-          <label for="file">Choose an image (PNG, JPEG, GIF, or WebP, ≤ 5 MiB)</label>
+          <label for="file">Choose an image (PNG, JPEG, GIF, or WebP, ≤ {max_label})</label>
           <input type="file" id="file" name="file" accept="image/png,image/jpeg,image/gif,image/webp" required />
           <div id="dropzone" class="dropzone">Drop an image here, or use the picker above.</div>
           <button type="submit">Upload</button>
@@ -33,7 +40,7 @@ pub fn render_media_upload_page(
           <input id="markdown" type="text" readonly />
           <button id="copy-md" type="button">Copy Markdown</button>
         </div>"#
-            .to_string()
+        )
     } else {
         r#"<h1>Upload media</h1>
         <p>You must <a href="/login">sign in</a> to upload images.</p>"#
@@ -56,7 +63,7 @@ pub fn render_media_upload_page(
   var urlField = document.getElementById('url');
   var mdField = document.getElementById('markdown');
   var ALLOWED = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
-  var MAX_BYTES = 5 * 1024 * 1024;
+  var MAX_BYTES = {max_bytes};
 
   if (dropzone) {{
     ['dragover', 'dragenter'].forEach(function (e) {{
@@ -78,7 +85,7 @@ pub fn render_media_upload_page(
     result.hidden = true;
     if (!file) {{ status.textContent = 'Choose a file first.'; return; }}
     if (ALLOWED.indexOf(file.type) === -1) {{ status.textContent = 'Unsupported type. Use PNG, JPEG, GIF, or WebP.'; return; }}
-    if (file.size > MAX_BYTES) {{ status.textContent = 'File too large (max 5 MiB).'; return; }}
+    if (file.size > MAX_BYTES) {{ status.textContent = 'File too large (max {max_label}).'; return; }}
     status.textContent = 'Uploading…';
     fetch('/media', {{
       method: 'POST',
@@ -119,6 +126,8 @@ pub fn render_media_upload_page(
 }})();
 </script>"#,
         nonce = nonce_attr,
+        max_bytes = max_bytes,
+        max_label = max_label,
     );
 
     let main = format!("{body}\n{script}");
@@ -143,10 +152,13 @@ pub fn render_media_upload_page(
 mod tests {
     use super::*;
 
+    /// Stand-in for the configured `INKWELL_MEDIA_MAX_BYTES` in view tests.
+    const MAX_BYTES: usize = 5 * 1024 * 1024;
+
     #[test]
     fn logged_out_page_prompts_for_login_without_upload_form() {
         let site = SiteMeta::defaults();
-        let html = render_media_upload_page(&site, Some("abc123"), false);
+        let html = render_media_upload_page(&site, Some("abc123"), false, MAX_BYTES);
 
         assert!(html.contains("Upload media"));
         assert!(html.contains(r#"href="/login""#));
@@ -156,7 +168,7 @@ mod tests {
     #[test]
     fn logged_in_page_shows_upload_controls_and_script_target() {
         let site = SiteMeta::defaults();
-        let html = render_media_upload_page(&site, Some("abc123"), true);
+        let html = render_media_upload_page(&site, Some("abc123"), true, MAX_BYTES);
 
         assert!(html.contains(r#"id="upload-form""#));
         assert!(html.contains(r#"id="file""#));
@@ -168,7 +180,7 @@ mod tests {
     #[test]
     fn nonce_is_html_escaped_on_the_script_tag() {
         let site = SiteMeta::defaults();
-        let html = render_media_upload_page(&site, Some(r#""><x"#), true);
+        let html = render_media_upload_page(&site, Some(r#""><x"#), true, MAX_BYTES);
 
         assert!(!html.contains(r#"<script nonce=""><x">"#));
         assert!(html.contains("&quot;&gt;&lt;x"));
@@ -177,8 +189,21 @@ mod tests {
     #[test]
     fn missing_nonce_emits_a_bare_script_tag() {
         let site = SiteMeta::defaults();
-        let html = render_media_upload_page(&site, None, true);
+        let html = render_media_upload_page(&site, None, true, MAX_BYTES);
 
         assert!(html.contains("<script>"));
+    }
+
+    #[test]
+    fn page_reports_and_enforces_the_configured_size_cap() {
+        let site = SiteMeta::defaults();
+        // 12.5 MiB: a non-default cap that is not a whole number of MiB, so the
+        // label must not round up past what the server accepts.
+        let html = render_media_upload_page(&site, Some("n"), true, 13_107_200);
+
+        assert!(html.contains("PNG, JPEG, GIF, or WebP, ≤ 12.5 MiB"));
+        assert!(html.contains("var MAX_BYTES = 13107200;"));
+        assert!(html.contains("File too large (max 12.5 MiB)."));
+        assert!(!html.contains("5 * 1024 * 1024"));
     }
 }

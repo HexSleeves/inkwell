@@ -98,6 +98,7 @@ pub async fn media_new_page(
         &site,
         Some(csp_nonce.as_str()),
         logged_in,
+        state.config.media_max_bytes,
     ))
     .into_response()
 }

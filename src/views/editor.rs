@@ -26,7 +26,7 @@
 //! how it will appear once published. Preview refreshes on load and after each
 //! save (it reflects the last *saved* body, hence "live-ish").
 
-use super::layout::{HeadMeta, SiteMeta, escape_html, render_page};
+use super::layout::{HeadMeta, SiteMeta, escape_html, format_mib, render_page};
 
 /// Shared nonce attribute helper: `" nonce=\"…\""` or empty when absent.
 fn nonce_attr(csp_nonce: Option<&str>) -> String {
@@ -95,7 +95,7 @@ fn media_insert_script(csp_nonce: Option<&str>, max_bytes: usize) -> String {
       return;
     }}
     if (file.size > MAX_BYTES) {{
-      status.textContent = 'Image too large (max ' + Math.floor(MAX_BYTES / 1048576) + ' MiB).';
+      status.textContent = 'Image too large (max {max_label}).';
       return;
     }}
     status.textContent = 'Uploading ' + (file.name || 'image') + '…';
@@ -156,6 +156,7 @@ fn media_insert_script(csp_nonce: Option<&str>, max_bytes: usize) -> String {
 </script>"#,
         nonce = nonce_attr(csp_nonce),
         max_bytes = max_bytes,
+        max_label = format_mib(max_bytes),
     )
 }
 
@@ -625,6 +626,9 @@ mod tests {
         let site = SiteMeta::defaults();
         let html = render_editor_new(&site, Some("n"), 1_234_567);
         assert!(html.contains("var MAX_BYTES = 1234567;"));
+        // The message the author sees quotes the same cap (truncated, so it can
+        // never promise more than the server accepts).
+        assert!(html.contains("Image too large (max 1.1 MiB)."));
     }
 
     #[test]

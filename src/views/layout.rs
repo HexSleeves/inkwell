@@ -85,6 +85,22 @@ pub fn escape_html(value: &str) -> String {
         .replace('\'', "&#39;")
 }
 
+/// Format a byte count as MiB for human-facing size caps.
+///
+/// Truncates instead of rounding: a page must never promise a larger upload
+/// than the server accepts. One decimal is kept when the cap is not a whole
+/// number of MiB (e.g. `1_600_000` → `1.5 MiB`).
+pub fn format_mib(bytes: usize) -> String {
+    const MIB: usize = 1024 * 1024;
+    let whole = bytes / MIB;
+    let tenths = (bytes % MIB) * 10 / MIB;
+    if tenths == 0 {
+        format!("{whole} MiB")
+    } else {
+        format!("{whole}.{tenths} MiB")
+    }
+}
+
 pub fn escape_xml(value: &str) -> String {
     value
         .replace('&', "&amp;")
@@ -1037,4 +1053,19 @@ pub fn json_ld_document(
         value["keywords"] = serde_json::Value::String(tags.join(", "));
     }
     value
+}
+
+#[cfg(test)]
+mod tests {
+    use super::format_mib;
+
+    #[test]
+    fn mib_labels_truncate_and_never_overstate_the_cap() {
+        assert_eq!(format_mib(5 * 1024 * 1024), "5 MiB");
+        assert_eq!(format_mib(13_107_200), "12.5 MiB");
+        // Truncated, not rounded: 1_048_575 bytes is under 1 MiB.
+        assert_eq!(format_mib(1_048_575), "0.9 MiB");
+        assert_eq!(format_mib(1_234_567), "1.1 MiB");
+        assert_eq!(format_mib(0), "0 MiB");
+    }
 }

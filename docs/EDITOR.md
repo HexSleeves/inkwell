@@ -157,10 +157,9 @@ and a ready-to-paste `![alt](/media/{id})` snippet, each with a copy button. Use
 it when you want a URL for a note you are editing elsewhere (CLI, MCP client).
 When you are not signed in the page just points you at `/login`.
 
-> The standalone page's client-side size check is a fixed 5 MiB, the default of
-> `INKWELL_MEDIA_MAX_BYTES`. If you raise that limit, upload larger files from
-> the in-editor control (which reflects the configured value) or the CLI; the
-> server-side cap is authoritative either way.
+Its label and client-side size check both reflect the configured
+`INKWELL_MEDIA_MAX_BYTES`, like the in-editor control; the server-side cap
+stays authoritative (`413`).
 
 ---
 
