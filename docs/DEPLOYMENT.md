@@ -49,6 +49,7 @@ production without reading source code. For the one-command local demo, see
 | `INKWELL_SITE_DESCRIPTION` | _(none)_ | Site-level description used on the index page `<meta name="description">` and as the Atom feed subtitle. |
 | `INKWELL_SITE_AUTHOR` | _(none)_ | Default author name injected into the Atom `<author>` element and JSON-LD `author` field when no per-document author is available. |
 | `INKWELL_CUSTOM_CSS_URL` | _(none)_ | URL of an extra stylesheet injected via `<link rel="stylesheet">` on every public HTML page. Allows custom branding without modifying source code. May be a relative or absolute URL. |
+| `INKWELL_THEME_DIR` | _(none)_ | Directory of theme slot files that override the public-page shell, header/nav/footer, stylesheet, and index/document bodies. Read once at startup; a malformed theme fails startup with a precise error. Unset ⇒ built-in rendering, byte for byte. See [`docs/THEMING.md`](THEMING.md). |
 
 ### Optional — AI / semantic layer
 

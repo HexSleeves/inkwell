@@ -100,6 +100,7 @@ pub fn test_config(database_url: String) -> Arc<Config> {
         site_description: None,
         site_author: None,
         custom_css_url: None,
+        theme: None,
         // `/metrics` stays unregistered by default, matching production. The
         // observability contract test opts in via `router_for_with_metrics`.
         metrics_enabled: false,

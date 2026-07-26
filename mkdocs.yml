@@ -64,6 +64,7 @@ nav:
     - Authoring: AUTHORING.md
     - Authoring Web UI: EDITOR.md
     - Site Configuration: SITE-CONFIGURATION.md
+    - Theming: THEMING.md
   - API Reference:
     - HTTP API: API.md
     - Compatibility Contracts: COMPATIBILITY.md

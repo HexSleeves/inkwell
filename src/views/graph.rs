@@ -2,7 +2,7 @@ use serde_json::json;
 
 use crate::db::links::Graph;
 
-use super::layout::{HeadMeta, SiteMeta, escape_html, json_for_script, render_page};
+use super::layout::{HeadMeta, SiteMeta, escape_html, json_for_script, render_public_page};
 
 /// Render the `/graph` page: an interactive, client-side force-directed view of
 /// the whole garden's link graph (pan, zoom, drag, hover-highlight, click-to-
@@ -280,7 +280,7 @@ pub fn render_graph_page(graph: &Graph, csp_nonce: &str, site: &SiteMeta<'_>) ->
         )
     };
 
-    render_page(
+    render_public_page(
         site,
         HeadMeta {
             title: &format!("Graph \u{2014} {}", site.name),

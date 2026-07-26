@@ -19,6 +19,7 @@ Postgres; they are read at server startup.
 | `INKWELL_SITE_DESCRIPTION` | _(none)_ | Index page `<meta name="description">`, Atom feed subtitle |
 | `INKWELL_SITE_AUTHOR` | _(none)_ | Atom `<author>`, JSON-LD `author` field |
 | `INKWELL_CUSTOM_CSS_URL` | _(none)_ | Extra `<link rel="stylesheet">` on every public page |
+| `INKWELL_THEME_DIR` | _(none)_ | Directory of theme slot files that override public-page markup and CSS — see [Theming](THEMING.md) |
 
 ### `INKWELL_SITE_TITLE`
 
@@ -47,6 +48,23 @@ JSON-LD `author` field when no per-document author is set.
 ```bash
 INKWELL_SITE_AUTHOR="Jane Doe"
 ```
+
+### `INKWELL_THEME_DIR`
+
+Path to a directory of theme files that override the public pages' shell,
+header/nav/footer, stylesheet, and index/document bodies. Unset means Inkwell
+renders exactly as it does with no theming code at all.
+
+```bash
+INKWELL_THEME_DIR=/srv/inkwell/themes/plainpaper
+```
+
+Themes are read once at startup, and a malformed theme fails startup with a
+precise error rather than serving a broken page. Full slot list, available
+variables, and an example theme: **[Theming](THEMING.md)**.
+
+`INKWELL_CUSTOM_CSS_URL` (below) still applies on top of a theme, so the two
+compose.
 
 ### `INKWELL_CUSTOM_CSS_URL`
 

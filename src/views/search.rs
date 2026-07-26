@@ -1,6 +1,6 @@
 use crate::domain::document::DocumentSummary;
 
-use super::layout::{HeadMeta, SiteMeta, escape_html, render_document_list, render_page};
+use super::layout::{HeadMeta, SiteMeta, escape_html, render_document_list, render_public_page};
 
 pub fn render_search_page(
     query: &str,
@@ -60,7 +60,7 @@ pub fn render_search_page(
     } else {
         format!("Search: {} — {}", trimmed, site.name)
     };
-    render_page(
+    render_public_page(
         site,
         HeadMeta {
             title: &title,

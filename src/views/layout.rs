@@ -1,5 +1,6 @@
 use crate::config::Config;
 use crate::domain::document::DocumentSummary;
+use crate::views::theme::{NAV_ACTIVE_CLASS, Theme, slot};
 use serde_json::json;
 
 /// Fallback brand name used when `INKWELL_SITE_TITLE` is not set.
@@ -26,6 +27,10 @@ pub struct SiteMeta<'a> {
     /// `<link rel="stylesheet">` after the built-in styles. Allows operators
     /// to apply a custom theme without modifying source code.
     pub custom_css_url: Option<&'a str>,
+    /// Operator-supplied theme (`INKWELL_THEME_DIR`), loaded once at startup.
+    /// Only [`render_public_page`] consults it, so authenticated/admin surfaces
+    /// keep the built-in look. `None` ⇒ built-in rendering, byte for byte.
+    pub theme: Option<&'a Theme>,
 }
 
 impl<'a> SiteMeta<'a> {
@@ -37,6 +42,7 @@ impl<'a> SiteMeta<'a> {
             author: config.site_author.as_deref(),
             base_url: normalize_site_url(config.site_url.as_deref()),
             custom_css_url: config.custom_css_url.as_deref(),
+            theme: config.theme.as_deref(),
         }
     }
 
@@ -49,6 +55,7 @@ impl<'a> SiteMeta<'a> {
             author: None,
             base_url: DEFAULT_SITE_URL.to_string(),
             custom_css_url: None,
+            theme: None,
         }
     }
 }
@@ -787,7 +794,29 @@ pub(crate) const BADGE_ICONS: [&str; 3] = [
 /// the bottom and cropped on the sides via `xMidYMax slice`.
 pub(crate) const BOTANICAL_BAND: &str = r##"<svg viewBox="0 0 1440 168" preserveAspectRatio="xMidYMax slice" fill="none" aria-hidden="true"><g stroke="#7a9a7c" stroke-width="3" stroke-linecap="round"><path d="M120 168V70"/><path d="M360 168V96"/><path d="M620 168V60"/><path d="M880 168V104"/><path d="M1120 168V78"/><path d="M1320 168V110"/></g><g fill="#9cba9c"><path d="M120 96c0-22-15-34-40-34 0 20 15 34 40 34Z"/><path d="M120 78c0-19 14-30 36-30 0 18-14 30-36 30Z"/><path d="M360 118c0-18-12-28-33-28 0 16 12 28 33 28Z"/><path d="M620 92c0-24-16-38-44-38 0 22 16 38 44 38Z"/><path d="M620 70c0-20 15-32 38-32 0 19-15 32-38 32Z"/><path d="M880 128c0-16-11-26-30-26 0 15 11 26 30 26Z"/><path d="M1120 104c0-22-15-34-40-34 0 20 15 34 40 34Z"/><path d="M1120 86c0-18 13-29 35-29 0 17-13 29-35 29Z"/><path d="M1320 132c0-16-11-25-29-25 0 14 11 25 29 25Z"/></g><g fill="#8aab8c"><path d="M120 96c0-20 14-32 38-32 0 19-14 32-38 32Z" opacity=".5"/><path d="M620 92c0-22 15-36 42-36 0 21-15 36-42 36Z" opacity=".5"/><path d="M1120 104c0-20 14-32 38-32 0 19-14 32-38 32Z" opacity=".5"/></g><g><g transform="translate(240 58)"><circle r="7" fill="#c56b47"/><g fill="#e6b7a4"><circle cx="0" cy="-12" r="6"/><circle cx="0" cy="12" r="6"/><circle cx="-12" cy="0" r="6"/><circle cx="12" cy="0" r="6"/></g><circle r="5" fill="#c56b47"/></g><g transform="translate(760 44) scale(.85)"><g fill="#eac24a"><circle cx="0" cy="-12" r="6"/><circle cx="0" cy="12" r="6"/><circle cx="-12" cy="0" r="6"/><circle cx="12" cy="0" r="6"/></g><circle r="5" fill="#c56b47"/></g><g transform="translate(1240 66) scale(.9)"><g fill="#e6b7a4"><circle cx="0" cy="-12" r="6"/><circle cx="0" cy="12" r="6"/><circle cx="-12" cy="0" r="6"/><circle cx="12" cy="0" r="6"/></g><circle r="5" fill="#c56b47"/></g></g></svg>"##;
 
+/// Path the built-in stylesheet is served from. Exposed to theme templates as
+/// `{{ styles_url }}` so a full `layout.html` can still link it.
+pub(crate) const STYLES_URL: &str = "/assets/site.css";
+
+/// Render an **authenticated/admin** page with the built-in look. Never
+/// consults `site.theme`: the editor, login, settings, and media surfaces are
+/// deliberately out of theming scope (CYP-56).
 pub fn render_page(site: &SiteMeta<'_>, meta: HeadMeta<'_>, main: &str) -> String {
+    render_shell(site, meta, main, None)
+}
+
+/// Render a **public** page, applying `site.theme` slot by slot. With no theme
+/// configured this is byte-identical to [`render_page`].
+pub fn render_public_page(site: &SiteMeta<'_>, meta: HeadMeta<'_>, main: &str) -> String {
+    render_shell(site, meta, main, site.theme)
+}
+
+fn render_shell(
+    site: &SiteMeta<'_>,
+    meta: HeadMeta<'_>,
+    main: &str,
+    theme: Option<&Theme>,
+) -> String {
     let mut tags = vec![
         r#"<meta charset="utf-8" />"#.to_string(),
         r#"<meta name="viewport" content="width=device-width, initial-scale=1" />"#.to_string(),
@@ -862,61 +891,148 @@ pub fn render_page(site: &SiteMeta<'_>, meta: HeadMeta<'_>, main: &str) -> Strin
     } else {
         "site-main"
     };
+    let site_name = escape_html(site.name);
 
+    // ── head ────────────────────────────────────────────────────────────────
+    // `head.html` is additive: a theme adds fonts/meta/inline style after the
+    // built-in tags, but cannot drop canonical, OpenGraph, or JSON-LD.
+    let head = format!(
+        r#"{}
+    <link rel="preload" href="/assets/fonts/nunito.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="stylesheet" href="{STYLES_URL}" />{}"#,
+        tags.join("\n    "),
+        extra_css,
+    );
+    let head = match theme.and_then(|theme| {
+        theme.render_slot(
+            slot::HEAD,
+            &[
+                ("site_name", site_name.as_str()),
+                ("title", &escape_html(meta.title)),
+                ("canonical_url", &escape_html(&meta.canonical_url)),
+                ("styles_url", STYLES_URL),
+            ],
+        )
+    }) {
+        Some(extra) => format!("{head}\n    {}", extra.trim_end()),
+        None => head,
+    };
+
+    // ── nav ─────────────────────────────────────────────────────────────────
     let nav_item = |key: &str, href: &str, icon: &str, label: &str| {
         let active = if nav_current == key {
-            " site-nav--active"
+            NAV_ACTIVE_CLASS
         } else {
             ""
         };
         format!(r#"<a class="site-nav{active}" href="{href}">{icon}{label}</a>"#)
     };
+    let active_for = |key: &str| {
+        if nav_current == key {
+            NAV_ACTIVE_CLASS
+        } else {
+            ""
+        }
+    };
+    let nav = theme
+        .and_then(|theme| {
+            theme.render_slot(
+                slot::NAV,
+                &[
+                    ("site_name", site_name.as_str()),
+                    ("nav_current", nav_current),
+                    ("active_dashboard", active_for("dashboard")),
+                    ("active_notes", active_for("notes")),
+                    ("active_tags", active_for("tags")),
+                    ("active_graph", active_for("graph")),
+                    ("active_settings", active_for("settings")),
+                ],
+            )
+        })
+        .map(|nav| nav.trim_end().to_string())
+        .unwrap_or_else(|| {
+            format!(
+                r#"<nav class="site-nav-group" aria-label="Main navigation">
+            {}
+            {}
+            {}
+            {}
+            {}
+          </nav>"#,
+                nav_item("dashboard", "/", DASHBOARD_ICON, "Dashboard"),
+                nav_item("notes", "/notes", NOTES_ICON, "Notes"),
+                nav_item("tags", "/tags", TAG_ICON, "Tags"),
+                nav_item("graph", "/graph", GRAPH_ICON, "Graph"),
+                nav_item("settings", "/settings", SETTINGS_ICON, "Settings"),
+            )
+        });
+
+    // ── header / footer ─────────────────────────────────────────────────────
+    let header = theme
+        .and_then(|theme| {
+            theme.render_slot(
+                slot::HEADER,
+                &[("site_name", site_name.as_str()), ("nav", nav.as_str())],
+            )
+        })
+        .map(|header| header.trim_end().to_string())
+        .unwrap_or_else(|| {
+            format!(
+                r#"<header class="site-header">
+        <div class="site-header-inner">
+          <a class="site-brand" href="/">{LEAF_ICON}<span class="brand-name">{site_name}</span></a>
+          {nav}
+          <div class="site-header-end"></div>
+        </div>
+      </header>"#
+            )
+        });
+    let footer = theme
+        .and_then(|theme| theme.render_slot(slot::FOOTER, &[("site_name", site_name.as_str())]))
+        .map(|footer| footer.trim_end().to_string())
+        .unwrap_or_else(|| {
+            format!(r#"<footer class="site-footer">Published with {site_name}.</footer>"#)
+        });
+
+    // ── shell ───────────────────────────────────────────────────────────────
+    if let Some(html) = theme.and_then(|theme| {
+        theme.render_slot(
+            slot::LAYOUT,
+            &[
+                ("lang", "en"),
+                ("head", head.as_str()),
+                ("header", header.as_str()),
+                ("nav", nav.as_str()),
+                ("footer", footer.as_str()),
+                ("main", main),
+                ("main_class", main_class),
+                ("site_name", site_name.as_str()),
+                ("styles_url", STYLES_URL),
+                ("botanical_band", BOTANICAL_BAND),
+            ],
+        )
+    }) {
+        return html;
+    }
 
     format!(
         r#"<!doctype html>
 <html lang="en">
   <head>
-    {}
-    <link rel="preload" href="/assets/fonts/nunito.woff2" as="font" type="font/woff2" crossorigin />
-    <link rel="stylesheet" href="/assets/site.css" />{}
+    {head}
   </head>
   <body class="site-body">
     <div class="site-shell">
-      <header class="site-header">
-        <div class="site-header-inner">
-          <a class="site-brand" href="/">{}<span class="brand-name">{}</span></a>
-          <nav class="site-nav-group" aria-label="Main navigation">
-            {}
-            {}
-            {}
-            {}
-            {}
-          </nav>
-          <div class="site-header-end"></div>
-        </div>
-      </header>
-      <main class="{}">
-{}
+      {header}
+      <main class="{main_class}">
+{main}
       </main>
-      <footer class="site-footer">Published with {}.</footer>
+      {footer}
     </div>
-    <div class="botanical-band" aria-hidden="true">{}</div>
+    <div class="botanical-band" aria-hidden="true">{BOTANICAL_BAND}</div>
   </body>
 </html>
-"#,
-        tags.join("\n    "),
-        extra_css,
-        LEAF_ICON,
-        escape_html(site.name),
-        nav_item("dashboard", "/", DASHBOARD_ICON, "Dashboard"),
-        nav_item("notes", "/notes", NOTES_ICON, "Notes"),
-        nav_item("tags", "/tags", TAG_ICON, "Tags"),
-        nav_item("graph", "/graph", GRAPH_ICON, "Graph"),
-        nav_item("settings", "/settings", SETTINGS_ICON, "Settings"),
-        main_class,
-        main,
-        escape_html(site.name),
-        BOTANICAL_BAND
+"#
     )
 }
 

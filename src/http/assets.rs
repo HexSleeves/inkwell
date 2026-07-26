@@ -10,8 +10,11 @@
 //! `nunito.woff2` is the latin-subset **variable** font (weight axis 200–1000),
 //! so one ~38 KiB file covers every weight the theme asks for.
 
+use axum::extract::State;
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
+
+use super::AppState;
 
 /// The embedded Nunito variable font (latin subset, woff2). Baked into the
 /// binary with `include_bytes!` so there is no filesystem dependency at runtime.
@@ -33,14 +36,22 @@ pub async fn nunito_font() -> Response {
 
 /// `GET /assets/site.css` — serve the site stylesheet same-origin so pages need
 /// no inline `<style>` and CSP can keep `style-src` locked to `'self'`.
-pub async fn site_css() -> Response {
+///
+/// An operator theme (`INKWELL_THEME_DIR`) may replace this stylesheet with its
+/// `styles.css` and/or append its `extra.css`; with no theme configured the body
+/// is the built-in [`crate::views::layout::STYLES`] byte for byte.
+pub async fn site_css(State(state): State<AppState>) -> Response {
+    let css = match state.config.theme.as_deref() {
+        Some(theme) => theme.stylesheet(crate::views::layout::STYLES),
+        None => crate::views::layout::STYLES.to_string(),
+    };
     (
         StatusCode::OK,
         [
             (header::CONTENT_TYPE, "text/css; charset=utf-8"),
             (header::CACHE_CONTROL, "public, max-age=3600"),
         ],
-        crate::views::layout::STYLES,
+        css,
     )
         .into_response()
 }

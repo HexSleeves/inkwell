@@ -3,10 +3,12 @@ use std::collections::HashSet;
 use crate::db::links::Backlink;
 use crate::domain::document::{AdjacentDoc, Document, GrowthStage, timestamp};
 use crate::rendering::wikilink::render_snippet_with_links;
+use crate::views::theme::slot;
 
 use super::layout::{
     BADGE_ICONS, HeadMeta, SITE_NAME, SPROUT_ICON, SiteMeta, date_line, derive_excerpt,
-    escape_html, json_ld_document, render_page, render_tag_chips, truncate_on_char_boundary,
+    escape_html, json_ld_document, render_page, render_public_page, render_tag_chips,
+    truncate_on_char_boundary,
 };
 
 /// Longest backlink context snippet (in bytes) shown before multibyte-safe
@@ -31,31 +33,56 @@ pub fn render_document_page(
     } else {
         String::new()
     };
-    let main = format!(
-        r#"<article>
-          <h1>{}</h1>
-          <div class="meta">{}{}{}</div>{}
-{}
-        </article>"#,
-        escape_html(&document.title),
+    let meta_line = format!(
+        r#"<div class="meta">{}{}{}</div>"#,
         date_line("Published", document.created_at),
         updated_text,
         render_growth_chip(document.growth),
-        render_tag_chips(&document.tags),
-        document.rendered_html()
     );
-    let main = format!(
-        "{}{}{}",
-        main,
-        render_backlinks_panel(backlinks, snippet_links),
-        render_adjacent_nav(prev, next),
-    );
+    let tags = render_tag_chips(&document.tags);
+    let backlinks_panel = render_backlinks_panel(backlinks, snippet_links);
+    let doc_nav = render_adjacent_nav(prev, next);
+    // `body_html` is the *sanitized* document body. A theme composes fragments;
+    // it has no route to the unsanitized markdown or pre-sanitize HTML, so
+    // `rendering::sanitize` stays the only gate on untrusted markup.
+    let main = site
+        .theme
+        .and_then(|theme| {
+            theme.render_slot(
+                slot::DOCUMENT,
+                &[
+                    ("site_name", &escape_html(site.name)),
+                    ("title", &escape_html(&document.title)),
+                    ("slug", &escape_html(&document.slug)),
+                    ("url", &escape_html(&url)),
+                    ("body_html", document.rendered_html()),
+                    ("meta_line", &meta_line),
+                    ("published", &date_line("Published", document.created_at)),
+                    ("updated", &date_line("Updated", document.updated_at)),
+                    ("growth", &render_growth_badge(document.growth)),
+                    ("tags", &tags),
+                    ("backlinks", &backlinks_panel),
+                    ("doc_nav", &doc_nav),
+                ],
+            )
+        })
+        .unwrap_or_else(|| {
+            format!(
+                r#"<article>
+          <h1>{}</h1>
+          {meta_line}{tags}
+{}
+        </article>{backlinks_panel}{doc_nav}"#,
+                escape_html(&document.title),
+                document.rendered_html(),
+            )
+        });
     let desc = if description.is_empty() {
         None
     } else {
         Some(description.as_str())
     };
-    render_page(
+    render_public_page(
         site,
         HeadMeta {
             title: &format!("{} — {}", document.title, site.name),
@@ -117,8 +144,14 @@ fn render_adjacent_nav(prev: Option<&AdjacentDoc>, next: Option<&AdjacentDoc>) -
 /// note's `<div class="meta">` line. The stage token is a fixed, sanitized
 /// vocabulary, so it is safe to interpolate into both the class and the label.
 fn render_growth_chip(growth: GrowthStage) -> String {
+    format!(" &middot; {}", render_growth_badge(growth))
+}
+
+/// The chip itself, without the leading meta-line separator. Themes get this
+/// form via `{{ growth }}` so they can place it wherever they like.
+fn render_growth_badge(growth: GrowthStage) -> String {
     format!(
-        r#" &middot; <span class="growth growth-{stage}">{icon}{stage}</span>"#,
+        r#"<span class="growth growth-{stage}">{icon}{stage}</span>"#,
         stage = growth.as_str(),
         icon = SPROUT_ICON,
     )
@@ -196,6 +229,9 @@ pub fn render_not_found_page(site_url: Option<&str>) -> String {
         author: None,
         base_url: super::layout::normalize_site_url(site_url),
         custom_css_url: None,
+        // The 404 page is reachable without server config in hand, so it always
+        // renders with the built-in look.
+        theme: None,
     };
     render_page(
         &site,

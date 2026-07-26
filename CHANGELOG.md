@@ -39,6 +39,24 @@ Full prose notes per release live in `docs/RELEASE-NOTES-<version>.md`.
 - `inkwell_webhook_attempts_total` and `inkwell_webhook_deliveries_total` on
   `/metrics`. Guide: [`docs/WEBHOOKS.md`](docs/WEBHOOKS.md).
 
+#### Public page theming (CYP-56)
+
+- `INKWELL_THEME_DIR` selects a directory of theme slot files that override the
+  public pages' shell (`layout.html`), `<head>` additions, header/nav/footer,
+  stylesheet (`styles.css` replaces, `extra.css` appends), and the index and
+  document bodies. Slots fall back to the built-in markup independently, so a
+  theme that ships only `extra.css` is valid.
+- Public surfaces only. `/editor`, `/auth/login`, `/settings`, `/media`, and the
+  404 page keep the built-in look, so a bad theme can't lock you out.
+- Unset ⇒ byte-identical output to previous releases, asserted by a golden
+  regression test captured before the seam existed.
+- A malformed theme (unknown file name or variable, unclosed `{{`, subdirectory,
+  non-UTF-8 file, no slot files) fails startup with the offending file named.
+- Document bodies reach themes post-sanitize; no slot variable carries raw
+  markdown, so themes are not an escape hatch around `rendering::sanitize`.
+- Example theme in `examples/themes/plainpaper`; docs in
+  [`docs/THEMING.md`](docs/THEMING.md).
+
 ### Changed
 
 #### A rejected `X-Api-Key` now returns `401` on read routes (CYP-55, ADR 0015)

@@ -1,6 +1,7 @@
 use crate::domain::document::DocumentSummary;
+use crate::views::theme::slot;
 
-use super::layout::{HeadMeta, SiteMeta, render_document_list, render_page};
+use super::layout::{HeadMeta, SiteMeta, escape_html, render_document_list, render_public_page};
 
 pub fn render_index_page(
     documents: &[DocumentSummary],
@@ -52,7 +53,25 @@ pub fn render_index_page(
     let description = site
         .description
         .unwrap_or("An open, API-first Markdown publishing platform.");
-    render_page(
+    // A theme's `index.html` composes the same pre-rendered fragments the
+    // built-in body uses; it never sees raw document markdown.
+    let body = site
+        .theme
+        .and_then(|theme| {
+            theme.render_slot(
+                slot::INDEX,
+                &[
+                    ("site_name", &escape_html(site.name)),
+                    ("site_description", &escape_html(description)),
+                    ("documents", &list),
+                    ("pager", &pager),
+                    ("page", &page.to_string()),
+                    ("total_pages", &total_pages.to_string()),
+                ],
+            )
+        })
+        .unwrap_or_else(|| format!("{}{}", list, pager));
+    render_public_page(
         site,
         HeadMeta {
             title: &title,
@@ -64,6 +83,6 @@ pub fn render_index_page(
             nav_current: Some("dashboard"),
             wide_layout: false,
         },
-        &format!("{}{}", list, pager),
+        &body,
     )
 }

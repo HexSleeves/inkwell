@@ -1,6 +1,8 @@
 use crate::domain::document::DocumentSummary;
 
-use super::layout::{HeadMeta, SiteMeta, date_line, escape_html, render_page, render_tag_chips};
+use super::layout::{
+    HeadMeta, SiteMeta, date_line, escape_html, render_public_page, render_tag_chips,
+};
 
 /// Render the `/notes` page: a complete, single-page index of every published
 /// note. Each note is a compact row (title, date, tags) carrying `data-title`
@@ -127,7 +129,7 @@ pub fn render_notes_index_page(
         )
     };
 
-    render_page(
+    render_public_page(
         site,
         HeadMeta {
             title: &format!("Notes \u{2014} {}", site.name),

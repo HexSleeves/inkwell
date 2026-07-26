@@ -1,0 +1,86 @@
+/* plainpaper — a deliberately small Inkwell theme.
+ *
+ * This file REPLACES Inkwell's built-in stylesheet at /assets/site.css. If you
+ * would rather keep the built-in look and only tweak it, delete this file and
+ * put your rules in `extra.css` instead: that is appended to the built-in sheet.
+ *
+ * Class names used by Inkwell-rendered fragments (so a theme can style them):
+ *   ul.index / a.title / .excerpt / .meta   — the document list
+ *   ul.tags                                  — tag chips
+ *   .growth                                  — the maturity chip
+ *   .backlinks / ul.backlinks-list / a.backlink / .backlink-context
+ *   nav.pager / nav.doc-nav                  — pagination and prev/next
+ *   .empty                                   — empty-state text
+ */
+:root {
+  --pp-ink: #16181d;
+  --pp-paper: #fdfdfc;
+  --pp-muted: #6b7280;
+  --pp-rule: #e5e7eb;
+  --pp-link: #1d4ed8;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --pp-ink: #e8e8e6;
+    --pp-paper: #16181d;
+    --pp-muted: #9ca3af;
+    --pp-rule: #2b2f36;
+    --pp-link: #93b4ff;
+  }
+}
+* { box-sizing: border-box; }
+body.plainpaper {
+  margin: 0;
+  background: var(--pp-paper);
+  color: var(--pp-ink);
+  font: 16px/1.7 ui-serif, Georgia, "Times New Roman", serif;
+}
+.pp-header, main, .pp-footer {
+  width: min(100%, 42rem);
+  margin: 0 auto;
+  padding: 0 1.25rem;
+}
+.pp-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem 1.25rem;
+  padding-top: 2rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--pp-rule);
+}
+.pp-brand { font-weight: 700; font-size: 1.1rem; color: inherit; text-decoration: none; }
+.pp-nav { display: flex; gap: 0.9rem; }
+.pp-link { color: var(--pp-muted); font-size: 0.9rem; text-decoration: none; }
+.pp-link:hover { color: var(--pp-ink); }
+/* Inkwell hands `{{ active_* }}` the built-in active class, so style that. */
+.pp-link.site-nav--active { color: var(--pp-ink); font-weight: 700; }
+main { padding-top: 2.5rem; padding-bottom: 3rem; }
+main.wide-layout { width: min(100%, 72rem); }
+.pp-title { font-size: 1.9rem; margin: 0 0 0.25rem; }
+.pp-tagline { margin: 0 0 2rem; color: var(--pp-muted); }
+h1, h2, h3 { line-height: 1.25; }
+a { color: var(--pp-link); }
+img { max-width: 100%; height: auto; }
+pre { overflow-x: auto; padding: 1rem; background: var(--pp-rule); border-radius: 6px; }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.9em; }
+blockquote { margin-left: 0; padding-left: 1rem; border-left: 3px solid var(--pp-rule); color: var(--pp-muted); }
+table { border-collapse: collapse; width: 100%; }
+th, td { border: 1px solid var(--pp-rule); padding: 0.45rem 0.6rem; text-align: left; }
+.meta, .excerpt, .backlink-context { color: var(--pp-muted); font-size: 0.9rem; }
+ul.index { list-style: none; padding: 0; display: grid; gap: 1.5rem; }
+ul.index a.title { font-size: 1.15rem; font-weight: 700; color: inherit; text-decoration: none; }
+ul.index a.title:hover { color: var(--pp-link); }
+ul.tags { list-style: none; padding: 0; display: flex; flex-wrap: wrap; gap: 0.4rem; margin: 0.5rem 0 1rem; }
+ul.tags a { font-size: 0.78rem; text-decoration: none; padding: 0.1rem 0.5rem; border: 1px solid var(--pp-rule); border-radius: 999px; }
+.growth { font-size: 0.72rem; text-transform: lowercase; }
+.growth svg { display: none; }
+.backlinks { margin-top: 3rem; border-top: 1px solid var(--pp-rule); padding-top: 1.5rem; }
+ul.backlinks-list { list-style: none; padding: 0; display: grid; gap: 1rem; }
+.backlink-badge { display: none; }
+a.backlink { font-weight: 700; color: inherit; }
+nav.pager, nav.doc-nav { display: flex; justify-content: space-between; gap: 1rem; margin-top: 2.5rem; }
+nav.doc-nav { border-top: 1px solid var(--pp-rule); padding-top: 1.25rem; }
+nav.pager .spacer, nav.doc-nav .spacer { color: transparent; }
+.empty { color: var(--pp-muted); font-style: italic; }
+.pp-footer { padding-bottom: 3rem; color: var(--pp-muted); font-size: 0.85rem; border-top: 1px solid var(--pp-rule); padding-top: 1rem; }

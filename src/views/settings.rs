@@ -264,6 +264,7 @@ mod tests {
             site_description: None,
             site_author: None,
             custom_css_url: None,
+            theme: None,
             // The public settings page deliberately never advertises the metrics
             // surface, so these are irrelevant to rendering — set to the
             // production defaults.

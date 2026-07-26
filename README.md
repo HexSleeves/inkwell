@@ -67,6 +67,7 @@ Copy `.env.example` to `.env` before local development. `.env` is gitignored.
 | `INKWELL_SITE_DESCRIPTION` | _(none)_ | Index page `<meta name="description">` and feed subtitle. |
 | `INKWELL_SITE_AUTHOR` | _(none)_ | Default Atom feed author and JSON-LD author. |
 | `INKWELL_CUSTOM_CSS_URL` | _(none)_ | Extra stylesheet injected on every public HTML page. |
+| `INKWELL_THEME_DIR` | _(none)_ | Directory of theme files overriding public-page shell, CSS, and bodies. Unset ⇒ built-in rendering. See [`docs/THEMING.md`](docs/THEMING.md). |
 | `INKWELL_API_URL` | `http://HOST:PORT` | Base URL the `inkwell author` CLI targets. |
 | `INKWELL_WRITE_RATE_LIMIT` | `60` | Write rate limit (req/min). `0` disables. |
 | `INKWELL_TRUST_FORWARDED_HEADERS` | `false` | Trust `X-Forwarded-For` for IP keying (set `true` only behind a trusted proxy). |

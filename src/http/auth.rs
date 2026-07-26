@@ -346,6 +346,7 @@ mod tests {
             site_description: None,
             site_author: None,
             custom_css_url: None,
+            theme: None,
             metrics_enabled: false,
             metrics_token: None,
             media_backend: crate::config::MediaBackend::Local,

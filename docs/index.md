@@ -71,6 +71,7 @@ or CLI, and let your readers browse a fast, public digital garden.
 | **Draft preview** | Shareable `pvw_…` token for anonymous draft rendering before publish |
 | **Archive nav** | `/archive` year/month buckets; prev/next navigation bar on document pages |
 | **Site branding** | `INKWELL_SITE_TITLE`, `INKWELL_SITE_DESCRIPTION`, `INKWELL_SITE_AUTHOR`, `INKWELL_CUSTOM_CSS_URL` |
+| **Theming** | Operator-supplied public-page themes via `INKWELL_THEME_DIR` ([guide](THEMING.md)) |
 | **Webmentions** | Receiving always-on; sending opt-in (`INKWELL_WEBMENTION_SEND=true`) |
 | **Rate limiting** | GCRA per-principal (or IP), configurable, `429` + `Retry-After` |
 | **Request IDs** | `X-Request-Id` on every response and in every error envelope |

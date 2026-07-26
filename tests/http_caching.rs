@@ -46,6 +46,7 @@ fn router_with_unreachable_database() -> Result<axum::Router> {
             site_description: None,
             site_author: None,
             custom_css_url: None,
+            theme: None,
             metrics_enabled: false,
             metrics_token: None,
             media_backend: inkwell::config::MediaBackend::Local,

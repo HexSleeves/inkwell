@@ -14,6 +14,7 @@ fn site() -> SiteMeta<'static> {
         author: None,
         base_url: "https://example.com".to_string(),
         custom_css_url: None,
+        theme: None,
     }
 }
 

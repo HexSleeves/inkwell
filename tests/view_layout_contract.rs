@@ -281,6 +281,7 @@ fn render_page_uses_configured_site_name_in_brand_and_og_site_name() {
         author: None,
         base_url: "http://localhost".to_string(),
         custom_css_url: None,
+        theme: None,
     };
     let html = render_page(
         &site,
@@ -342,6 +343,7 @@ fn render_page_injects_custom_css_link_when_url_is_set() {
         author: None,
         base_url: "http://localhost".to_string(),
         custom_css_url: Some("https://example.com/theme.css"),
+        theme: None,
     };
     let html = render_page(
         &site,
@@ -394,6 +396,7 @@ fn render_index_page_uses_configured_description_over_default() {
         author: None,
         base_url: "http://localhost".to_string(),
         custom_css_url: None,
+        theme: None,
     };
     let html = render_index_page(&[], 1, 1, &site);
     assert!(

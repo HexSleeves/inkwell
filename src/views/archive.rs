@@ -1,6 +1,6 @@
 use crate::domain::document::{ArchiveMonth, DocumentSummary};
 
-use super::layout::{HeadMeta, SiteMeta, escape_html, render_document_list, render_page};
+use super::layout::{HeadMeta, SiteMeta, escape_html, render_document_list, render_public_page};
 
 const MONTH_NAMES: [&str; 12] = [
     "January",
@@ -28,7 +28,7 @@ pub fn render_archive_index_page(months: &[ArchiveMonth], site: &SiteMeta<'_>) -
     } else {
         render_month_groups(months)
     };
-    render_page(
+    render_public_page(
         site,
         HeadMeta {
             title: &format!("Archive \u{2014} {}", site.name),
@@ -143,7 +143,7 @@ pub fn render_archive_month_page(
     };
 
     let back = r#"<p class="archive-back"><a href="/archive">&larr; All months</a></p>"#;
-    render_page(
+    render_public_page(
         site,
         HeadMeta {
             title: &title,
@@ -233,6 +233,7 @@ mod tests {
             author: None,
             base_url: "https://example.com".to_string(),
             custom_css_url: None,
+            theme: None,
         };
         let html = render_archive_index_page(&[], &site);
         assert!(html.contains(r#"rel="canonical" href="https://example.com/archive""#));
@@ -246,6 +247,7 @@ mod tests {
             author: None,
             base_url: "https://example.com".to_string(),
             custom_css_url: None,
+            theme: None,
         };
         let html = render_archive_month_page(2026, 6, &[], 2, 3, &site);
         assert!(

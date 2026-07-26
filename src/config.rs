@@ -1,4 +1,8 @@
-use anyhow::{Result, anyhow};
+use std::sync::Arc;
+
+use anyhow::{Context, Result, anyhow};
+
+use crate::views::theme::Theme;
 
 /// Default Claude model for ask-your-garden answer synthesis. Configurable via
 /// `INKWELL_LLM_MODEL`. Per the project's claude-api guidance, `claude-sonnet-4-6`
@@ -127,6 +131,11 @@ pub struct Config {
     /// injected after the built-in styles so operators can apply a custom theme
     /// without touching source code. Optional; nothing injected when absent.
     pub custom_css_url: Option<String>,
+    /// Operator-supplied theme for **public** pages, loaded once at startup from
+    /// `INKWELL_THEME_DIR` (`None` when unset ⇒ built-in rendering, byte for
+    /// byte). A malformed theme fails startup rather than degrading a live page;
+    /// see [`crate::views::theme`] and `docs/THEMING.md`.
+    pub theme: Option<Arc<Theme>>,
     /// Whether to register the `/metrics` Prometheus endpoint
     /// (`INKWELL_METRICS_ENABLED`). Conservative default: **off** — metrics are
     /// not publicly scrapeable on a default install; the route simply does not
@@ -192,6 +201,7 @@ impl std::fmt::Debug for Config {
             .field("site_description", &self.site_description)
             .field("site_author", &self.site_author)
             .field("custom_css_url", &self.custom_css_url)
+            .field("theme", &self.theme)
             .field("metrics_enabled", &self.metrics_enabled)
             .field(
                 "metrics_token",
@@ -267,6 +277,15 @@ impl Config {
         let site_description = trimmed_env("INKWELL_SITE_DESCRIPTION");
         let site_author = trimmed_env("INKWELL_SITE_AUTHOR");
         let custom_css_url = trimmed_env("INKWELL_CUSTOM_CSS_URL");
+        // A theme is read once, here, so a typo or a broken template is a
+        // startup failure with a precise message instead of a broken public page
+        // (or a panic) on the first request. Unset ⇒ built-in rendering.
+        let theme = match trimmed_env("INKWELL_THEME_DIR") {
+            Some(dir) => Some(Arc::new(Theme::load(&dir).with_context(|| {
+                format!("Invalid INKWELL_THEME_DIR \"{dir}\": theme could not be loaded")
+            })?)),
+            None => None,
+        };
         // Metrics exposure is opt-in: same strict "true"-only parse rule as the
         // other flags, so a typo leaves the endpoint unregistered rather than
         // silently publishing operational data.
@@ -374,6 +393,7 @@ impl Config {
             site_description,
             site_author,
             custom_css_url,
+            theme,
             metrics_enabled,
             metrics_token,
             media_backend,
@@ -486,6 +506,7 @@ mod tests {
             site_description: None,
             site_author: None,
             custom_css_url: None,
+            theme: None,
             metrics_enabled: true,
             metrics_token: Some("sentinel-metrics-value".to_string()),
             media_backend: MediaBackend::Local,
@@ -553,6 +574,7 @@ mod tests {
             site_description: Some("A digital garden.".to_string()),
             site_author: Some("Alice".to_string()),
             custom_css_url: Some("https://example.com/custom.css".to_string()),
+            theme: None,
             metrics_enabled: false,
             metrics_token: None,
             media_backend: MediaBackend::Postgres,

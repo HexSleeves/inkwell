@@ -4,7 +4,8 @@ use std::f64::consts::PI;
 use crate::domain::document::{DocumentSummary, TagCooccurrence, TagCount};
 
 use super::layout::{
-    HeadMeta, SiteMeta, escape_html, render_document_list, render_page, truncate_on_char_boundary,
+    HeadMeta, SiteMeta, escape_html, render_document_list, render_public_page,
+    truncate_on_char_boundary,
 };
 
 /// Render the `/tags` overview as a two-panel page: an SVG force-style graph of
@@ -193,7 +194,7 @@ pub fn render_tag_index_page(
         )
     };
 
-    render_page(
+    render_public_page(
         site,
         HeadMeta {
             title: &format!("Tags \u{2014} {}", site.name),
@@ -260,7 +261,7 @@ pub fn render_tag_page(
     } else {
         format!("{}/tags/{}", site.base_url, urlencoding::encode(tag))
     };
-    render_page(
+    render_public_page(
         site,
         HeadMeta {
             title: &title,
