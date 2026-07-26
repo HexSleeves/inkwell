@@ -1,8 +1,16 @@
-# Inkwell v0.2.0 (unreleased)
+# Inkwell v0.2.0
 
-Draft release notes for the next tag. The headline change is **scoped author
-tokens** (ADR 0009), which closes the single-shared-key gap flagged in the v0.1
-security audit ([`docs/audit-v0.1.md`](audit-v0.1.md)).
+Released 2026-07-25. Four headline changes:
+
+| Area | What landed |
+|------|-------------|
+| **Scoped API tokens** | Per-author, individually revocable bearer tokens with scopes, replacing the single shared key as the everyday credential (ADR 0009) |
+| **Authoring web UI** | Server-rendered browser editor + media picker behind `INKWELL_BROWSER_LOGIN` (ADR 0010) |
+| **Media upload + hosting** | `POST/GET/DELETE /media`, pluggable storage backend, magic-byte sniffing, immutable cache + `ETag` (ADR 0013) |
+| **Observability** | Structured JSON logs with request ids, Prometheus `/metrics`, split `/healthz` + `/readyz` (ADR 0012) |
+
+The per-release summary of everything else in this span is in
+[`CHANGELOG.md`](https://github.com/HexSleeves/inkwell/blob/main/CHANGELOG.md).
 
 ## Highlights
 
@@ -33,6 +41,55 @@ individually revocable bearer tokens with explicit scopes.
   scoped tokens log as the owning author), so fallback use is distinguishable.
 - **MCP** — the standalone `INKWELL_MCP_KEY` was retired; the MCP server
   authenticates with a scoped token supplied via `INKWELL_API_KEY`.
+
+### Authoring web UI
+
+Writing no longer requires the CLI. `INKWELL_BROWSER_LOGIN=true` (default off)
+turns on a server-rendered authoring surface:
+
+- `GET /login` + `POST /auth/login` / `POST /auth/logout` — session-cookie login
+  (`sessions` table, migration 0020) for an author who holds a scoped token.
+- `GET /editor` — list your documents; `GET /editor/new` and
+  `GET /editor/{slug}` — create and edit Markdown in the browser.
+- `GET /media/new` — upload an image and copy its `/media/{id}` URL into a note.
+
+The HTML pages are shells over the existing `/documents` JSON API: **auth and
+scope are enforced on the API routes, not by the UI**, so a browser session gets
+exactly the permissions its author's token carries. With the flag off, all of
+these paths fall through to the public `/{slug}` handler, so a default install
+exposes no auth or authoring surface at all. See
+[ADR 0010](adr/0010-browser-login.md).
+
+### Media upload and hosting
+
+- `POST /media` (multipart, `write` scope), `GET /media/{id}` (public),
+  `DELETE /media/{id}` (owner or admin).
+- **Pluggable storage** — `INKWELL_MEDIA_BACKEND=local` (default) writes
+  content-addressed files under `INKWELL_MEDIA_DIR` (`./data/media`);
+  `postgres` keeps bytes in the `media_blobs` table. See
+  [ADR 0013](adr/0013-media-storage.md).
+- **Type verification** — the stored content type comes from magic-byte
+  sniffing, not the client's claim. Size cap is `INKWELL_MEDIA_MAX_BYTES`
+  (default 5 MiB, hard ceiling 256 MiB).
+- **Caching** — served with `Cache-Control: public, max-age=31536000, immutable`
+  and a content-SHA-256 `ETag`; a conditional request gets `304`.
+- `inkwell author upload <file>` prints the URL to embed; the authoring UI can
+  insert it directly.
+
+### Observability
+
+- **Structured logs** — JSON by default; `INKWELL_LOG_FORMAT=pretty` for local
+  dev. Filter with `INKWELL_LOG` (checked before `RUST_LOG`).
+- **Request ids** — every request carries `X-Request-Id`, echoed in the response
+  headers, the log line, and `error.requestId`.
+- **Metrics** — Prometheus text exposition at `GET /metrics`, registered only
+  when `INKWELL_METRICS_ENABLED=true`. Set `INKWELL_METRICS_TOKEN` to require
+  `Authorization: Bearer <token>` on scrapes. Secrets are redacted from logs and
+  config dumps.
+- **Probes** — `GET /healthz` (liveness, no DB) and `GET /readyz` (readiness,
+  DB-aware); `GET /health` is retained as an alias of `/readyz`.
+- Guide: [`docs/OBSERVABILITY.md`](OBSERVABILITY.md),
+  [ADR 0012](adr/0012-observability.md).
 
 ## Migrating from v0.1
 

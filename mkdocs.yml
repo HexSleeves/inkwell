@@ -76,6 +76,7 @@ nav:
   - Releases:
     - Release Process: RELEASES.md
     - Release Checklist: RELEASE-CHECKLIST.md
+    - Release Notes v0.2: RELEASE-NOTES-v0.2.0.md
     - Release Notes v0.1: RELEASE-NOTES-v0.1.0.md
   - Internals:
     - Project Closeout: CLOSEOUT.md
