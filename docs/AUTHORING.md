@@ -6,7 +6,7 @@ details see [`docs/API.md`](API.md).
 
 ---
 
-## Authoring in the browser (CYP-42)
+## Authoring in the browser
 
 When `INKWELL_BROWSER_LOGIN=true`, Inkwell serves a minimal server-rendered web
 editor over the existing `/documents` API — no CLI required:
@@ -17,6 +17,7 @@ editor over the existing `/documents` API — no CLI required:
 | `GET /editor` | List your documents (draft + published) with edit/view links. |
 | `GET /editor/new` | Create a document (title, slug, tags, growth, Markdown body). |
 | `GET /editor/{slug}` | Edit, save (optimistic-concurrency `If-Match`), publish/unpublish, and preview. |
+| `GET /media/new` | Upload an image and copy its URL or Markdown snippet. |
 
 The pages are thin HTML shells driven by nonce'd inline scripts that `fetch` the
 JSON API; the session cookie carries the token's scopes (capped to
@@ -24,6 +25,10 @@ read/write/publish), so the API enforces auth and scope on every action. The
 preview pane shows the API's `renderedHtml` — the exact HTML the public page path
 renders — so a saved draft previews identically to how it will publish. With the
 flag off, none of these routes exist (the public build ships no editor surface).
+
+**Full guide:** [`docs/EDITOR.md`](EDITOR.md) — enabling the flag, the
+token-for-session login step, session TTL, which scope each action needs, the
+image-insert control, and troubleshooting.
 
 ---
 

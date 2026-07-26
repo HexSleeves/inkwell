@@ -20,6 +20,7 @@ Local preview: `pip install -r requirements-docs.txt && mkdocs serve`.
 | **AI / RAG** | `GET or POST /ask` — pgvector semantic retrieval + Claude synthesis; `GET /documents/{slug}/related` for similar notes |
 | **MCP server** | `inkwell mcp` — 5 tools (`search_notes`, `read_note`, `list_notes`, `create_note`, `update_note`) over stdio; auth via scoped token |
 | **Author CLI** | `inkwell author` — `new`, `push`, `publish`, `unpublish`, `upload`; `inkwell import` for bulk Markdown import |
+| **Authoring web UI** | `/editor` — browser write/save/publish with live preview and image insert; opt-in via `INKWELL_BROWSER_LOGIN=true`; see [`docs/EDITOR.md`](docs/EDITOR.md) |
 | **Scoped tokens** | Per-author bearer tokens (`ink_<prefix>_<secret>`); scopes: `read`, `write`, `publish`, `admin`; `inkwell author token` CLI |
 | **Media** | `POST /media`, `GET /media/{id}`, `DELETE /media/{id}` — content-addressed image upload behind a pluggable storage backend (local filesystem by default, Postgres optional); magic-byte type verification, immutable cache + `ETag`; insert from the authoring UI or `inkwell author upload <file>` |
 | **Backup / restore** | `inkwell backup` writes one bundle (database + media bytes + a manifest recording schema/Inkwell versions); `inkwell restore` loads it, refusing a non-empty target without `--overwrite` and a bundle from a newer schema outright — see [`docs/BACKUP-RESTORE.md`](docs/BACKUP-RESTORE.md) |
@@ -69,7 +70,7 @@ Copy `.env.example` to `.env` before local development. `.env` is gitignored.
 | `INKWELL_WRITE_RATE_LIMIT` | `60` | Write rate limit (req/min). `0` disables. |
 | `INKWELL_TRUST_FORWARDED_HEADERS` | `false` | Trust `X-Forwarded-For` for IP keying (set `true` only behind a trusted proxy). |
 | `INKWELL_WEBMENTION_SEND` | `false` | Send outbound Webmentions on publish. |
-| `INKWELL_BROWSER_LOGIN` | `false` | Enable flag-gated browser session login (`/auth/*`) and the authoring web UI (`/login`, `/editor`). |
+| `INKWELL_BROWSER_LOGIN` | `false` | Enable flag-gated browser session login (`/auth/*`) and the authoring web UI (`/login`, `/editor`, `/media/new`). See [`docs/EDITOR.md`](docs/EDITOR.md). |
 | `INKWELL_MEDIA_BACKEND` | `local` | Where uploaded images are stored: `local` (filesystem) or `postgres` (`media_blobs` table). See [ADR 0013](docs/adr/0013-media-storage.md). |
 | `INKWELL_MEDIA_DIR` | `./data/media` | Root directory for the `local` media backend. **Must be persistent** — compose mounts the `inkwell-media` volume at `/app/data/media`. |
 | `INKWELL_MEDIA_MAX_BYTES` | `5242880` | Maximum upload size in bytes (5 MiB). Ceiling 256 MiB. |
@@ -141,6 +142,7 @@ Route groups:
 | **Media** | `POST /media`, `GET /media/{id}`, `DELETE /media/{id}` |
 | **Admin tokens** | `GET/POST /admin/tokens`, `POST /admin/tokens/{prefix}/revoke`, `POST /admin/tokens/prune` |
 | **Webmention** | `POST /webmention` |
+| **Browser session + authoring UI** | Registered only when `INKWELL_BROWSER_LOGIN=true`: `GET /login`, `POST /auth/login`, `POST /auth/logout`, `GET /editor`, `GET /editor/new`, `GET /editor/{slug}`, `GET /media/new` — see [`docs/EDITOR.md`](docs/EDITOR.md) |
 | **Public HTML** | `GET /`, `GET /page/{page}`, `GET /{slug}`, `GET /tags`, `GET /tags/{tag}`, `GET /tags/{tag}/page/{page}`, `GET /search`, `GET /archive`, `GET /archive/{year}/{month}`, `GET /archive/{year}/{month}/page/{page}` |
 | **Feeds / sitemaps** | `GET /feed.xml`, `GET /sitemap.xml`, `GET /sitemap-static.xml`, `GET /sitemaps/documents/{page}`, `GET /sitemaps/tags/{page}` |
 
@@ -188,6 +190,17 @@ tags:
 
 For scoped token setup, MCP agent authoring, and bulk import: see
 [`docs/AUTHORING.md`](docs/AUTHORING.md).
+
+### Authoring in a browser
+
+Set `INKWELL_BROWSER_LOGIN=true` and restart to serve the authoring web UI:
+sign in at `/login` by pasting an `ink_…` token (it is exchanged for a 7-day
+`inkwell_session` cookie), then write, save, insert images, and publish at
+`/editor`. The pages drive the same `/documents` API, which still enforces
+auth and scopes on every action — `write` to save, `publish` to publish. The
+flag is off by default, and with it off none of those routes exist.
+
+Full guide: [`docs/EDITOR.md`](docs/EDITOR.md).
 
 ---
 
@@ -292,6 +305,7 @@ mkdocs serve   # http://127.0.0.1:8000
 |----------|---------|
 | [`docs/QUICKSTART.md`](docs/QUICKSTART.md) | One-command local demo + AI walkthrough |
 | [`docs/AUTHORING.md`](docs/AUTHORING.md) | Author CLI, scoped tokens, media upload, draft preview, import |
+| [`docs/EDITOR.md`](docs/EDITOR.md) | Authoring web UI (`/editor`): enabling it, login, scopes, image upload |
 | [`docs/SITE-CONFIGURATION.md`](docs/SITE-CONFIGURATION.md) | Site branding and metadata env vars |
 | [`docs/API.md`](docs/API.md) | Full HTTP API reference |
 | [`docs/openapi.yaml`](docs/openapi.yaml) | OpenAPI 3.1 machine-readable contract |

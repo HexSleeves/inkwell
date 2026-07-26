@@ -62,6 +62,7 @@ nav:
   - Getting Started:
     - Quickstart: QUICKSTART.md
     - Authoring: AUTHORING.md
+    - Authoring Web UI: EDITOR.md
     - Site Configuration: SITE-CONFIGURATION.md
   - API Reference:
     - HTTP API: API.md

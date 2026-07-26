@@ -27,6 +27,14 @@ or CLI, and let your readers browse a fast, public digital garden.
 
     [:octicons-arrow-right-24: Authoring guide](AUTHORING.md)
 
+- :material-application-edit: **Web editor**
+
+    ---
+
+    Enable and use the browser authoring UI at `/editor`
+
+    [:octicons-arrow-right-24: Authoring web UI](EDITOR.md)
+
 - :material-api: **API reference**
 
     ---
@@ -57,6 +65,7 @@ or CLI, and let your readers browse a fast, public digital garden.
 | **AI / RAG** | `GET or POST /ask` — pgvector semantic retrieval + Claude synthesis; `/documents/{slug}/related` |
 | **MCP server** | 5 tools over stdio (`search_notes`, `read_note`, `list_notes`, `create_note`, `update_note`); auth via scoped token |
 | **Author CLI** | `inkwell author new/push/publish/unpublish/upload`; `inkwell import` for bulk Markdown |
+| **Authoring web UI** | `/editor` write/save/publish with live preview and image insert; opt-in via `INKWELL_BROWSER_LOGIN=true` ([guide](EDITOR.md)) |
 | **Scoped tokens** | Per-author `ink_<prefix>_<secret>` tokens; `read/write/publish/admin` scopes; full write audit |
 | **Media** | `POST /media` + `GET /media/{id}`; stored in Postgres `bytea`; `inkwell author upload` CLI |
 | **Draft preview** | Shareable `pvw_…` token for anonymous draft rendering before publish |
