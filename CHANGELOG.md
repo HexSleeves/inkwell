@@ -11,6 +11,19 @@ Full prose notes per release live in `docs/RELEASE-NOTES-<version>.md`.
 
 ### Added
 
+#### Backup consistency and completeness guards (CYP-59)
+
+- The `REPEATABLE READ` snapshot behind `inkwell backup` is now tested, not just
+  documented: a contract test parks a dump mid-flight on a table lock, commits
+  document publishes while it is parked, and asserts the bundle is a single-instant
+  snapshot (manifest counts match streamed rows, no post-snapshot note appears) and
+  restores clean with every foreign key enforced.
+- A schema-drift test diffs the backed-up table set against `information_schema`,
+  so a future migration that adds a table fails CI instead of silently producing
+  incomplete backups. Exclusions (`_sqlx_migrations`, `media_blobs`) are explicit.
+- [`docs/BACKUP-RESTORE.md`](docs/BACKUP-RESTORE.md) records both properties and
+  the full state surface a restore must reproduce.
+
 #### Outbound signed webhooks (CYP-53)
 
 - Publishing or unpublishing a document POSTs a versioned JSON payload to

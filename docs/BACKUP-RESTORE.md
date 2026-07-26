@@ -46,6 +46,13 @@ consistent snapshot even if the server keeps serving writes while it runs. You d
 not need to stop the app to take a backup. You *do* need to stop writes before a
 restore.
 
+That consistency is tested, not asserted: a contract test parks a dump partway
+through, publishes documents while it is parked, and proves the bundle contains
+the snapshot as of the dump's start — the same count in the manifest as rows in
+the file, no half-written note, and a clean restore with every foreign key
+enforced. A note committed during the dump is simply absent, which is the correct
+outcome for a backup taken before it existed.
+
 ### What is and is not backed up
 
 **Included:**
@@ -79,6 +86,12 @@ restore.
 - **Postgres roles, extensions, and indexes.** `inkwell restore` runs migrations
   on the target first, which recreates all of them. The target's Postgres must
   have `pgvector` available (see [Prerequisites](#prerequisites-pgvector-extension)).
+
+The "included" list above cannot silently fall behind the schema: a contract test
+diffs the backed-up table set against the live database, so a future migration
+that adds a table fails CI until that table is either added to the bundle or
+excluded with a stated reason. An incomplete backup is a bug, not a surprise you
+discover during a restore.
 
 ### Taking a bundle
 
@@ -119,7 +132,7 @@ docker compose stop app        # compose
 # Railway: set replicas to 0, or redeploy without `inkwell serve`
 ```
 
-Two safety properties, both covered by
+Three safety properties, all covered by
 [`tests/backup_restore_contract.rs`](https://github.com/HexSleeves/inkwell/blob/main/tests/backup_restore_contract.rs):
 
 - **Never silently clobber.** Without `--overwrite`, restoring into a deployment
@@ -128,6 +141,8 @@ Two safety properties, both covered by
 - **All or nothing.** Every database write happens in one transaction. A bad row,
   a checksum failure, or a missing column aborts the whole restore and leaves the
   target exactly as it was.
+- **Consistent under load.** A dump taken while the deployment is serving writes
+  is a single-instant snapshot, and restores as one.
 
 With `--overwrite`, the backed-up tables are truncated and replaced wholesale
 (not merged), and blobs the previous deployment referenced that the bundle does

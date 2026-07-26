@@ -9,7 +9,9 @@
 //! byte-identical.
 //!
 //! The other tests pin the safety rails: no silent clobber, empty round-trips,
-//! and refusal of a bundle from a newer schema.
+//! refusal of a bundle from a newer schema, a dump taken under concurrent writes,
+//! and a schema-drift guard so a new table cannot quietly escape the bundle
+//! (the last two added for CYP-59).
 //!
 //! Skipped unless `DATABASE_URL` is set (or forced via `INKWELL_REQUIRE_DB_TESTS=1`).
 
@@ -25,6 +27,7 @@ use pretty_assertions::assert_eq;
 use sqlx::PgPool;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
+use std::time::Duration;
 use tokio::sync::{Mutex, MutexGuard};
 use tower::ServiceExt;
 
@@ -747,6 +750,294 @@ async fn restore_refuses_a_bundle_from_a_newer_schema_and_changes_nothing() -> R
     let _ = std::fs::remove_file(&path);
     scratch.cleanup().await?;
     Ok(())
+}
+
+/// Taking a backup while the deployment is serving writes must produce a valid,
+/// restorable bundle that reflects one instant (CYP-59).
+///
+/// `inkwell backup` dumps inside a single `REPEATABLE READ` transaction. That was
+/// previously only a claim in a comment; this test is the assertion behind it, and
+/// it forces the overlap rather than hoping for it.
+///
+/// The trick: hold `ACCESS EXCLUSIVE` on `preview_tokens` — the last table in
+/// [`backup::TABLES`] — in another transaction. The dump's snapshot is established
+/// by its first statement, then it parks on that lock partway through, which is a
+/// deterministic window in which writes can be committed. Those writes must be
+/// invisible to the bundle:
+///
+/// - the manifest's `documents` count *and* the bundle's actual `documents` rows
+///   both equal the pre-write count, so counts and rows come from the same instant
+///   (a per-statement read would disagree with one or the other);
+/// - the bundle restores into a fresh deployment with every foreign key live, so a
+///   `links` or `write_audit` row whose parent document was not in the snapshot
+///   would abort the restore instead of landing;
+/// - the seeded pages render and the uploaded image comes back byte-for-byte;
+/// - the notes committed after the snapshot are simply absent — the honest outcome
+///   for a backup taken before they existed.
+#[tokio::test]
+async fn backup_during_concurrent_writes_produces_a_consistent_restorable_snapshot() -> Result<()> {
+    let _guard = db_guard().await;
+    let Some(pool) = common::maybe_pool().await? else {
+        return Ok(());
+    };
+    let Some(scratch) = common::ScratchDb::create_migrated("concurrent").await? else {
+        return Ok(());
+    };
+
+    let source_media = common::media_test_dir();
+    let restored_media = common::media_test_dir();
+    let fixture = seed_garden(pool.clone(), &source_media).await?;
+    let documents_at_snapshot = count_documents(&pool).await?;
+
+    // Park the dump mid-flight. `preview_tokens` is last in `backup::TABLES`, so
+    // by the time the dump wants it, its snapshot is long since open.
+    let mut blocker = pool.begin().await?;
+    sqlx::query("LOCK TABLE preview_tokens IN ACCESS EXCLUSIVE MODE")
+        .execute(&mut *blocker)
+        .await?;
+
+    // The writer runs as a task while the dump runs on this one: it waits for the
+    // dump to park on the lock, commits its writes, then releases the dump. (The
+    // dump is the side that cannot be spawned — its gzip writer is not `Send`.)
+    let writer = tokio::spawn({
+        let pool = pool.clone();
+        let media_dir = source_media.clone();
+        async move {
+            wait_until_blocked_on(&pool, "preview_tokens").await?;
+
+            // Writes that commit strictly after the dump's snapshot opened.
+            // Deliberately wikilink-free so they cannot perturb the seeded notes'
+            // backlinks. Each iteration touches `documents`, `write_audit`, and
+            // `note_chunks`.
+            let router = common::router_for_with_ai_and_media_dir(pool.clone(), &media_dir);
+            for n in 1..=3 {
+                let title = format!("Concurrent Note {n}");
+                let (status, _) = post_json(
+                    &router,
+                    "/documents",
+                    serde_json::json!({
+                        "title": title,
+                        "bodyMarkdown": format!("# {title}\n\nCommitted while the backup ran.\n"),
+                        "tags": ["concurrent"],
+                    }),
+                )
+                .await?;
+                anyhow::ensure!(
+                    status == StatusCode::CREATED,
+                    "concurrent create {n} returned {status}"
+                );
+                let (status, _) = post_json(
+                    &router,
+                    &format!("/documents/concurrent-note-{n}/publish"),
+                    serde_json::Value::Null,
+                )
+                .await?;
+                anyhow::ensure!(
+                    status == StatusCode::OK,
+                    "concurrent publish {n} returned {status}"
+                );
+            }
+            let live = count_documents(&pool).await?;
+
+            // Release the dump only once the writes are durable.
+            blocker.rollback().await?;
+            Ok::<i64, anyhow::Error>(live)
+        }
+    });
+
+    let path = bundle_path("concurrent");
+    let summary = backup::create::run(
+        &pool,
+        &LocalFsStore::new(source_media.clone()),
+        Some(path.clone()),
+    )
+    .await?;
+
+    let live_documents = writer.await??;
+    assert_eq!(
+        live_documents,
+        documents_at_snapshot + 3,
+        "the concurrent writes must really have committed while the dump was open"
+    );
+
+    assert_eq!(
+        summary.manifest.rows_for("documents"),
+        documents_at_snapshot,
+        "the manifest count must come from the dump's snapshot, not from later writes"
+    );
+    assert_eq!(
+        bundle_row_counts(&path)?
+            .get("documents")
+            .copied()
+            .unwrap_or_default(),
+        documents_at_snapshot,
+        "the streamed rows must come from the same snapshot as the manifest count"
+    );
+    let manifest_total: i64 = summary.manifest.tables.iter().map(|table| table.rows).sum();
+    assert_eq!(
+        summary.rows_written, manifest_total,
+        "a torn read would leave the bundle's row count disagreeing with its manifest"
+    );
+    assert_eq!(
+        summary.blobs_written, 1,
+        "the uploaded image's bytes must still be in the bundle"
+    );
+
+    // The strongest validity check: restore into a fresh deployment with every
+    // foreign key enforced. A snapshot torn across tables cannot survive it.
+    let restored_pool = create_pool(&scratch.url)?;
+    let restore = backup::restore::run(
+        &restored_pool,
+        &LocalFsStore::new(restored_media.clone()),
+        Some(path.clone()),
+        backup::restore::RestoreOptions { overwrite: false },
+    )
+    .await?;
+    assert_eq!(restore.rows_restored, summary.rows_written);
+    assert_eq!(restore.blobs_restored, 1);
+    assert_eq!(
+        table_counts(&restored_pool).await?,
+        summary
+            .manifest
+            .tables
+            .iter()
+            .map(|table| (table.name.clone(), table.rows))
+            .collect::<Vec<_>>(),
+        "the restored deployment must hold exactly the snapshot the manifest describes"
+    );
+
+    let restored_router =
+        common::router_for_with_ai_and_media_dir(restored_pool.clone(), &restored_media);
+    for slug in ["/ferns-and-fronds", "/moss"] {
+        let (status, _, body) = get(&restored_router, slug).await?;
+        assert!(status.is_success(), "restored {slug} should render");
+        assert!(
+            String::from_utf8_lossy(&body).contains("</html>"),
+            "restored {slug} should be a complete page"
+        );
+    }
+    let (status, _, _) = get(&restored_router, "/concurrent-note-1").await?;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "a note committed after the snapshot must not appear in the restore"
+    );
+
+    let (status, content_type, bytes) = get(&restored_router, &fixture.media_url).await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(content_type.as_deref(), Some("image/png"));
+    assert_eq!(
+        bytes,
+        tiny_png(),
+        "the image must survive a dump taken under concurrent writes byte-for-byte"
+    );
+
+    restored_pool.close().await;
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_dir_all(&source_media);
+    let _ = std::fs::remove_dir_all(&restored_media);
+    scratch.cleanup().await?;
+    Ok(())
+}
+
+/// Every table in the schema must be either backed up or explicitly excluded.
+///
+/// Without this, a future migration that adds a table would silently be left out
+/// of every bundle and no test would fail — the exact "the obvious backup is the
+/// wrong backup" trap this tooling exists to avoid. Adding a table means adding it
+/// to [`backup::TABLES`] in foreign-key order, or listing it here with a reason.
+#[tokio::test]
+async fn every_table_in_the_schema_is_backed_up_or_deliberately_excluded() -> Result<()> {
+    let _guard = db_guard().await;
+    let Some(pool) = common::maybe_pool().await? else {
+        return Ok(());
+    };
+
+    // Intentionally outside the bundle. See `backup::TABLES` for the reasoning:
+    // migration state belongs to the target deployment, and `media_blobs` is one
+    // storage backend's private bytes, dumped through `MediaStore` instead so a
+    // bundle restores onto either backend.
+    const DELIBERATELY_EXCLUDED: [&str; 2] = ["_sqlx_migrations", "media_blobs"];
+
+    let live: Vec<String> = sqlx::query_scalar(
+        "SELECT table_name
+           FROM information_schema.tables
+          WHERE table_schema = 'public'
+            AND table_type = 'BASE TABLE'
+          ORDER BY 1",
+    )
+    .fetch_all(&pool)
+    .await?;
+    assert!(
+        !live.is_empty(),
+        "the test database is migrated, so it must have tables"
+    );
+
+    let mut expected: Vec<String> = live
+        .into_iter()
+        .filter(|table| !DELIBERATELY_EXCLUDED.contains(&table.as_str()))
+        .collect();
+    let mut backed_up: Vec<String> = backup::TABLES
+        .iter()
+        .map(|table| (*table).to_string())
+        .collect();
+    expected.sort();
+    backed_up.sort();
+
+    assert_eq!(
+        backed_up, expected,
+        "backup::TABLES has drifted from the schema. A table present on the right \
+         but missing on the left would be absent from every backup; one present on \
+         the left but missing on the right no longer exists. Add new tables to \
+         backup::TABLES in foreign-key order, or to DELIBERATELY_EXCLUDED with a \
+         reason."
+    );
+    Ok(())
+}
+
+async fn count_documents(pool: &PgPool) -> Result<i64> {
+    Ok(sqlx::query_scalar("SELECT count(*) FROM documents")
+        .fetch_one(pool)
+        .await?)
+}
+
+/// Block until some session is waiting on a lock for `table`, i.e. the dump has
+/// reached it and its snapshot is provably already open.
+async fn wait_until_blocked_on(pool: &PgPool, table: &str) -> Result<()> {
+    for _ in 0..500 {
+        let waiting: bool = sqlx::query_scalar(
+            "SELECT EXISTS (
+                 SELECT 1
+                   FROM pg_locks lock_row
+                   JOIN pg_class class_row ON class_row.oid = lock_row.relation
+                  WHERE class_row.relname = $1
+                    AND NOT lock_row.granted
+             )",
+        )
+        .bind(table)
+        .fetch_one(pool)
+        .await?;
+        if waiting {
+            return Ok(());
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    anyhow::bail!("timed out waiting for the backup to block on `{table}`")
+}
+
+/// Row records per table actually present in a bundle, read back from the file
+/// rather than trusted from the backup summary.
+fn bundle_row_counts(path: &Path) -> Result<std::collections::BTreeMap<String, i64>> {
+    use std::io::{BufRead, BufReader};
+
+    let mut counts = std::collections::BTreeMap::new();
+    let reader = BufReader::new(flate2::read::GzDecoder::new(std::fs::File::open(path)?));
+    for line in reader.lines() {
+        if let backup::Record::Row { table, .. } = serde_json::from_str(&line?)? {
+            *counts.entry(table).or_insert(0) += 1;
+        }
+    }
+    Ok(counts)
 }
 
 /// Rewrite only the `schemaVersion` field of a bundle's manifest line, leaving
