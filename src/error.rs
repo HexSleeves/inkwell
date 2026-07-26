@@ -23,6 +23,14 @@ pub enum AppError {
     MethodNotAllowed(Vec<&'static str>),
     #[error("Rate limit exceeded.")]
     TooManyRequests { retry_after_secs: u64 },
+    /// A dependency the request needs is temporarily unusable — currently only
+    /// a failed credential lookup against Postgres (ADR 0015). Distinct from
+    /// [`Self::Database`]/[`Self::Internal`] (`500`) because the caller should
+    /// retry rather than treat the request as malformed, and distinct from
+    /// [`Self::Unauthorized`] because the credential was never actually judged.
+    /// Mirrors the `503` that `GET /readyz` returns for an unreachable DB.
+    #[error("Service temporarily unavailable.")]
+    ServiceUnavailable,
     #[error(transparent)]
     Database(#[from] sqlx::Error),
     #[error(transparent)]
@@ -88,6 +96,12 @@ impl IntoResponse for AppError {
                 }
                 response
             }
+            Self::ServiceUnavailable => json_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Service temporarily unavailable. Retry shortly.",
+                None,
+                None,
+            ),
             Self::Db(DbError::DuplicateSlug { slug }) => json_error(
                 StatusCode::CONFLICT,
                 &format!("A document with slug \"{slug}\" already exists."),

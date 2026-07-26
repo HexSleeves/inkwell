@@ -6,7 +6,7 @@ use crate::db::documents;
 use crate::db::links::{self, Visibility};
 use crate::domain::document::{DocumentStatus, StatusFilter};
 use crate::http::AppState;
-use crate::http::auth::authenticate;
+use crate::http::auth::authenticate_optional;
 use crate::http::security_headers::CspNonce;
 use crate::views::layout::SiteMeta;
 use crate::views::settings::{AccountPanel, GardenStats, render_settings_page};
@@ -63,7 +63,7 @@ pub async fn settings(
     let account = if !state.config.browser_login {
         AccountPanel::Disabled
     } else {
-        match authenticate(&headers, &state.config, &state.pool).await {
+        match authenticate_optional(&headers, &state.config, &state.pool).await {
             Some(principal) => {
                 let mut scopes: Vec<String> = principal
                     .scopes

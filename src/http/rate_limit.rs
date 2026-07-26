@@ -7,8 +7,10 @@
 //! garden stays fast for visitors.
 //!
 //! Requests are bucketed by the **validated principal** when one resolves and
-//! by **client IP** otherwise. Keying goes through the same [`authenticate`]
-//! the handlers use, so the credential is *verified* before it can mint a
+//! by **client IP** otherwise. Keying goes through the same credential resolution
+//! the handlers use (via [`authenticate_optional`], so a rejected key picks the IP
+//! bucket instead of making the limiter emit `401`/`503` — the handler behind it
+//! still rejects). The credential is therefore *verified* before it can mint a
 //! bucket — an attacker cannot evade the per-IP limit (or grow the limiter map)
 //! by spraying random `x-api-key` / `inkwell_session` values, because an invalid
 //! credential resolves to no principal and falls back to the IP bucket:
@@ -39,7 +41,7 @@ use sqlx::PgPool;
 
 use crate::config::Config;
 use crate::error::AppError;
-use crate::http::auth::authenticate;
+use crate::http::auth::authenticate_optional;
 
 /// The keyed GCRA limiter plus its clock. Split out from [`RateLimitState`] so
 /// the limiter algorithm is unit-testable without a `Config`/`PgPool`.
@@ -82,7 +84,7 @@ impl Limiter {
 }
 
 /// Shared rate-limit state for the whole process: the limiter plus the handles
-/// [`authenticate`] needs to *validate* a credential before it keys a bucket.
+/// [`authenticate_optional`] needs to *validate* a credential before it keys a bucket.
 pub struct RateLimitState {
     limiter: Limiter,
     config: Arc<Config>,
@@ -108,15 +110,17 @@ impl RateLimitState {
     }
 
     /// Resolve the bucket key: `p:<author-id>` for a validated principal, else
-    /// `ip:<client-ip>`. Validation reuses [`authenticate`] so an invalid or
-    /// forged credential never produces its own bucket.
+    /// `ip:<client-ip>`. Validation reuses [`authenticate_optional`] so an invalid
+    /// or forged credential never produces its own bucket — and, deliberately,
+    /// never turns the limiter itself into a source of `401`/`503`. The handler
+    /// behind it still rejects the bad credential; the limiter only picks a bucket.
     ///
     /// Takes `&HeaderMap` + the peer address rather than `&Request`: the request
     /// body (`axum::body::Body`) is `!Sync`, so holding `&Request` across the
     /// auth `.await` would make the middleware future non-`Send`. `HeaderMap` is
     /// `Sync`, so a borrow of it is fine across the await.
     async fn resolve_key(&self, headers: &HeaderMap, peer: Option<SocketAddr>) -> String {
-        if let Some(principal) = authenticate(headers, &self.config, &self.pool).await {
+        if let Some(principal) = authenticate_optional(headers, &self.config, &self.pool).await {
             let id = principal
                 .author_id
                 .map(|id| id.to_string())

@@ -26,6 +26,38 @@ Full prose notes per release live in `docs/RELEASE-NOTES-<version>.md`.
 - `inkwell_webhook_attempts_total` and `inkwell_webhook_deliveries_total` on
   `/metrics`. Guide: [`docs/WEBHOOKS.md`](docs/WEBHOOKS.md).
 
+### Changed
+
+#### A rejected `X-Api-Key` now returns `401` on read routes (CYP-55, ADR 0015)
+
+**Wire-contract change — `X-Api-Key` channel only.** Through `v0.2.0`, a
+credential that was presented and rejected on a public read route was silently
+served as anonymous: `200 OK` with published content only. That silent downgrade
+is gone on the header channel.
+
+- A **rejected `X-Api-Key`** on a read route (`GET /documents`,
+  `GET /documents/:slug`, `/search?format=json`, `/graph`, `/ask`, backlinks,
+  related, history) now returns **`401 Unauthorized`**. "Rejected" covers a
+  revoked token, an unknown prefix, a hash mismatch, a value that is neither the
+  shared key nor token-shaped, and a duplicated or non-ASCII `X-Api-Key` header.
+- A **rejected `inkwell_session` cookie** still returns `200` with published
+  content — **unchanged**. Browsers attach that cookie automatically to every
+  public page load, so a stale session must never break the public site for a
+  reader who cannot see or clear it.
+- A **token lookup that fails against Postgres** now returns
+  **`503 Service Unavailable`** instead of being indistinguishable from "unknown
+  token". Matches what `GET /readyz` reports for an unreachable database.
+- A valid credential that lacks the `read` scope is **unchanged**: `200`,
+  published content only. That is authorization, not a rejected credential.
+- Anonymous public pages are unchanged: no `X-Api-Key`, no cookie, no difference.
+
+**Migration.** If your client sends a possibly-stale `X-Api-Key` to a read route,
+treat `401` as **"re-authenticate"**, not **"empty result"**. Before this change
+a revoked token surfaced as drafts quietly missing from `GET /documents`; now it
+surfaces as `401` at the point of failure. Clients that collapse all non-`2xx`
+reads into one error path should split `401` (fix the credential) from `503`
+(retry). No action is needed for anonymous readers or browser-session users.
+
 ## [0.2.0] — 2026-07-25
 
 The v0.2 slice: **scoped author tokens**, a **browser authoring UI**, **media

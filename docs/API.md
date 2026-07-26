@@ -68,32 +68,35 @@ invalid credential on a write endpoint returns `401`.
 
 A credential can be **absent** or **presented and rejected** (revoked, unknown
 prefix, wrong secret, malformed header, expired session). These are different
-situations, and read endpoints treat them differently from write endpoints. This
-is a deliberate rule, not an accident of the implementation — see
+situations, and **the credential channel decides how a rejection is reported.**
+This is a deliberate rule, not an accident of the implementation — see
 [ADR 0015](adr/0015-invalid-credential-on-read-routes.md).
 
-| Route class | No credential | Credential presented and rejected |
-|-------------|---------------|-----------------------------------|
-| Write / admin (`POST`, `PATCH`, `PUT`, `DELETE`, `/admin/*`, `/auth/login`) | `401` | `401` |
-| Public read (`GET /documents`, `GET /:slug`, feeds, `/search`, `/graph`, `/ask`) | `200`, published content only | **`200`, published content only** — the request is served as anonymous |
+| Route class | No credential | Rejected `X-Api-Key` | Rejected `inkwell_session` cookie |
+|-------------|---------------|----------------------|-----------------------------------|
+| Write / admin (`POST`, `PATCH`, `PUT`, `DELETE`, `/admin/*`, `/auth/login`) | `401` | `401` | `401` |
+| Public read (`GET /documents`, `GET /:slug`, feeds, `/search`, `/graph`, `/ask`) | `200`, published content only | **`401`** | `200`, published content only — served as anonymous |
 
-**As shipped in `v0.2.0`, a rejected credential on a public read route returns
-`200` with public content, on both the `X-Api-Key` and cookie channels.** If your
-drafts are unexpectedly missing from `GET /documents`, verify your token against
-a write route (`401` there means the token is bad) rather than assuming the
-documents are gone.
+`X-Api-Key` is only ever set on purpose, by the `inkwell author` CLI, the MCP
+server, or a script. A rejection there is a real client misconfiguration, so it
+is reported: **a stale or wrong `X-Api-Key` on a read route returns `401`, not an
+empty result.** Treat `401` as "re-authenticate", never as "the documents are
+gone".
 
-Note that a credential which authenticates but lacks the `read` scope — a
-write-only token, say — is *not* a rejected credential. It is a successful
-authentication with no read privilege, and it correctly sees published content
-only.
+`inkwell_session` is the opposite: any browser that once logged in attaches it to
+every request, including plain reads of public pages. A stale cookie must never
+break the public site for a reader who cannot even see it, so that channel
+downgrades to anonymous and keeps serving `200`. Anonymous page loads present
+neither credential and are unaffected either way.
 
-> **Planned change (post-`v0.2.0`, accepted in ADR 0015).** A rejected
-> `X-Api-Key` will return `401` on read routes too, because that header is only
-> ever set deliberately. A rejected `inkwell_session` **cookie** will keep
-> downgrading to anonymous, so a stale browser cookie can never break public
-> pages. See [COMPATIBILITY.md](COMPATIBILITY.md#authentication) for the
-> migration note.
+Two cases that are deliberately *not* rejections:
+
+- **A credential that authenticates but lacks the `read` scope** — a write-only
+  token, say — is a successful authentication with no read privilege. It stays
+  `200` and sees published content only.
+- **A database error while looking up a token** returns `503 Service
+  Unavailable`, matching `GET /readyz`. The credential was never judged, so
+  reporting `401` would be wrong and reporting `200` would hide an outage.
 
 ### Scopes
 

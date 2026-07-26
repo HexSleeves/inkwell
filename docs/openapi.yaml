@@ -437,6 +437,38 @@ components:
               message: "Missing or invalid API key."
               requestId: "a3b5c7d9-1234-4abc-8def-0123456789ab"
 
+    RejectedReadCredential:
+      description: >
+        An `X-Api-Key` was presented and rejected (revoked token, unknown prefix,
+        hash mismatch, a value that is neither the shared key nor token-shaped, or
+        a duplicated/non-ASCII header). Treat this as "re-authenticate", not
+        "empty result" — see ADR 0015. A rejected `inkwell_session` cookie is NOT
+        reported here: that channel downgrades to anonymous and returns `200` with
+        published content, so a stale browser cookie never breaks public pages. A
+        valid credential lacking the `read` scope also stays `200`, published only.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error:
+              message: "Missing or invalid API key."
+              requestId: "a3b5c7d9-1234-4abc-8def-0123456789ab"
+
+    ServiceUnavailable:
+      description: >
+        The credential could not be judged because the token lookup failed against
+        Postgres (ADR 0015). Distinct from `401` — the credential was never
+        actually rejected — and from `500`. Retry; check `GET /readyz`.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error:
+              message: "Service temporarily unavailable. Retry shortly."
+              requestId: "a3b5c7d9-1234-4abc-8def-0123456789ab"
+
     Forbidden:
       description: Valid credential, but insufficient scope.
       content:
@@ -600,6 +632,10 @@ paths:
             enum: [draft, published, all]
           description: Filter by status. ANDs with visibility — anonymous callers cannot see drafts.
       responses:
+        "401":
+          $ref: "#/components/responses/RejectedReadCredential"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
         "200":
           description: Paginated document list.
           content:
@@ -680,6 +716,10 @@ paths:
       operationId: getDocument
       tags: [Documents]
       responses:
+        "401":
+          $ref: "#/components/responses/RejectedReadCredential"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
         "200":
           description: Document found.
           headers:
@@ -893,6 +933,10 @@ paths:
           schema:
             type: string
       responses:
+        "401":
+          $ref: "#/components/responses/RejectedReadCredential"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
         "200":
           description: Internal backlinks and verified inbound Webmentions.
           content:
@@ -921,6 +965,10 @@ paths:
           schema:
             type: string
       responses:
+        "401":
+          $ref: "#/components/responses/RejectedReadCredential"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
         "200":
           description: Nodes and directed edges within one hop of this note.
           content:
@@ -942,6 +990,10 @@ paths:
           schema:
             type: string
       responses:
+        "401":
+          $ref: "#/components/responses/RejectedReadCredential"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
         "200":
           description: Top 5 related notes by embedding cosine distance.
           content:
@@ -963,6 +1015,10 @@ paths:
       operationId: gardenGraph
       tags: [Documents]
       responses:
+        "401":
+          $ref: "#/components/responses/RejectedReadCredential"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
         "200":
           description: All nodes and directed edges in the bounded garden graph.
           content:
@@ -984,6 +1040,10 @@ paths:
             maxLength: 1000
           example: "What is a digital garden?"
       responses:
+        "401":
+          $ref: "#/components/responses/RejectedReadCredential"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
         "200":
           description: Grounded answer with citations.
           content:
@@ -1017,6 +1077,10 @@ paths:
             example:
               q: "What is a digital garden?"
       responses:
+        "401":
+          $ref: "#/components/responses/RejectedReadCredential"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
         "200":
           description: Grounded answer with citations.
           content:
@@ -1055,6 +1119,10 @@ paths:
             type: integer
             default: 1
       responses:
+        "401":
+          $ref: "#/components/responses/RejectedReadCredential"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
         "200":
           description: Search results (JSON when `?format=json`).
           content:
@@ -1165,7 +1233,7 @@ paths:
               schema:
                 type: string
               description: Strong validator — the SHA-256 of the content.
-              example: "\"2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824\
+              example: "\"2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824\""
           content:
             image/png:
               schema:

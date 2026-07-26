@@ -19,7 +19,9 @@ use crate::domain::tags::normalize_tags;
 use crate::error::AppError;
 use crate::garden;
 use crate::http::AppState;
-use crate::http::auth::{authenticate, require_principal, require_scope, resolve_visibility};
+use crate::http::auth::{
+    AuthOutcome, authenticate, require_principal, require_scope, resolve_visibility,
+};
 use crate::http::extractors::{parse_json_body, parse_non_negative_int, require_object};
 
 /// The canonical 404 for a document addressed by slug. Centralizes the message
@@ -162,8 +164,15 @@ pub async fn document_history(
         return Err(AppError::MethodNotAllowed(vec!["GET"]));
     }
 
-    let Some(principal) = authenticate(&headers, &state.config, &state.pool).await else {
-        return Err(document_not_found(&slug));
+    // An anonymous caller gets 404 (no existence leak), but a rejected
+    // `x-api-key` is reported as `401` on the read channel like every other read
+    // route, and a failed credential lookup as `503` (ADR 0015). Neither leaks
+    // whether the slug exists: both are returned before any document lookup.
+    let principal = match authenticate(&headers, &state.config, &state.pool).await {
+        AuthOutcome::Authenticated(principal) => principal,
+        AuthOutcome::Anonymous => return Err(document_not_found(&slug)),
+        AuthOutcome::Rejected => return Err(AppError::Unauthorized),
+        AuthOutcome::Unavailable => return Err(AppError::ServiceUnavailable),
     };
     let owner = if principal.has(Scope::Admin) {
         None
@@ -280,7 +289,7 @@ async fn list_documents(
     headers: HeaderMap,
     query: ListQuery,
 ) -> Result<Response, AppError> {
-    let visibility = resolve_visibility(&headers, &state).await;
+    let visibility = resolve_visibility(&headers, &state).await?;
     let extra_status = resolve_list_extra_status(visibility, query.status.as_deref())?;
     let mut limit =
         parse_non_negative_int(query.limit.as_deref(), "limit")?.unwrap_or(DEFAULT_LIMIT);
@@ -310,7 +319,7 @@ async fn get_document(
     headers: HeaderMap,
     slug: String,
 ) -> Result<Response, AppError> {
-    let visibility = resolve_visibility(&headers, &state).await;
+    let visibility = resolve_visibility(&headers, &state).await?;
     let Some(document) =
         documents::get_document_by_slug_vis(&state.pool, &slug, visibility).await?
     else {

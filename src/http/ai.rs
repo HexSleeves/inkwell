@@ -74,7 +74,7 @@ pub async fn document_related(
     if method != Method::GET {
         return Err(AppError::MethodNotAllowed(vec!["GET"]));
     }
-    let visibility = resolve_visibility(&headers, &state).await;
+    let visibility = resolve_visibility(&headers, &state).await?;
     let Some(document) =
         crate::db::documents::get_document_by_slug_vis(&state.pool, &slug, visibility).await?
     else {
@@ -173,7 +173,7 @@ pub async fn ask(
         return Ok((StatusCode::OK, Json(response)).into_response());
     };
 
-    let visibility = resolve_visibility(&headers, &state).await;
+    let visibility = resolve_visibility(&headers, &state).await?;
 
     // Vector retrieval over the question embedding; fall back to FTS when the
     // garden has no embeddings yet (e.g. a fresh import that hasn't been

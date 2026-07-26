@@ -132,7 +132,7 @@ pub async fn document_backlinks(
     if method != Method::GET {
         return Err(AppError::MethodNotAllowed(vec!["GET"]));
     }
-    let visibility = resolve_visibility(&headers, &state).await;
+    let visibility = resolve_visibility(&headers, &state).await?;
     let Some(document) =
         documents::get_document_by_slug_vis(&state.pool, &slug, visibility).await?
     else {
@@ -169,7 +169,7 @@ pub async fn graph(
     if method != Method::GET {
         return Err(AppError::MethodNotAllowed(vec!["GET"]));
     }
-    let visibility = resolve_visibility(&headers, &state).await;
+    let visibility = resolve_visibility(&headers, &state).await?;
     let graph = links::garden_graph(&state.pool, visibility).await?;
 
     let mut response = if wants_html(&headers) {
@@ -262,7 +262,7 @@ pub async fn document_graph(
     if method != Method::GET {
         return Err(AppError::MethodNotAllowed(vec!["GET"]));
     }
-    let visibility = resolve_visibility(&headers, &state).await;
+    let visibility = resolve_visibility(&headers, &state).await?;
     if documents::get_document_by_slug_vis(&state.pool, &slug, visibility)
         .await?
         .is_none()

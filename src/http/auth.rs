@@ -23,30 +23,43 @@
 //! only when the presented key both fails the static compare and looks like a
 //! token — so anonymous and shared-key requests never pay a token lookup.
 //!
-//! # Rejected credentials are indistinguishable from absent ones (ADR 0015)
+//! # The credential channel decides how a rejection is reported (ADR 0015)
 //!
-//! [`authenticate`] returns `None` for two different situations: no credential
-//! was presented, and a credential was presented and **rejected** (revoked,
-//! unknown prefix, hash mismatch, duplicated/non-ASCII header, expired session).
-//! On a mutating or admin route [`require_principal`] maps both to `401`. On a
-//! public read route [`resolve_visibility`] maps both to [`Visibility::Public`],
-//! so a caller presenting a revoked token gets `200` with published content
-//! rather than `401`.
+//! [`authenticate`] returns an [`AuthOutcome`], not an `Option<Principal>`,
+//! because "no credential was presented" and "a credential was presented and
+//! **rejected**" are materially different and get different status codes on read
+//! routes:
 //!
-//! This is the shipped `v0.2.0` rule and it is deliberate, not incidental: it
-//! leaks no privilege (revocation removes every scope), and fail-open-to-public
-//! keeps public pages reachable whatever a browser attaches. ADR 0015 accepts a
-//! refinement for the release after `v0.2.0`: a rejected **`x-api-key`** will
-//! return `401` here too, because nothing sets that header by accident, while a
-//! rejected **session cookie** keeps downgrading to anonymous, because browsers
-//! send it automatically to every public page load. Implementing that needs an
-//! explicit outcome type on this function — `Option<Principal>` cannot express
-//! "rejected" — so do not narrow the two cases into one when refactoring.
+//! | Outcome | Cause | Read route | Write/admin route |
+//! |---|---|---|---|
+//! | [`AuthOutcome::Authenticated`] | credential accepted | `200` at the principal's visibility | scope-checked |
+//! | [`AuthOutcome::Anonymous`] | no credential, **or** an expired/unknown `inkwell_session` cookie | `200`, published only | `401` |
+//! | [`AuthOutcome::Rejected`] | `x-api-key` presented and rejected | **`401`** | `401` |
+//! | [`AuthOutcome::Unavailable`] | token lookup hit a database error | **`503`** | `503` |
+//!
+//! The split is on the **channel**, not the route. `x-api-key` is only ever set
+//! deliberately — by the `inkwell author` CLI, the MCP server, or a script — so a
+//! rejection there is a real client misconfiguration and staying silent about it
+//! makes it invisible in logs. `inkwell_session` is sent automatically by any
+//! browser that once logged in, including on plain reads of public pages, so a
+//! stale cookie must never break the public site for a reader who cannot see it;
+//! that path folds into [`AuthOutcome::Anonymous`] and keeps failing open.
+//! Anonymous page loads never present either credential and are unaffected.
+//!
+//! "Rejected `x-api-key`" covers a revoked token, an unknown prefix, a hash
+//! mismatch, a value that is neither the static key nor token-shaped, and a
+//! duplicated or non-ASCII `x-api-key` header. It does **not** cover a database
+//! error during the lookup: that is [`AuthOutcome::Unavailable`] (`503`), because
+//! the credential was never actually judged.
 //!
 //! Note that a credential which authenticates but lacks [`Scope::Read`] is *not*
 //! a rejected credential; it is a successful authentication with no read
-//! privilege, and [`resolve_visibility`] correctly returns
-//! [`Visibility::Public`] for it under both the current and the accepted rule.
+//! privilege, and [`resolve_visibility`] returns [`Visibility::Public`] for it.
+//!
+//! Two callers deliberately keep the old fail-open shape via
+//! [`authenticate_optional`], which folds `Rejected`/`Unavailable` back into
+//! `None`: the write rate limiter (a rejected key must fall back to an IP bucket,
+//! not `503` the limiter) and the `/settings` HTML panel (an ambient page render).
 //!
 //! Slice 2 resolves and audits principals but does not yet enforce scope or
 //! ownership on document routes (slice 3). The admin token-management surface is
@@ -69,31 +82,75 @@ use crate::error::AppError;
 use crate::http::AppState;
 use crate::http::auth_session::extract_session_cookie;
 
-/// Resolve the [`Principal`] behind a request, or `None` for an unauthenticated
-/// (public) caller. See the module docs for the resolution order.
-pub async fn authenticate(
+/// The four distinguishable results of resolving a request's credentials.
+///
+/// `Option<Principal>` cannot express "presented and rejected" separately from
+/// "absent", which is exactly the distinction ADR 0015 turns into different
+/// status codes on read routes. See the module docs for the mapping table.
+#[derive(Debug)]
+pub(crate) enum AuthOutcome {
+    /// A credential was accepted; this is who the caller is.
+    Authenticated(Principal),
+    /// No credential was presented — or a session cookie was presented and is
+    /// expired/unknown, which the cookie channel deliberately folds in here so
+    /// public pages keep loading. Read routes serve published content.
+    Anonymous,
+    /// An `x-api-key` was presented and rejected. Read routes return `401`.
+    Rejected,
+    /// The credential could not be judged because the token lookup failed
+    /// against Postgres. Every route returns `503`; never `401`, never `200`.
+    Unavailable,
+}
+
+impl AuthOutcome {
+    /// Fold back to the pre-ADR-0015 fail-open shape: any non-authenticated
+    /// outcome becomes `None`. Only for callers that must not surface a
+    /// credential failure as a status code — see [`authenticate_optional`].
+    fn into_option(self) -> Option<Principal> {
+        match self {
+            Self::Authenticated(principal) => Some(principal),
+            Self::Anonymous | Self::Rejected | Self::Unavailable => None,
+        }
+    }
+}
+
+/// Resolve the credentials behind a request. See the module docs for the
+/// resolution order and for how each [`AuthOutcome`] maps to a status code.
+pub(crate) async fn authenticate(
     headers: &HeaderMap,
     config: &Config,
     pool: &PgPool,
-) -> Option<Principal> {
+) -> AuthOutcome {
     // 1 & 2: x-api-key path takes FULL precedence. If the header is present at
     // all — even duplicated or non-ASCII — authenticate via it and NEVER fall
-    // through to a session cookie. `provided_key` returns None for a
-    // malformed/duplicated header; the `?` below then rejects (returns None)
-    // rather than leaking authentication to the cookie path.
+    // through to a session cookie. A malformed/duplicated header is a rejection,
+    // not an invitation to try the cookie path.
     if headers.contains_key("x-api-key") {
-        let provided = provided_key(headers)?;
+        let Some(provided) = provided_key(headers) else {
+            return AuthOutcome::Rejected;
+        };
         // 1. Static key (no DB).
         if let Some(principal) = match_static_key(provided, config) {
-            return Some(principal);
+            return AuthOutcome::Authenticated(principal);
         }
 
         // 2. Scoped token. Only reached for a well-formed `ink_…` value, so
         //    public and shared-key requests never hit the database.
-        let prefix = token::parse_prefix(provided)?;
-        let resolved = tokens::find_token_by_prefix(pool, prefix).await.ok()??;
+        let Some(prefix) = token::parse_prefix(provided) else {
+            return AuthOutcome::Rejected;
+        };
+        // A lookup FAILURE is not a rejection: the credential was never judged,
+        // so it must surface as 503 rather than collapsing into "unknown token".
+        let resolved = match tokens::find_token_by_prefix(pool, prefix).await {
+            Ok(Some(resolved)) => resolved,
+            Ok(None) => return AuthOutcome::Rejected,
+            Err(error) => {
+                tracing::error!(prefix = prefix, %error, "token lookup failed; credential unjudged");
+                return AuthOutcome::Unavailable;
+            }
+        };
         if resolved.revoked {
-            return None;
+            return AuthOutcome::Rejected;
         }
         // Constant-time compare of the (fixed 64-char) hex digests.
         let provided_hash = token::sha256_hex(provided);
@@ -102,7 +159,7 @@ pub async fn authenticate(
                 .as_bytes()
                 .ct_eq(resolved.token_hash.as_bytes()),
         ) {
-            return None;
+            return AuthOutcome::Rejected;
         }
         // Best-effort usage stamp: a stale `last_used_at` never affects auth.
         if let Err(error) = tokens::touch_last_used(pool, prefix).await {
@@ -113,7 +170,7 @@ pub async fn authenticate(
             .iter()
             .filter_map(|s| Scope::parse(s))
             .collect();
-        return Some(Principal {
+        return AuthOutcome::Authenticated(Principal {
             author_id: Some(resolved.author_id),
             label: resolved.author_name,
             scopes,
@@ -121,27 +178,47 @@ pub async fn authenticate(
     }
 
     // 3. Browser session cookie (only when INKWELL_BROWSER_LOGIN is on, and only
-    //    when no x-api-key header was presented — the key path takes full precedence).
+    //    when no x-api-key header was presented — the key path takes full
+    //    precedence). An expired or unknown cookie is Anonymous, NOT Rejected:
+    //    browsers attach it to every public page load (ADR 0015).
     if config.browser_login
         && let Some(principal) = resolve_session_cookie(headers, pool).await
     {
-        return Some(principal);
+        return AuthOutcome::Authenticated(principal);
     }
 
-    None
+    AuthOutcome::Anonymous
 }
 
-/// Require an authenticated principal, mapping the anonymous case to `401`. Used
-/// by every mutating endpoint and by the admin surface (which then also checks
-/// for [`Scope::Admin`]).
-pub async fn require_principal(
+/// [`authenticate`] with the pre-ADR-0015 fail-open shape: every non-authenticated
+/// outcome is `None`.
+///
+/// Two callers want this and nothing else should. The write rate limiter uses it
+/// so a rejected key falls back to an IP bucket instead of turning the limiter
+/// into a `503` source, and the `/settings` account panel uses it because it is an
+/// ambient HTML render, not an API read.
+pub(crate) async fn authenticate_optional(
+    headers: &HeaderMap,
+    config: &Config,
+    pool: &PgPool,
+) -> Option<Principal> {
+    authenticate(headers, config, pool).await.into_option()
+}
+
+/// Require an authenticated principal. [`AuthOutcome::Anonymous`] and
+/// [`AuthOutcome::Rejected`] both map to `401` — unchanged from before ADR 0015 —
+/// and [`AuthOutcome::Unavailable`] maps to `503`. Used by every mutating endpoint
+/// and by the admin surface (which then also checks for [`Scope::Admin`]).
+pub(crate) async fn require_principal(
     headers: &HeaderMap,
     config: &Config,
     pool: &PgPool,
 ) -> Result<Principal, AppError> {
-    authenticate(headers, config, pool)
-        .await
-        .ok_or(AppError::Unauthorized)
+    match authenticate(headers, config, pool).await {
+        AuthOutcome::Authenticated(principal) => Ok(principal),
+        AuthOutcome::Anonymous | AuthOutcome::Rejected => Err(AppError::Unauthorized),
+        AuthOutcome::Unavailable => Err(AppError::ServiceUnavailable),
+    }
 }
 
 /// Resolve the request's credentials to the correct [`Visibility`] for read
@@ -153,24 +230,31 @@ pub async fn require_principal(
 /// This is the SINGLE place read-visibility is derived for every API surface
 /// that exposes note content; callers must NOT re-derive this rule.
 ///
-/// A **rejected** credential lands in the first branch and resolves to
-/// [`Visibility::Public`] — the request succeeds as anonymous instead of
-/// returning `401`. See the module docs and ADR 0015; that is the shipped rule,
-/// and the accepted change (401 for a rejected `x-api-key`, unchanged for a
-/// rejected cookie) makes this function fallible.
-pub(crate) async fn resolve_visibility(headers: &HeaderMap, state: &AppState) -> Visibility {
-    let Some(principal) = authenticate(headers, &state.config, &state.pool).await else {
-        return Visibility::Public;
+/// It is fallible because a **rejected** `x-api-key` is reported rather than
+/// downgraded (ADR 0015): [`AuthOutcome::Rejected`] becomes
+/// [`AppError::Unauthorized`] and [`AuthOutcome::Unavailable`] becomes
+/// [`AppError::ServiceUnavailable`]. An expired or unknown session cookie is
+/// [`AuthOutcome::Anonymous`], so it still resolves to [`Visibility::Public`] and
+/// public pages keep loading for a browser holding a stale cookie.
+pub(crate) async fn resolve_visibility(
+    headers: &HeaderMap,
+    state: &AppState,
+) -> Result<Visibility, AppError> {
+    let principal = match authenticate(headers, &state.config, &state.pool).await {
+        AuthOutcome::Authenticated(principal) => principal,
+        AuthOutcome::Anonymous => return Ok(Visibility::Public),
+        AuthOutcome::Rejected => return Err(AppError::Unauthorized),
+        AuthOutcome::Unavailable => return Err(AppError::ServiceUnavailable),
     };
     if principal.has(Scope::Admin) {
-        return Visibility::All;
+        return Ok(Visibility::All);
     }
     if principal.has(Scope::Read)
         && let Some(author_id) = principal.author_id
     {
-        return Visibility::Owner(author_id);
+        return Ok(Visibility::Owner(author_id));
     }
-    Visibility::Public
+    Ok(Visibility::Public)
 }
 
 /// Require the principal to hold `scope` (admin implies all). 403 otherwise.

@@ -1,8 +1,9 @@
 # ADR 0015 — Rejected credentials on public read routes
 
-**Status:** Accepted (rule stated; header-path change scheduled post-`v0.2.0`)
+**Status:** Accepted — **implemented** in CYP-55 (first release after `v0.2.0`)
 **Date:** 2026-07-25
 **Context ticket:** CYP-52 (observation from the CYP-50 pre-release QA sweep)
+**Implementation ticket:** CYP-55
 **Supersedes nothing. Refines:** [ADR 0009](0009-scoped-author-tokens.md), [ADR 0010](0010-browser-login.md)
 
 ## Context
@@ -81,17 +82,28 @@ this ADR keeps it exactly there.
   wrong `X-Api-Key` to a read route moves from `200` to `401`. This is a
   behavior change requiring a `CHANGELOG.md` migration note and a
   `docs/COMPATIBILITY.md` entry.
-- **Deliberately excluded from `v0.2.0`.** The rule is documented now; the code
-  change lands after the `v0.2.0` tag is cut so the release stays behavior-stable.
-  Until then, `docs/API.md` and the `http::auth` module docs describe current
-  behavior as the shipped rule and this ADR as the accepted target.
-- **`authenticate` gains a third state.** `Option<Principal>` cannot express
-  "rejected", so the header path needs an explicit outcome type
+- **Deliberately excluded from `v0.2.0`.** The rule was documented before the tag;
+  the code landed in CYP-55 immediately after it, so `v0.2.0` itself stayed
+  behavior-stable.
+- **`authenticate` gained a third and fourth state.** `Option<Principal>` cannot
+  express "rejected", so it now returns `AuthOutcome`
   (`Authenticated` / `Anonymous` / `Rejected` / `Unavailable`), and
-  `resolve_visibility` becomes fallible (`Result<Visibility, AppError>`) across
-  its ~12 call sites in `documents`, `search`, `graph`, `ai`, and `preview`.
-  `require_principal` keeps its current behavior: both `Anonymous` and
-  `Rejected` are `401`.
+  `resolve_visibility` is fallible (`Result<Visibility, AppError>`) across its
+  call sites in `documents`, `search`, `graph`, `ai`, and `preview`.
+  `require_principal` keeps its previous behavior: both `Anonymous` and
+  `Rejected` are `401`; `Unavailable` is the new `AppError::ServiceUnavailable`
+  (`503`).
+- **Two callers deliberately keep the fail-open shape** via
+  `authenticate_optional`: the write rate limiter (a rejected key must fall back
+  to an IP bucket rather than make the limiter a source of `401`/`503`; the
+  handler behind it still rejects) and the `/settings` account panel (an ambient
+  HTML render). `pages.rs` never resolved credentials at all — the public HTML
+  routes are hardcoded to `Visibility::Public` — so anonymous page loads are
+  byte-for-byte unchanged.
+- **`GET /documents/:slug/history`** is admin-or-owner-only and answers `404` for
+  an anonymous caller (no existence leak). It follows the same channel rule: a
+  rejected `X-Api-Key` there is `401` and a failed lookup is `503`, both returned
+  before any document lookup, so neither reveals whether the slug exists.
 - **No new privilege surface.** Every case that authenticates today still
   authenticates, with identical scopes. The change only makes an existing
   rejection louder on one channel.

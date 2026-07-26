@@ -58,8 +58,15 @@ pub async fn search(
     // `cache::html_response`, which emits `Cache-Control: public` with an ETag
     // over route+body — so it MUST stay public-only, or a shared cache could
     // serve one author's draft results to another caller on the same URL.
+    //
+    // Because the HTML branch never resolves credentials, a rejected `x-api-key`
+    // can only surface as `401`/`503` on `?format=json` (ADR 0015). The public
+    // search page is unaffected whatever the caller attaches.
     let visibility = if wants_json {
-        resolve_visibility(&headers, &state).await
+        match resolve_visibility(&headers, &state).await {
+            Ok(visibility) => visibility,
+            Err(error) => return error.into_response(),
+        }
     } else {
         Visibility::Public
     };

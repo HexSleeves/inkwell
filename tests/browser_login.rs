@@ -13,6 +13,8 @@
 //! - Login with an invalid token → 401.
 //! - Login with a revoked token → 401.
 //! - The raw session token is never present in any response body.
+//! - An expired/unknown session cookie still reads as anonymous — `200` with
+//!   published content, never `401` (ADR 0015: the cookie channel fails open).
 //!
 //! Skipped unless `DATABASE_URL` is set (or forced via `INKWELL_REQUIRE_DB_TESTS=1`).
 
@@ -663,4 +665,165 @@ async fn flag_on_session_token_not_in_body() -> anyhow::Result<()> {
     );
 
     Ok(())
+}
+
+/// **The cookie half of ADR 0015 / CYP-55.**
+///
+/// A rejected `x-api-key` is now `401` on read routes, but the session cookie is
+/// the *ambient* channel: a browser attaches it to every public page load,
+/// including for a reader who cannot see or clear it. An expired or unknown
+/// `inkwell_session` must therefore still resolve to anonymous — `200` with
+/// published content — on both the JSON read route and the HTML page route.
+#[tokio::test]
+async fn flag_on_stale_session_cookie_still_reads_as_anonymous() -> anyhow::Result<()> {
+    let _guard = db_guard().await;
+    let Some(pool) = common::maybe_pool().await? else {
+        return Ok(());
+    };
+    let router = browser_login_router(pool.clone());
+
+    let (token, _) = mint_token(
+        &router,
+        "stale-cookie-author",
+        &["read", "write", "publish"],
+    )
+    .await?;
+
+    // One published document (visible to anonymous) and one draft (never visible).
+    let published = create_document(&router, "Stale Cookie Published", &token).await?;
+    let draft = create_document(&router, "Stale Cookie Draft", &token).await?;
+    let publish_response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri(format!("/documents/{published}/publish"))
+                .header("x-api-key", &token)
+                .body(Body::empty())?,
+        )
+        .await?;
+    assert_eq!(
+        publish_response.status(),
+        StatusCode::OK,
+        "publish must succeed"
+    );
+
+    // Session 1: real, then forced past its expiry directly in the DB — the only
+    // way to exercise the expiry branch without waiting out the TTL.
+    let expired_session = parse_session_token(
+        &get_set_cookie(&do_login(&router, &token).await?).expect("Set-Cookie"),
+    )
+    .expect("session token");
+    let expired_hash = sha256_hex(&expired_session);
+    let updated = sqlx::query(
+        "UPDATE sessions SET expires_at = now() - interval '1 hour' WHERE session_token_hash = $1",
+    )
+    .bind(&expired_hash)
+    .execute(&pool)
+    .await?;
+    assert_eq!(
+        updated.rows_affected(),
+        1,
+        "expiry backdate must hit the session row"
+    );
+
+    for (label, cookie) in [
+        ("expired", format!("inkwell_session={expired_session}")),
+        ("unknown", format!("inkwell_session={}", "f".repeat(64))),
+        ("garbage", "inkwell_session=not-a-token".to_string()),
+    ] {
+        // JSON read route: 200, published only, no 401.
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri("/documents")
+                    .header("cookie", &cookie)
+                    .body(Body::empty())?,
+            )
+            .await?;
+        assert_eq!(
+            response.status(),
+            StatusCode::OK,
+            "{label} session cookie must read as anonymous on GET /documents (ADR 0015)"
+        );
+        let body = body_json(response).await?;
+        let slugs: Vec<&str> = body["documents"]
+            .as_array()
+            .expect("documents array")
+            .iter()
+            .filter_map(|d| d["slug"].as_str())
+            .collect();
+        assert!(
+            slugs.contains(&published.as_str()),
+            "{label} session cookie still sees published content: {slugs:?}"
+        );
+        assert!(
+            !slugs.contains(&draft.as_str()),
+            "{label} session cookie must NOT see drafts: {slugs:?}"
+        );
+
+        // HTML page route: the public site must not break for a stale cookie.
+        let page = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri(format!("/{published}"))
+                    .header("cookie", &cookie)
+                    .body(Body::empty())?,
+            )
+            .await?;
+        assert_eq!(
+            page.status(),
+            StatusCode::OK,
+            "{label} session cookie must still render GET /{{slug}}"
+        );
+    }
+
+    Ok(())
+}
+
+/// Create a draft document via the JSON API; returns its slug.
+async fn create_document(
+    router: &axum::Router,
+    title: &str,
+    token: &str,
+) -> anyhow::Result<String> {
+    let payload = serde_json::json!({ "title": title, "bodyMarkdown": "# body\n\nsome text" });
+    let response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/documents")
+                .header("content-type", "application/json")
+                .header("x-api-key", token)
+                .body(Body::from(serde_json::to_vec(&payload)?))?,
+        )
+        .await?;
+    assert_eq!(
+        response.status(),
+        StatusCode::CREATED,
+        "create must succeed"
+    );
+    Ok(body_json(response)
+        .await?
+        .get("slug")
+        .and_then(|s| s.as_str())
+        .expect("slug in response")
+        .to_string())
+}
+
+/// Hex SHA-256, matching how `auth::resolve_session_cookie` keys the lookup.
+fn sha256_hex(value: &str) -> String {
+    use sha2::{Digest, Sha256};
+    use std::fmt::Write as _;
+    let digest = Sha256::digest(value.as_bytes());
+    let mut out = String::with_capacity(64);
+    for byte in digest {
+        let _ = write!(out, "{byte:02x}");
+    }
+    out
 }

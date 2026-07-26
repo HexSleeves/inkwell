@@ -112,29 +112,36 @@ credential that lacks the required scope returns `403 Forbidden`.
 
 Scope names are stable: `read`, `write`, `publish`, `admin`.
 
-#### Rejected credentials on read routes — stable through `v0.2.0`, changing after
+#### Rejected credentials on read routes — the credential channel decides
 
 A credential that is *presented and rejected* (revoked, unknown prefix, wrong
-secret, malformed header, expired session cookie) on a **public read** route is
-served as anonymous — `200 OK` with published content only, no `401`. This holds
-on both the `X-Api-Key` and `inkwell_session` channels through `v0.2.0`.
-
-**Planned change, first release after `v0.2.0`** — accepted in
+secret, malformed header, expired session cookie) is reported on the channel a
+client only ever populates deliberately, and absorbed on the channel a browser
+populates automatically. This is the shipped contract, per
 [ADR 0015](adr/0015-invalid-credential-on-read-routes.md):
 
-| Channel | Today (`v0.2.0`) | After |
+| Case | Through `v0.2.0` | Shipped now |
 |---|---|---|
 | Rejected `X-Api-Key` on a read route | `200`, published only | **`401 Unauthorized`** |
 | Rejected `inkwell_session` cookie on a read route | `200`, published only | `200`, published only (unchanged) |
 | Valid credential without `read` scope | `200`, published only | `200`, published only (unchanged) |
-| Token lookup fails on a database error | `200`, published only | `503 Service Unavailable` |
+| Token lookup fails on a **database error** | `200`, published only | **`503 Service Unavailable`** |
+| Any rejected credential on a write/admin route | `401` | `401` (unchanged) |
+
+"Rejected `X-Api-Key`" covers a revoked token, an unknown prefix, a hash
+mismatch, a value that is neither the shared key nor token-shaped, and a
+duplicated or non-ASCII `X-Api-Key` header.
 
 The split is deliberate: `X-Api-Key` is only ever set on purpose, so rejecting it
 silently hides client misconfiguration; the session cookie is sent automatically
-by any browser that once logged in, so it must never break public pages. This
-change will carry a `CHANGELOG.md` migration note. Clients that send a
-possibly-stale `X-Api-Key` to read routes should be prepared to treat `401` as
-"re-authenticate", not "empty result".
+by any browser that once logged in, so it must never break public pages.
+Anonymous public page loads present neither credential and were unaffected by the
+change.
+
+**Migration.** A client that may send a stale `X-Api-Key` to a read route must
+treat `401` as "re-authenticate", not "empty result". A client that treats any
+non-`2xx` read as a hard failure should distinguish `401` (fix the credential)
+from `503` (retry). See the `CHANGELOG.md` entry for the release that shipped it.
 
 ### Slug Rename and Redirect
 

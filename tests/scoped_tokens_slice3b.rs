@@ -12,8 +12,10 @@
 //!  - `GET /ask?q=...` → never cites the other author's draft.
 //!  - Anonymous → sees only published (no drafts).
 //!  - Admin (shared key) → sees both drafts.
-//!  - A *rejected* credential (revoked/unknown) → served as anonymous with `200`
-//!    on read routes, `401` on writes (ADR 0015).
+//!  - A *rejected* `x-api-key` (revoked/unknown/not token-shaped) → `401` on read
+//!    routes as well as writes (ADR 0015, CYP-55).
+//!  - A valid token with no `read` scope → `200`, published only (authorization,
+//!    not rejection).
 //!
 //! Skipped unless `DATABASE_URL` is set (or forced via `INKWELL_REQUIRE_DB_TESTS=1`).
 
@@ -655,20 +657,18 @@ async fn revoke(router: &axum::Router, token: &str) -> anyhow::Result<StatusCode
     Ok(response.status())
 }
 
-/// **Characterization test for the ADR 0015 rule as shipped in `v0.2.0`.**
+/// **Contract test for the ADR 0015 rule (CYP-55, shipped after `v0.2.0`).**
 ///
-/// A credential that is *presented and rejected* — here a freshly revoked token,
-/// and an entirely unknown token — is `401` on a write route but is served as
-/// **anonymous** on a public read route: `200` with published content only, and
-/// no draft visibility.
+/// An `x-api-key` that is *presented and rejected* — a freshly revoked token, an
+/// unknown prefix, or a value that is not even token-shaped — is `401` on read
+/// routes as well as write routes. Up to and including `v0.2.0` the read routes
+/// answered `200` with published-only content; that silent downgrade is gone on
+/// this channel because nothing sets `x-api-key` by accident.
 ///
-/// This pins documented behavior (`docs/API.md`, `docs/COMPATIBILITY.md`) so the
-/// silent downgrade cannot drift unnoticed. ADR 0015 accepts changing the
-/// `x-api-key` channel to `401` after the `v0.2.0` tag; when that lands, the
-/// `StatusCode::OK` assertions below become `StatusCode::UNAUTHORIZED` as a
-/// deliberate edit, not a surprise.
+/// The cookie channel keeps failing open — see
+/// `flag_on_stale_session_cookie_still_reads_as_anonymous` in `tests/browser_login.rs`.
 #[tokio::test]
-async fn rejected_credential_reads_as_anonymous_not_401() -> anyhow::Result<()> {
+async fn rejected_api_key_is_401_on_read_routes() -> anyhow::Result<()> {
     let _guard = db_guard().await;
     let Some(pool) = common::maybe_pool().await? else {
         return Ok(());
@@ -706,8 +706,8 @@ async fn rejected_credential_reads_as_anonymous_not_401() -> anyhow::Result<()> 
         "a revoked token must not authenticate a write"
     );
 
-    // A revoked and an unknown token are both treated the same on read routes:
-    // the request succeeds as anonymous rather than returning 401.
+    // Every flavour of rejected x-api-key is 401 on read routes, not a silent
+    // downgrade to anonymous (ADR 0015 / CYP-55).
     for (label, key) in [
         ("revoked", token.as_str()),
         (
@@ -716,12 +716,29 @@ async fn rejected_credential_reads_as_anonymous_not_401() -> anyhow::Result<()> 
         ),
         ("not-token-shaped", "definitely-not-a-credential"),
     ] {
-        let (status, body) = get_json(&router, "/documents", Some(key)).await?;
-        assert_eq!(
-            status,
-            StatusCode::OK,
-            "{label} credential must be served as anonymous on GET /documents (ADR 0015)"
-        );
+        for route in [
+            "/documents",
+            "/graph",
+            "/search?format=json&q=body",
+            "/documents/{slug}",
+            "/documents/{slug}/backlinks",
+            "/documents/{slug}/graph",
+            "/documents/{slug}/related",
+            "/documents/{slug}/history",
+        ] {
+            let uri = route.replace("{slug}", &pub_slug);
+            let (status, _) = get_json(&router, &uri, Some(key)).await?;
+            assert_eq!(
+                status,
+                StatusCode::UNAUTHORIZED,
+                "{label} credential must be 401 on read route {uri} (ADR 0015)"
+            );
+        }
+
+        // The anonymous read of the same routes is untouched: no credential
+        // presented, published content served.
+        let (status, body) = get_json(&router, "/documents", None).await?;
+        assert_eq!(status, StatusCode::OK, "anonymous read is unaffected");
         let slugs: Vec<&str> = body["documents"]
             .as_array()
             .expect("documents array")
@@ -730,21 +747,69 @@ async fn rejected_credential_reads_as_anonymous_not_401() -> anyhow::Result<()> 
             .collect();
         assert!(
             slugs.contains(&pub_slug.as_str()),
-            "{label} credential still sees published content: {slugs:?}"
+            "anonymous read still sees published content: {slugs:?}"
         );
         assert!(
             !slugs.contains(&draft_slug.as_str()),
-            "{label} credential must NOT see drafts — revocation removes every privilege: {slugs:?}"
-        );
-
-        // No existence leak on the single-document route either.
-        let (status, _) = get_json(&router, &format!("/documents/{draft_slug}"), Some(key)).await?;
-        assert_eq!(
-            status,
-            StatusCode::NOT_FOUND,
-            "{label} credential must not reveal the draft"
+            "anonymous read must NOT see drafts: {slugs:?}"
         );
     }
+
+    Ok(())
+}
+
+/// A token that authenticates but holds no `read` scope is **not** a rejected
+/// credential (ADR 0015). It stays `200` with published-only content, so the
+/// authorization case is never swept into the new rejection case.
+#[tokio::test]
+async fn write_only_token_reads_published_only_not_401() -> anyhow::Result<()> {
+    let _guard = db_guard().await;
+    let Some(pool) = common::maybe_pool().await? else {
+        return Ok(());
+    };
+    let router = common::router_for(pool.clone());
+
+    // A separate read+write author owns the content, so the write-only token has
+    // no ownership claim on it either way.
+    let owner = mint_token(&router, "Scope Owner", &["read", "write", "publish"]).await?;
+    let draft_slug = create_draft(&router, "Scope Draft", "unpublished body", &owner).await?;
+    let pub_slug = create_draft(&router, "Scope Published", "public body", &owner).await?;
+    assert_eq!(publish(&router, &pub_slug, &owner).await?, StatusCode::OK);
+
+    let write_only = mint_token(&router, "Writer Only", &["write"]).await?;
+
+    let (status, body) = get_json(&router, "/documents", Some(&write_only)).await?;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "a valid write-only token authenticates; it is not a rejected credential"
+    );
+    let slugs: Vec<&str> = body["documents"]
+        .as_array()
+        .expect("documents array")
+        .iter()
+        .filter_map(|d| d["slug"].as_str())
+        .collect();
+    assert!(
+        slugs.contains(&pub_slug.as_str()),
+        "write-only token sees published content: {slugs:?}"
+    );
+    assert!(
+        !slugs.contains(&draft_slug.as_str()),
+        "write-only token must not see drafts: {slugs:?}"
+    );
+
+    let (status, _) = get_json(
+        &router,
+        &format!("/documents/{pub_slug}"),
+        Some(&write_only),
+    )
+    .await?;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "write-only token reads a published document"
+    );
 
     Ok(())
 }

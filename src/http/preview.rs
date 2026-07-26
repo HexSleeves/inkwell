@@ -128,7 +128,7 @@ pub async fn revoke_preview_token(
 
     // Resolve the document with the caller's owner-filter. A non-owner gets
     // None → 404, with no confirmation that the document or token exists.
-    let visibility = resolve_visibility(&headers, &state).await;
+    let visibility = resolve_visibility(&headers, &state).await?;
     let Some(document) =
         documents::get_document_by_slug_vis(&state.pool, &slug, visibility).await?
     else {
@@ -232,7 +232,7 @@ async fn list_preview_tokens(
     let principal = require_principal(headers, &state.config, &state.pool).await?;
     require_scope(&principal, Scope::Write)?;
 
-    let visibility = resolve_visibility(headers, state).await;
+    let visibility = resolve_visibility(headers, state).await?;
     let Some(document) = documents::get_document_by_slug_vis(&state.pool, slug, visibility).await?
     else {
         return Err(AppError::NotFound(format!(
@@ -264,7 +264,7 @@ async fn create_preview_token(
 
     // Resolve the document through the caller's visibility (owner filter
     // enforced). A non-owner can't create tokens for someone else's draft.
-    let visibility = resolve_visibility(headers, state).await;
+    let visibility = resolve_visibility(headers, state).await?;
     let Some(document) = documents::get_document_by_slug_vis(&state.pool, slug, visibility).await?
     else {
         return Err(AppError::NotFound(format!(
