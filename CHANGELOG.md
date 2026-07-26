@@ -9,7 +9,22 @@ Full prose notes per release live in `docs/RELEASE-NOTES-<version>.md`.
 
 ## [Unreleased]
 
-_Nothing yet._
+### Added
+
+#### Outbound signed webhooks (CYP-53)
+
+- Publishing or unpublishing a document POSTs a versioned JSON payload to
+  operator-configured endpoints, signed with HMAC-SHA256 over the raw body
+  (`X-Inkwell-Signature`).
+- Off by default and fully inert when off: `INKWELL_WEBHOOKS_ENABLED`,
+  `INKWELL_WEBHOOK_URLS` (max 10), `INKWELL_WEBHOOK_SECRET` (min 16 chars).
+  Enabling without a secret or without a valid URL list fails startup rather
+  than delivering unsigned or nowhere.
+- Delivery is detached from the request: 3 attempts per endpoint (250ms/750ms
+  backoff, 5s per-attempt timeout), retried only on transport errors, 5xx, and
+  429. Publishing never waits on or fails because of a receiver.
+- `inkwell_webhook_attempts_total` and `inkwell_webhook_deliveries_total` on
+  `/metrics`. Guide: [`docs/WEBHOOKS.md`](docs/WEBHOOKS.md).
 
 ## [0.2.0] — 2026-07-25
 
