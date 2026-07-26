@@ -32,10 +32,10 @@ services:
       PORT: "3000"
       HOST: 0.0.0.0
       INKWELL_API_KEY: "${INKWELL_API_KEY:?Set INKWELL_API_KEY in your shell or .env before running docker compose.}"
-      # Optional MCP credential for the AI walkthrough (docs/QUICKSTART.md). Left
-      # empty by default — the demo browses fine without it; set it (in your
-      # shell or .env) to a non-empty value to enable the `inkwell mcp` server.
-      INKWELL_MCP_KEY: ${INKWELL_MCP_KEY:-}
+      # `inkwell mcp` authenticates with a scoped token passed as INKWELL_API_KEY
+      # — the separate INKWELL_MCP_KEY was retired in v0.2, so forwarding it here
+      # would only mislead operators. Mint a token with
+      # `inkwell author token create` (docs/QUICKSTART.md).
       INKWELL_SITE_URL: ${INKWELL_SITE_URL:-http://localhost:3000}
       # Optional AI providers. Left empty by default so the demo runs with the
       # deterministic mock embedder and the "AI not configured" /ask response.

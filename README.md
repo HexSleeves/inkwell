@@ -75,6 +75,18 @@ Copy `.env.example` to `.env` before local development. `.env` is gitignored.
 | `INKWELL_MEDIA_DIR` | `./data/media` | Root directory for the `local` media backend. **Must be persistent** — compose mounts the `inkwell-media` volume at `/app/data/media`. |
 | `INKWELL_MEDIA_MAX_BYTES` | `5242880` | Maximum upload size in bytes (5 MiB). Ceiling 256 MiB. |
 
+### Optional — observability
+
+| Variable | Default | Notes |
+|----------|---------|-------|
+| `INKWELL_LOG` | _(none)_ | `EnvFilter` directives for the request/app logs; checked before `RUST_LOG`. |
+| `INKWELL_LOG_FORMAT` | `json` | `pretty` for the human-readable local-dev formatter. |
+| `INKWELL_METRICS_ENABLED` | `false` | Exactly `true` (case-insensitive) registers `GET /metrics`. Off means the route does not exist. |
+| `INKWELL_METRICS_TOKEN` | _(none)_ | When set, `/metrics` requires `Authorization: Bearer <token>`. Set it whenever metrics are reachable. |
+
+See [`docs/OBSERVABILITY.md`](docs/OBSERVABILITY.md) for log fields, the metric
+catalogue, Prometheus scrape config, and alerting starters.
+
 ### Optional — AI / semantic layer
 
 | Variable | Notes |
