@@ -41,7 +41,9 @@ production without reading source code. For the one-command local demo, see
 | `INKWELL_WRITE_RATE_LIMIT` | `60` | Write rate limit in requests per minute. Applied per validated principal (credential is verified before it keys a bucket, so forged keys cannot mint quota), or per client IP when anonymous. Covers all mutation routes plus `/ask`. `0` disables limiting. |
 | `INKWELL_TRUST_FORWARDED_HEADERS` | `false` | When `true`, the rate limiter keys anonymous callers by `X-Forwarded-For` / `X-Real-IP`. Those headers are client-spoofable — set this to `true` **only** when Inkwell sits behind a proxy that unconditionally overwrites them (e.g. Railway, nginx `proxy_set_header X-Real-IP`). When `false`, IP keying uses the real peer address. |
 | `INKWELL_WEBMENTION_SEND` | `false` | Set to `true` to send outbound Webmentions when a published note links to an external page. Receiving Webmentions (`POST /webmention`) is always on regardless of this setting. |
-| `INKWELL_BROWSER_LOGIN` | `false` | Set to `true` to enable browser session login (`/auth/login`, `/auth/logout`). Off by default; when off the routes return 404 and no cookie is ever consulted. See ADR 0010. |
+| `INKWELL_BROWSER_LOGIN` | `false` | Set to `true` to enable browser session login (`/auth/login`, `/auth/logout`) **and the authoring web UI** (`/editor`, `/editor/new`, `/editor/{slug}`, `/media/new`). Off by default; when off none of those routes are registered and no cookie is ever consulted. See ADR 0010. |
+| `INKWELL_METRICS_ENABLED` | `false` | Set to `true` to register `GET /metrics` (Prometheus text format). Off by default, so a stock install exposes no scrape surface. See [`docs/OBSERVABILITY.md`](OBSERVABILITY.md) and ADR 0012. |
+| `INKWELL_METRICS_TOKEN` | _(none)_ | Bearer token required to scrape `/metrics` once enabled (compared in constant time). Leave unset only when the port is genuinely private — startup logs a warning. Generate with `openssl rand -hex 32`. |
 | `INKWELL_LLM_MODEL` | `claude-sonnet-4-6` | Claude model used for `/ask` synthesis. Change only if you need to pin a specific model version. |
 | `INKWELL_SITE_TITLE` | `Inkwell` | Brand name shown in the site header, `<title>`, Open Graph `og:site_name`, and the Atom feed title. |
 | `INKWELL_SITE_DESCRIPTION` | _(none)_ | Site-level description used on the index page `<meta name="description">` and as the Atom feed subtitle. |
@@ -163,6 +165,19 @@ The Compose file (`docker-compose.yml`) starts two services:
   `inkwell db migrate && inkwell seed /app/examples/garden && inkwell serve`.
   Seed is idempotent: it only plants the bundled sample notes when the garden is
   empty, so restarts never duplicate content.
+
+The `app` service forwards a fixed set of variables from your shell or `.env`.
+A variable that is not listed in its `environment:` block never reaches the
+binary, so setting it in `.env` has no effect — add it to `docker-compose.yml`
+first. The optional feature flags are wired through with their off-by-default
+values, so a stock stack behaves identically while still being configurable:
+
+```bash
+# .env — enable the authoring UI and a token-gated /metrics on Compose
+INKWELL_BROWSER_LOGIN=true
+INKWELL_METRICS_ENABLED=true
+INKWELL_METRICS_TOKEN=<openssl rand -hex 32>
+```
 
 To stop and wipe the database volume:
 

@@ -50,6 +50,17 @@ services:
       INKWELL_MEDIA_BACKEND: ${INKWELL_MEDIA_BACKEND:-local}
       INKWELL_MEDIA_DIR: /app/data/media
       INKWELL_MEDIA_MAX_BYTES: ${INKWELL_MEDIA_MAX_BYTES:-5242880}
+      # Browser session login + the authoring web UI (/editor, /media/new). Off by
+      # default, matching the binary's own default (ADR 0010) — but forwarded so a
+      # Compose operator can enable it from .env. Without this line the routes are
+      # never registered and setting the variable in .env has no effect at all.
+      INKWELL_BROWSER_LOGIN: ${INKWELL_BROWSER_LOGIN:-false}
+      # Prometheus scrape surface (ADR 0012). Off by default so a stock stack
+      # exposes no operational data; forwarded for the same reason as the flag
+      # above. Set INKWELL_METRICS_TOKEN too — an enabled /metrics with no token
+      # is unauthenticated.
+      INKWELL_METRICS_ENABLED: ${INKWELL_METRICS_ENABLED:-false}
+      INKWELL_METRICS_TOKEN: ${INKWELL_METRICS_TOKEN:-}
     volumes:
       - inkwell-media:/app/data/media
     depends_on:
