@@ -64,6 +64,37 @@ Three credential families are accepted:
 If `X-Api-Key` is present, the cookie path is never consulted. A missing or
 invalid credential on a write endpoint returns `401`.
 
+### Rejected credentials on read endpoints
+
+A credential can be **absent** or **presented and rejected** (revoked, unknown
+prefix, wrong secret, malformed header, expired session). These are different
+situations, and read endpoints treat them differently from write endpoints. This
+is a deliberate rule, not an accident of the implementation — see
+[ADR 0015](adr/0015-invalid-credential-on-read-routes.md).
+
+| Route class | No credential | Credential presented and rejected |
+|-------------|---------------|-----------------------------------|
+| Write / admin (`POST`, `PATCH`, `PUT`, `DELETE`, `/admin/*`, `/auth/login`) | `401` | `401` |
+| Public read (`GET /documents`, `GET /:slug`, feeds, `/search`, `/graph`, `/ask`) | `200`, published content only | **`200`, published content only** — the request is served as anonymous |
+
+**As shipped in `v0.2.0`, a rejected credential on a public read route returns
+`200` with public content, on both the `X-Api-Key` and cookie channels.** If your
+drafts are unexpectedly missing from `GET /documents`, verify your token against
+a write route (`401` there means the token is bad) rather than assuming the
+documents are gone.
+
+Note that a credential which authenticates but lacks the `read` scope — a
+write-only token, say — is *not* a rejected credential. It is a successful
+authentication with no read privilege, and it correctly sees published content
+only.
+
+> **Planned change (post-`v0.2.0`, accepted in ADR 0015).** A rejected
+> `X-Api-Key` will return `401` on read routes too, because that header is only
+> ever set deliberately. A rejected `inkwell_session` **cookie** will keep
+> downgrading to anonymous, so a stale browser cookie can never break public
+> pages. See [COMPATIBILITY.md](COMPATIBILITY.md#authentication) for the
+> migration note.
+
 ### Scopes
 
 | Scope | Grants |

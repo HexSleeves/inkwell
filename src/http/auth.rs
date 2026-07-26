@@ -23,6 +23,31 @@
 //! only when the presented key both fails the static compare and looks like a
 //! token — so anonymous and shared-key requests never pay a token lookup.
 //!
+//! # Rejected credentials are indistinguishable from absent ones (ADR 0015)
+//!
+//! [`authenticate`] returns `None` for two different situations: no credential
+//! was presented, and a credential was presented and **rejected** (revoked,
+//! unknown prefix, hash mismatch, duplicated/non-ASCII header, expired session).
+//! On a mutating or admin route [`require_principal`] maps both to `401`. On a
+//! public read route [`resolve_visibility`] maps both to [`Visibility::Public`],
+//! so a caller presenting a revoked token gets `200` with published content
+//! rather than `401`.
+//!
+//! This is the shipped `v0.2.0` rule and it is deliberate, not incidental: it
+//! leaks no privilege (revocation removes every scope), and fail-open-to-public
+//! keeps public pages reachable whatever a browser attaches. ADR 0015 accepts a
+//! refinement for the release after `v0.2.0`: a rejected **`x-api-key`** will
+//! return `401` here too, because nothing sets that header by accident, while a
+//! rejected **session cookie** keeps downgrading to anonymous, because browsers
+//! send it automatically to every public page load. Implementing that needs an
+//! explicit outcome type on this function — `Option<Principal>` cannot express
+//! "rejected" — so do not narrow the two cases into one when refactoring.
+//!
+//! Note that a credential which authenticates but lacks [`Scope::Read`] is *not*
+//! a rejected credential; it is a successful authentication with no read
+//! privilege, and [`resolve_visibility`] correctly returns
+//! [`Visibility::Public`] for it under both the current and the accepted rule.
+//!
 //! Slice 2 resolves and audits principals but does not yet enforce scope or
 //! ownership on document routes (slice 3). The admin token-management surface is
 //! the exception: it is admin-gated from creation (see [`crate::http::admin`]).
@@ -127,6 +152,12 @@ pub async fn require_principal(
 ///
 /// This is the SINGLE place read-visibility is derived for every API surface
 /// that exposes note content; callers must NOT re-derive this rule.
+///
+/// A **rejected** credential lands in the first branch and resolves to
+/// [`Visibility::Public`] — the request succeeds as anonymous instead of
+/// returning `401`. See the module docs and ADR 0015; that is the shipped rule,
+/// and the accepted change (401 for a rejected `x-api-key`, unchanged for a
+/// rejected cookie) makes this function fallible.
 pub(crate) async fn resolve_visibility(headers: &HeaderMap, state: &AppState) -> Visibility {
     let Some(principal) = authenticate(headers, &state.config, &state.pool).await else {
         return Visibility::Public;

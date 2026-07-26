@@ -95,17 +95,46 @@ Every 4xx and 5xx response carries a JSON error body with this stable shape:
 
 ### Authentication
 
-Two credential forms are accepted interchangeably on every authenticated route:
+Both credential forms travel in the same header, `X-Api-Key`, and are accepted
+interchangeably on every authenticated route:
 
 | Form | Header |
 |------|--------|
-| Admin / shared key | `X-API-Key: <key>` |
-| Scoped author token | `Authorization: Bearer ink_<prefix>_<secret>` |
+| Admin / shared key | `X-Api-Key: <key>` |
+| Scoped author token | `X-Api-Key: ink_<prefix>_<secret>` |
+
+`Authorization: Bearer` is **not** an authentication channel for API routes; it
+carries only the optional `/metrics` scrape token. The header name `X-Api-Key`
+and the `ink_<prefix>_<secret>` token format are stable.
 
 A missing or invalid credential on a write returns `401 Unauthorized`. A valid
 credential that lacks the required scope returns `403 Forbidden`.
 
 Scope names are stable: `read`, `write`, `publish`, `admin`.
+
+#### Rejected credentials on read routes — stable through `v0.2.0`, changing after
+
+A credential that is *presented and rejected* (revoked, unknown prefix, wrong
+secret, malformed header, expired session cookie) on a **public read** route is
+served as anonymous — `200 OK` with published content only, no `401`. This holds
+on both the `X-Api-Key` and `inkwell_session` channels through `v0.2.0`.
+
+**Planned change, first release after `v0.2.0`** — accepted in
+[ADR 0015](adr/0015-invalid-credential-on-read-routes.md):
+
+| Channel | Today (`v0.2.0`) | After |
+|---|---|---|
+| Rejected `X-Api-Key` on a read route | `200`, published only | **`401 Unauthorized`** |
+| Rejected `inkwell_session` cookie on a read route | `200`, published only | `200`, published only (unchanged) |
+| Valid credential without `read` scope | `200`, published only | `200`, published only (unchanged) |
+| Token lookup fails on a database error | `200`, published only | `503 Service Unavailable` |
+
+The split is deliberate: `X-Api-Key` is only ever set on purpose, so rejecting it
+silently hides client misconfiguration; the session cookie is sent automatically
+by any browser that once logged in, so it must never break public pages. This
+change will carry a `CHANGELOG.md` migration note. Clients that send a
+possibly-stale `X-Api-Key` to read routes should be prepared to treat `401` as
+"re-authenticate", not "empty result".
 
 ### Slug Rename and Redirect
 

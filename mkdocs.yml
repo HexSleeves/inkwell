@@ -97,3 +97,4 @@ nav:
       - ADR 0012 — Observability: adr/0012-observability.md
       - ADR 0013 — Media Storage: adr/0013-media-storage.md
       - ADR 0014 — Backup & Restore: adr/0014-backup-restore.md
+      - ADR 0015 — Rejected Credentials on Read Routes: adr/0015-invalid-credential-on-read-routes.md
