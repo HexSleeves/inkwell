@@ -20,3 +20,4 @@ Inkwell's development, including the context, decision, and consequences.
 | [ADR 0013](0013-media-storage.md) | Media upload and hosting |
 | [ADR 0014](0014-backup-restore.md) | Tested backup and restore |
 | [ADR 0015](0015-invalid-credential-on-read-routes.md) | Rejected credentials on public read routes |
+| [ADR 0016](0016-multi-user-accounts.md) | Multi-user accounts and per-document ownership (**Proposed**) |
