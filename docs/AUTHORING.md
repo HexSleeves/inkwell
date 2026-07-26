@@ -139,12 +139,24 @@ Embed the URL in Markdown:
 ![Alt text](/media/550e8400-e29b-41d4-a716-446655440000)
 ```
 
-Supported formats: `image/png`, `image/jpeg`, `image/gif`, `image/webp`.
-Max file size: 5 MiB. Images are stored in PostgreSQL `bytea` (no external
-object store required).
+Supported formats: `image/png`, `image/jpeg`, `image/gif`, `image/webp` (SVG is
+excluded — it can carry script). The declared type is verified against the file's
+magic bytes, so a mislabelled file is rejected. Max file size:
+`INKWELL_MEDIA_MAX_BYTES` (5 MiB by default).
 
-The full browser file-picker UI is deferred (CIL-130); use this CLI command
-or `POST /media` directly in the meantime.
+Bytes go to the configured storage backend — local filesystem by default,
+Postgres optionally — see [ADR 0013](adr/0013-media-storage.md). Uploads are
+content-addressed, so uploading the same file twice returns the same URL instead
+of storing it twice.
+
+**From the browser:** the authoring UI (`/editor/new`, `/editor/{slug}`) has an
+image control above the body field. Pick a file, drag one onto the body textarea,
+or paste an image from the clipboard — it uploads and the `![alt](/media/…)`
+reference is inserted at the caret. Save the document to keep it.
+
+**Deleting:** `DELETE /media/{id}` with a `write`-scoped token removes your own
+uploads (`admin` can remove any). Media is never garbage-collected automatically,
+because a URL may still be referenced by a document body or an external copy.
 
 ---
 

@@ -5,12 +5,14 @@
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use inkwell::ai::{Embedder, Llm, MockEmbedder, MockLlm};
-use inkwell::config::Config;
+use inkwell::config::{Config, MediaBackend};
 use inkwell::db::migrations;
 use inkwell::db::pool::create_pool;
 use inkwell::http::router::{build_router, build_router_with_providers};
 use sqlx::PgPool;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use uuid::Uuid;
 
 /// Test-only embedder that returns an error if `embed()` is called. Use to
 /// prove that a route does NOT invoke the embedder (e.g. `/documents/{slug}/related`
@@ -60,7 +62,7 @@ pub async fn maybe_pool() -> Result<Option<PgPool>> {
     // `author_tokens` cascades from `authors` but is cleared explicitly so a test
     // that mints a token starts clean without disturbing the seeded author.
     sqlx::query(
-        "TRUNCATE TABLE documents, links, write_audit, author_tokens, media, sessions, slug_aliases RESTART IDENTITY CASCADE",
+        "TRUNCATE TABLE documents, links, write_audit, author_tokens, media, media_blobs, sessions, slug_aliases RESTART IDENTITY CASCADE",
     )
     .execute(&pool)
     .await?;
@@ -102,7 +104,47 @@ pub fn test_config(database_url: String) -> Arc<Config> {
         // observability contract test opts in via `router_for_with_metrics`.
         metrics_enabled: false,
         metrics_token: None,
+        // Media: the default local backend, rooted in a throwaway directory so
+        // uploads from one test can never be seen (or deleted) by another.
+        media_backend: MediaBackend::Local,
+        media_dir: media_test_dir().to_string_lossy().into_owned(),
+        media_max_bytes: inkwell::config::DEFAULT_MEDIA_MAX_BYTES,
     })
+}
+
+/// A unique, never-reused temp directory for a test's local media backend.
+/// Nothing creates it up front — the store makes shard directories on demand, so
+/// a test that uploads nothing leaves nothing behind.
+pub fn media_test_dir() -> PathBuf {
+    std::env::temp_dir().join(format!("inkwell-test-media-{}", Uuid::new_v4()))
+}
+
+/// Build a router whose local media backend is rooted at `media_dir`, so a test
+/// can assert what actually landed on disk.
+pub fn router_for_with_media_dir(pool: PgPool, media_dir: &Path) -> axum::Router {
+    let database_url = std::env::var("DATABASE_URL").unwrap_or_default();
+    let mut config = (*test_config(database_url)).clone();
+    config.media_backend = MediaBackend::Local;
+    config.media_dir = media_dir.to_string_lossy().into_owned();
+    build_router(Arc::new(config), pool)
+}
+
+/// Build a router with an explicit media backend, mirroring an operator setting
+/// `INKWELL_MEDIA_BACKEND`. Used to prove both backends satisfy the same
+/// upload/serve contract.
+pub fn router_for_with_media_backend(pool: PgPool, media_backend: MediaBackend) -> axum::Router {
+    let database_url = std::env::var("DATABASE_URL").unwrap_or_default();
+    let mut config = (*test_config(database_url)).clone();
+    config.media_backend = media_backend;
+    build_router(Arc::new(config), pool)
+}
+
+/// Build a router with a custom media size cap (`INKWELL_MEDIA_MAX_BYTES`).
+pub fn router_for_with_media_max_bytes(pool: PgPool, media_max_bytes: usize) -> axum::Router {
+    let database_url = std::env::var("DATABASE_URL").unwrap_or_default();
+    let mut config = (*test_config(database_url)).clone();
+    config.media_max_bytes = media_max_bytes;
+    build_router(Arc::new(config), pool)
 }
 
 pub async fn maybe_router() -> Result<Option<axum::Router>> {

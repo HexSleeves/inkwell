@@ -58,7 +58,12 @@ pub async fn editor_new_page(
         return redirect;
     }
     let site = SiteMeta::from_config(&state.config);
-    Html(render_editor_new(&site, Some(csp_nonce.as_str()))).into_response()
+    Html(render_editor_new(
+        &site,
+        Some(csp_nonce.as_str()),
+        state.config.media_max_bytes,
+    ))
+    .into_response()
 }
 
 /// `GET /editor/{slug}` — the edit page for one document.
@@ -76,5 +81,11 @@ pub async fn editor_edit_page(
         return redirect;
     }
     let site = SiteMeta::from_config(&state.config);
-    Html(render_editor_edit(&site, Some(csp_nonce.as_str()), &slug)).into_response()
+    Html(render_editor_edit(
+        &site,
+        Some(csp_nonce.as_str()),
+        &slug,
+        state.config.media_max_bytes,
+    ))
+    .into_response()
 }

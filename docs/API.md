@@ -782,14 +782,19 @@ Page size is fixed at the server default (currently 20 results per page).
 
 #### `POST /media`
 
-Upload a binary image. Requires the `write` scope. The file is stored
-server-side and served at a stable `/media/{id}` URL.
+Upload a binary image. Requires the `write` scope. Bytes are written to the
+configured storage backend (local filesystem by default, see
+[ADR 0013](adr/0013-media-storage.md)) under a content-addressed key, and served
+at a stable `/media/{id}` URL.
 
 **Request headers:**
 - `Content-Type`: one of `image/png`, `image/jpeg`, `image/gif`, `image/webp`
   (SVG excluded for security; parameters like `; charset=…` are stripped)
 
-**Request body:** raw image bytes (max 5 MiB).
+**Request body:** raw image bytes (max `INKWELL_MEDIA_MAX_BYTES`, default 5 MiB).
+
+The declared `Content-Type` is verified against the file's magic bytes; a
+mismatch (e.g. HTML declared as `image/png`) is rejected with `400`.
 
 **Response `201 Created`:**
 
@@ -800,14 +805,18 @@ server-side and served at a stable `/media/{id}` URL.
 }
 ```
 
+**Response `200 OK`:** identical body, returned when these exact bytes were
+already uploaded by the same author. Uploads are content-addressed, so
+re-uploading is idempotent and does not duplicate storage.
+
 **Errors:**
 
 | Status | Cause |
 |--------|-------|
-| `400` | Unsupported `Content-Type` |
+| `400` | Unsupported `Content-Type`, or bytes that do not match the declared type |
 | `401` | Missing or invalid `X-Api-Key` |
 | `403` | Token lacks `write` scope |
-| `413` | Body exceeds 5 MiB |
+| `413` | Body exceeds `INKWELL_MEDIA_MAX_BYTES` |
 | `429` | Rate limit exceeded |
 
 ---
@@ -816,16 +825,46 @@ server-side and served at a stable `/media/{id}` URL.
 
 Serve a stored media file. Public (no auth). Also responds to `HEAD`.
 
+**Request headers:**
+- `If-None-Match` (optional): the `ETag` from a previous response — answered
+  `304 Not Modified` when it still matches
+
 **Response `200 OK`:**
 - `Content-Type`: original MIME type from upload
+- `Content-Length`: exact blob size in bytes
+- `ETag`: strong validator — the SHA-256 of the content
 - `Cache-Control: public, max-age=31536000, immutable`
+- `X-Content-Type-Options: nosniff`
 - Body: raw image bytes
 
 **Errors:**
 
 | Status | Cause |
 |--------|-------|
+| `404` | No media with this ID, or its bytes are missing from the storage backend |
+
+---
+
+#### `DELETE /media/{id}`
+
+Delete an uploaded image. Requires the `write` scope **and** ownership; an
+`admin` principal (including the shared `INKWELL_API_KEY`) may delete any media.
+
+The stored bytes are removed once no other media row references the same content.
+Media rows are never garbage-collected automatically — a URL may still be
+referenced by a document body or an external copy, so cleanup is explicit. See
+[ADR 0013](adr/0013-media-storage.md) for orphan handling.
+
+**Response `204 No Content`:** deleted (empty body).
+
+**Errors:**
+
+| Status | Cause |
+|--------|-------|
+| `401` | Missing or invalid `X-Api-Key` |
+| `403` | Token lacks `write` scope, or the media belongs to another author |
 | `404` | No media with this ID |
+| `429` | Rate limit exceeded |
 
 ---
 

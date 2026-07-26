@@ -156,6 +156,12 @@ fn browser_login_router(pool: sqlx::PgPool) -> axum::Router {
             custom_css_url: None,
             metrics_enabled: false,
             metrics_token: None,
+            media_backend: inkwell::config::MediaBackend::Local,
+            media_dir: std::env::temp_dir()
+                .join("inkwell-test-media")
+                .to_string_lossy()
+                .into_owned(),
+            media_max_bytes: inkwell::config::DEFAULT_MEDIA_MAX_BYTES,
         }),
         pool,
     )

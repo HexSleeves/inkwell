@@ -96,19 +96,42 @@ external database.
 
 ### Media storage
 
-Uploaded images (`POST /media`, `inkwell author upload`) are stored as `bytea`
-rows in the `media` table (migration 0019). No separate filesystem or object
-storage is required for v1 — the database is the sole store.
+Uploaded images (`POST /media`, the authoring UI's image picker, or
+`inkwell author upload`) go to a pluggable storage backend selected by
+`INKWELL_MEDIA_BACKEND` — see [ADR 0013](adr/0013-media-storage.md). Metadata
+(mime type, size, SHA-256 checksum, owner) always lives in the `media` table.
 
-**Capacity planning:** each file is capped at 5 MiB. Database size grows with
-the number of uploaded assets. On Railway the managed Postgres volume expands
-automatically within the plan's limits; on self-hosted installs monitor the
-Postgres data directory. A typical photo-heavy garden (hundreds of images)
-will add a few GiB; a note-only garden adds nothing.
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `INKWELL_MEDIA_BACKEND` | `local` | `local` (filesystem) or `postgres` (`media_blobs` table). An unrecognised value fails startup. |
+| `INKWELL_MEDIA_DIR` | `./data/media` | Root directory for the `local` backend. Ignored by `postgres`. |
+| `INKWELL_MEDIA_MAX_BYTES` | `5242880` | Upload cap in bytes (5 MiB). Ceiling 256 MiB. |
 
-**Backup:** media blobs are included automatically in every `pg_dump` backup.
-No extra steps are needed beyond the standard runbook in
-[`docs/BACKUP-RESTORE.md`](BACKUP-RESTORE.md).
+**`local` (default).** Blobs are written at a content-addressed, sharded path
+(`<dir>/3f/a9/3fa9….png`). **The directory must be persistent**: `docker-compose.yml`
+mounts the `inkwell-media` volume at `/app/data/media`, and the image declares
+`VOLUME /app/data/media`. On a plain `docker run` with no mount, uploads live in
+the container's writable layer and are lost when the container is replaced. On
+Kubernetes, mount a PVC at `INKWELL_MEDIA_DIR`.
+
+**`postgres`.** Blobs go to the `media_blobs` table. Choose this on platforms
+with an ephemeral filesystem where mounting a volume is impractical (e.g. plain
+Railway containers). The trade-off is database size, WAL traffic, and backup
+weight — with one benefit: a single backup surface.
+
+Switching backends does not change any `/media/{id}` URL, but it does **not**
+migrate existing blobs: rows keep pointing at the backend they were written to,
+so images uploaded under the old backend will 404 (logged at `error` with the id,
+key, and backend) until their bytes are copied across.
+
+**Capacity planning:** each file is capped at `INKWELL_MEDIA_MAX_BYTES` (5 MiB by
+default). A typical photo-heavy garden (hundreds of images) adds a few GiB; a
+note-only garden adds nothing. Identical bytes are stored once (content
+addressing), so re-uploads are free.
+
+**Backup:** with the `postgres` backend, media is included in every `pg_dump`.
+With the `local` backend, back up `INKWELL_MEDIA_DIR` **alongside** the database
+dump — see [`docs/BACKUP-RESTORE.md`](BACKUP-RESTORE.md).
 
 ---
 
@@ -325,6 +348,9 @@ Migrations live in `migrations/` and are applied in ascending numeric order by
 0020_create_sessions
 0021_create_slug_aliases
 0022_create_preview_tokens
+0023_add_documents_tags_status_gin_index
+0024_add_note_chunks_hnsw_index
+0025_media_storage_backends
 ```
 
 **Always run `inkwell db migrate` before `inkwell serve`.**

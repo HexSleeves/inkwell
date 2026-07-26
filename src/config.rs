@@ -15,6 +15,48 @@ pub const DEFAULT_SITE_TITLE: &str = "Inkwell";
 /// Set the env var to `0` to disable rate limiting entirely.
 pub const DEFAULT_WRITE_RATE_LIMIT: u32 = 60;
 
+/// Default directory for the local media backend when `INKWELL_MEDIA_DIR` is
+/// unset. Relative to the process working directory; compose mounts a volume
+/// here (see `docker-compose.yml` and ADR 0013).
+pub const DEFAULT_MEDIA_DIR: &str = "./data/media";
+
+/// Default maximum upload size for `POST /media`: 5 MiB.
+pub const DEFAULT_MEDIA_MAX_BYTES: usize = 5 * 1024 * 1024;
+
+/// Hard ceiling for `INKWELL_MEDIA_MAX_BYTES` (256 MiB), matching the
+/// `media_size_check` constraint in migration 0025. Uploads are buffered in
+/// memory, so an unbounded cap would be a trivial memory-exhaustion lever.
+pub const MEDIA_MAX_BYTES_CEILING: usize = 256 * 1024 * 1024;
+
+/// Where uploaded media bytes are stored (`INKWELL_MEDIA_BACKEND`). See ADR 0013.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MediaBackend {
+    /// Local filesystem under [`Config::media_dir`] — the default.
+    Local,
+    /// The `media_blobs` Postgres table. For platforms with an ephemeral
+    /// filesystem where mounting a volume is impractical.
+    Postgres,
+}
+
+impl MediaBackend {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Local => "local",
+            Self::Postgres => "postgres",
+        }
+    }
+
+    /// Parse the env value, or `None` when unrecognised (a startup error — a
+    /// typo must not silently pick a backend that loses uploads).
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "local" | "fs" | "filesystem" => Some(Self::Local),
+            "postgres" | "pg" | "database" => Some(Self::Postgres),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct Config {
     pub database_url: String,
@@ -85,6 +127,17 @@ pub struct Config {
     /// the operator is relying on network isolation instead. Secret: redacted in
     /// [`Debug`].
     pub metrics_token: Option<String>,
+    /// Where uploaded media bytes are stored (`INKWELL_MEDIA_BACKEND`).
+    /// Defaults to [`MediaBackend::Local`]. See ADR 0013.
+    pub media_backend: MediaBackend,
+    /// Root directory for the local media backend (`INKWELL_MEDIA_DIR`).
+    /// Defaults to [`DEFAULT_MEDIA_DIR`]. Ignored by the Postgres backend.
+    pub media_dir: String,
+    /// Maximum accepted upload size in bytes (`INKWELL_MEDIA_MAX_BYTES`).
+    /// Defaults to [`DEFAULT_MEDIA_MAX_BYTES`], capped at
+    /// [`MEDIA_MAX_BYTES_CEILING`]. Also sets the router's body limit for
+    /// `POST /media`, so an over-cap request is refused before it is buffered.
+    pub media_max_bytes: usize,
 }
 
 impl std::fmt::Debug for Config {
@@ -120,6 +173,9 @@ impl std::fmt::Debug for Config {
                 "metrics_token",
                 &self.metrics_token.as_ref().map(|_| "<redacted>"),
             )
+            .field("media_backend", &self.media_backend)
+            .field("media_dir", &self.media_dir)
+            .field("media_max_bytes", &self.media_max_bytes)
             .finish()
     }
 }
@@ -192,6 +248,34 @@ impl Config {
                 "INKWELL_METRICS_ENABLED is on without INKWELL_METRICS_TOKEN: /metrics is unauthenticated. Set a token or keep the port private."
             );
         }
+        // A misspelled backend fails startup rather than silently defaulting:
+        // picking the wrong one loses (or strands) uploaded images.
+        let media_backend = match trimmed_env("INKWELL_MEDIA_BACKEND") {
+            Some(raw) => MediaBackend::parse(&raw).ok_or_else(|| {
+                anyhow!(
+                    "Invalid INKWELL_MEDIA_BACKEND \"{raw}\": expected \"local\" or \"postgres\"."
+                )
+            })?,
+            None => MediaBackend::Local,
+        };
+        let media_dir =
+            trimmed_env("INKWELL_MEDIA_DIR").unwrap_or_else(|| DEFAULT_MEDIA_DIR.to_string());
+        let media_max_bytes = match trimmed_env("INKWELL_MEDIA_MAX_BYTES") {
+            Some(raw) => {
+                let parsed = raw.parse::<usize>().map_err(|_| {
+                    anyhow!(
+                        "Invalid INKWELL_MEDIA_MAX_BYTES \"{raw}\": expected a positive integer number of bytes."
+                    )
+                })?;
+                if parsed == 0 || parsed > MEDIA_MAX_BYTES_CEILING {
+                    return Err(anyhow!(
+                        "Invalid INKWELL_MEDIA_MAX_BYTES \"{raw}\": expected 1..={MEDIA_MAX_BYTES_CEILING}."
+                    ));
+                }
+                parsed
+            }
+            None => DEFAULT_MEDIA_MAX_BYTES,
+        };
 
         Ok(Self {
             database_url,
@@ -213,6 +297,9 @@ impl Config {
             custom_css_url,
             metrics_enabled,
             metrics_token,
+            media_backend,
+            media_dir,
+            media_max_bytes,
         })
     }
 }
@@ -317,6 +404,9 @@ mod tests {
             custom_css_url: None,
             metrics_enabled: true,
             metrics_token: Some("sentinel-metrics-value".to_string()),
+            media_backend: MediaBackend::Local,
+            media_dir: DEFAULT_MEDIA_DIR.to_string(),
+            media_max_bytes: DEFAULT_MEDIA_MAX_BYTES,
         };
         let rendered = format!("{config:?}");
         assert!(!rendered.contains("sentinel-key-value"));
@@ -349,12 +439,39 @@ mod tests {
             custom_css_url: Some("https://example.com/custom.css".to_string()),
             metrics_enabled: false,
             metrics_token: None,
+            media_backend: MediaBackend::Postgres,
+            media_dir: "/srv/media".to_string(),
+            media_max_bytes: DEFAULT_MEDIA_MAX_BYTES,
         };
         let rendered = format!("{config:?}");
+        assert!(rendered.contains("Postgres"));
+        assert!(rendered.contains("/srv/media"));
         assert!(rendered.contains("My Garden"));
         assert!(rendered.contains("A digital garden."));
         assert!(rendered.contains("Alice"));
         assert!(rendered.contains("custom.css"));
+    }
+
+    #[test]
+    fn media_backend_parses_known_aliases_and_rejects_typos() {
+        assert_eq!(MediaBackend::parse("local"), Some(MediaBackend::Local));
+        assert_eq!(MediaBackend::parse(" FS "), Some(MediaBackend::Local));
+        assert_eq!(
+            MediaBackend::parse("postgres"),
+            Some(MediaBackend::Postgres)
+        );
+        assert_eq!(MediaBackend::parse("PG"), Some(MediaBackend::Postgres));
+        // A typo must not resolve to a backend — startup fails instead.
+        assert_eq!(MediaBackend::parse("localhost"), None);
+        assert_eq!(MediaBackend::parse("s3"), None);
+        assert_eq!(MediaBackend::parse(""), None);
+    }
+
+    #[test]
+    fn media_backend_round_trips_through_its_string_form() {
+        for backend in [MediaBackend::Local, MediaBackend::Postgres] {
+            assert_eq!(MediaBackend::parse(backend.as_str()), Some(backend));
+        }
     }
 
     fn author_config(api_url: Option<&str>, host: &str, port: u16) -> AuthorConfig {

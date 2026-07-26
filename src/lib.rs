@@ -9,6 +9,7 @@ pub mod federation;
 pub mod garden;
 pub mod http;
 pub mod mcp;
+pub mod media;
 pub mod rendering;
 pub mod views;
 

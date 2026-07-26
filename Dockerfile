@@ -25,11 +25,19 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates \
  && rm -rf /var/lib/apt/lists/*
 RUN useradd --system --uid 10001 inkwell
+# Media directory for the local storage backend (ADR 0013). Created (and chowned)
+# while still root, because a `mkdir` after `USER inkwell` cannot write to the
+# root-owned WORKDIR. Compose mounts the `inkwell-media` volume here so uploaded
+# images survive container replacement; without a mount they live in the writable
+# layer and are lost when the container is removed.
+RUN mkdir -p /app/data/media && chown -R inkwell:inkwell /app
 COPY --from=builder /app/target/release/inkwell /usr/local/bin/inkwell
 USER inkwell
 WORKDIR /app
 # Bundle the sample vault so `inkwell seed` can plant a populated demo garden at
 # runtime (the compose app points the seed step at this path).
 COPY --chown=inkwell:inkwell examples/garden /app/examples/garden
+ENV INKWELL_MEDIA_DIR=/app/data/media
+VOLUME ["/app/data/media"]
 EXPOSE 3000
 CMD ["inkwell", "serve"]

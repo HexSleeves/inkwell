@@ -21,7 +21,7 @@ Local preview: `pip install -r requirements-docs.txt && mkdocs serve`.
 | **MCP server** | `inkwell mcp` — 5 tools (`search_notes`, `read_note`, `list_notes`, `create_note`, `update_note`) over stdio; auth via scoped token |
 | **Author CLI** | `inkwell author` — `new`, `push`, `publish`, `unpublish`, `upload`; `inkwell import` for bulk Markdown import |
 | **Scoped tokens** | Per-author bearer tokens (`ink_<prefix>_<secret>`); scopes: `read`, `write`, `publish`, `admin`; `inkwell author token` CLI |
-| **Media** | `POST /media` + `GET /media/{id}` — image upload stored as PostgreSQL `bytea`; `inkwell author upload <file>` CLI |
+| **Media** | `POST /media`, `GET /media/{id}`, `DELETE /media/{id}` — content-addressed image upload behind a pluggable storage backend (local filesystem by default, Postgres optional); magic-byte type verification, immutable cache + `ETag`; insert from the authoring UI or `inkwell author upload <file>` |
 | **Draft preview** | `POST /documents/{slug}/preview-tokens` mints a shareable `pvw_…` token; anonymous `GET /documents/{slug}/preview?token=…` renders the draft |
 | **Archive nav** | `GET /archive` lists year/month buckets; `GET /archive/{year}/{month}` shows paginated docs; prev/next bar on each document page |
 | **Site metadata** | `INKWELL_SITE_TITLE`, `INKWELL_SITE_DESCRIPTION`, `INKWELL_SITE_AUTHOR`, `INKWELL_CUSTOM_CSS_URL` for brand/SEO configuration |
@@ -69,6 +69,9 @@ Copy `.env.example` to `.env` before local development. `.env` is gitignored.
 | `INKWELL_TRUST_FORWARDED_HEADERS` | `false` | Trust `X-Forwarded-For` for IP keying (set `true` only behind a trusted proxy). |
 | `INKWELL_WEBMENTION_SEND` | `false` | Send outbound Webmentions on publish. |
 | `INKWELL_BROWSER_LOGIN` | `false` | Enable flag-gated browser session login (`/auth/*`) and the authoring web UI (`/login`, `/editor`). |
+| `INKWELL_MEDIA_BACKEND` | `local` | Where uploaded images are stored: `local` (filesystem) or `postgres` (`media_blobs` table). See [ADR 0013](docs/adr/0013-media-storage.md). |
+| `INKWELL_MEDIA_DIR` | `./data/media` | Root directory for the `local` media backend. **Must be persistent** — compose mounts the `inkwell-media` volume at `/app/data/media`. |
+| `INKWELL_MEDIA_MAX_BYTES` | `5242880` | Maximum upload size in bytes (5 MiB). Ceiling 256 MiB. |
 
 ### Optional — AI / semantic layer
 
@@ -134,7 +137,7 @@ Route groups:
 | **Preview tokens** | `POST/GET /documents/{slug}/preview-tokens`, `DELETE /documents/{slug}/preview-tokens/{prefix}`, `GET /documents/{slug}/preview` |
 | **AI** | `GET or POST /ask`, `GET /documents/{slug}/related` |
 | **Search** | `GET /search` |
-| **Media** | `POST /media`, `GET /media/{id}` |
+| **Media** | `POST /media`, `GET /media/{id}`, `DELETE /media/{id}` |
 | **Admin tokens** | `GET/POST /admin/tokens`, `POST /admin/tokens/{prefix}/revoke`, `POST /admin/tokens/prune` |
 | **Webmention** | `POST /webmention` |
 | **Public HTML** | `GET /`, `GET /page/{page}`, `GET /{slug}`, `GET /tags`, `GET /tags/{tag}`, `GET /tags/{tag}/page/{page}`, `GET /search`, `GET /archive`, `GET /archive/{year}/{month}`, `GET /archive/{year}/{month}/page/{page}` |

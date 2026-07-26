@@ -276,10 +276,21 @@ and idempotent (already-applied ones are skipped).
   backfills these to the bootstrap admin ID — running `inkwell db migrate` after
   restore handles this automatically.
 
-- **Media blobs:** Migration 0019 creates the `media` table which stores image
-  bytes as `bytea`. These blobs are included automatically in `pg_dump` output —
-  no separate backup step is needed. Large media collections will increase dump
-  file size proportionally (each file up to 5 MiB).
+- **Media blobs:** where uploaded image bytes live depends on
+  `INKWELL_MEDIA_BACKEND` (see [ADR 0013](adr/0013-media-storage.md)):
+  - `postgres` — bytes are in the `media_blobs` table and are included
+    automatically in `pg_dump` output. Large collections increase dump size
+    proportionally (each file up to `INKWELL_MEDIA_MAX_BYTES`, 5 MiB by default).
+  - `local` (**the default**) — bytes are files under `INKWELL_MEDIA_DIR` and are
+    **not** in `pg_dump`. Back that directory up alongside the dump, e.g.
+    `tar -czf media-$(date +%F).tar.gz -C "$INKWELL_MEDIA_DIR" .` (or
+    `docker run --rm -v inkwell-media:/media -v "$PWD":/backup busybox tar -czf /backup/media.tar.gz -C /media .`
+    for the compose volume). Restore by extracting into the same directory before
+    starting the app; blob paths are content-addressed, so the archive is
+    position-independent and safe to restore onto a different host.
+
+  A restored database whose media directory is missing serves `404` for those
+  images and logs an `error` naming the media id, storage key, and backend.
 
 ---
 

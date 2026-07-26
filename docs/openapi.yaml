@@ -1098,8 +1098,18 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/MediaUploadResponse"
+        "200":
+          description: >-
+            These exact bytes were already uploaded by this author; the existing
+            media is returned. Uploads are content-addressed and idempotent.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MediaUploadResponse"
         "400":
-          description: Unsupported Content-Type.
+          description: >-
+            Unsupported Content-Type, or bytes that do not match the declared
+            type (the magic bytes are verified against the declaration).
           content:
             application/json:
               schema:
@@ -1109,7 +1119,7 @@ paths:
         "403":
           $ref: "#/components/responses/Forbidden"
         "413":
-          description: Body exceeds 5 MiB.
+          description: Body exceeds INKWELL_MEDIA_MAX_BYTES (default 5 MiB).
           content:
             application/json:
               schema:
@@ -1129,6 +1139,12 @@ paths:
           schema:
             type: string
             format: uuid
+        - in: header
+          name: If-None-Match
+          required: false
+          schema:
+            type: string
+          description: ETag from a previous response; answered 304 when it matches.
       responses:
         "200":
           description: Raw image bytes with immutable cache headers.
@@ -1141,6 +1157,15 @@ paths:
               schema:
                 type: string
               example: "image/png"
+            Content-Length:
+              schema:
+                type: integer
+              description: Exact blob size in bytes.
+            ETag:
+              schema:
+                type: string
+              description: Strong validator — the SHA-256 of the content.
+              example: "\"2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824\
           content:
             image/png:
               schema:
@@ -1158,8 +1183,38 @@ paths:
               schema:
                 type: string
                 format: binary
+        "304":
+          description: Not modified — the client's If-None-Match still matches.
         "404":
           $ref: "#/components/responses/NotFound"
+    delete:
+      summary: Delete a stored media file
+      description: >-
+        Requires the `write` scope and ownership; an `admin` principal may delete
+        any media. Stored bytes are removed once no other media row references
+        the same content. See ADR 0013 for orphan handling.
+      operationId: deleteMedia
+      tags: [Media]
+      security:
+        - ApiKey: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "204":
+          description: Media deleted.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
 
   /admin/tokens:
     get:

@@ -233,6 +233,9 @@ mod tests {
             custom_css_url: None,
             metrics_enabled: false,
             metrics_token: None,
+            media_backend: crate::config::MediaBackend::Local,
+            media_dir: crate::config::DEFAULT_MEDIA_DIR.to_string(),
+            media_max_bytes: crate::config::DEFAULT_MEDIA_MAX_BYTES,
         }
     }
 

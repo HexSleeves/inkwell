@@ -4,6 +4,7 @@ use sqlx::PgPool;
 
 use crate::ai::{Embedder, Llm};
 use crate::config::Config;
+use crate::media::MediaStore;
 
 pub mod admin;
 pub mod ai;
@@ -48,4 +49,8 @@ pub struct AppState {
     /// Process-wide HTTP metrics registry. Written by the
     /// [`observability::observe`] middleware, rendered by `GET /metrics`.
     pub metrics: Arc<metrics::Metrics>,
+    /// Blob store backing `POST/GET/DELETE /media`. Selected from
+    /// `INKWELL_MEDIA_BACKEND`: local filesystem (default) or Postgres. See
+    /// [`crate::media`] and ADR 0013.
+    pub media_store: Arc<dyn MediaStore>,
 }
