@@ -14,7 +14,8 @@ _Nothing yet._
 ## [0.2.0] — 2026-07-25
 
 The v0.2 slice: **scoped author tokens**, a **browser authoring UI**, **media
-upload and hosting**, and **first-class observability**. Full notes:
+upload and hosting**, **first-class observability**, and **tested backup +
+restore**. Full notes:
 [`docs/RELEASE-NOTES-v0.2.0.md`](docs/RELEASE-NOTES-v0.2.0.md).
 
 ### Added

@@ -1,6 +1,6 @@
 # Inkwell v0.2.0
 
-Released 2026-07-25. Four headline changes:
+Released 2026-07-25. Five headline changes:
 
 | Area | What landed |
 |------|-------------|
@@ -8,6 +8,7 @@ Released 2026-07-25. Four headline changes:
 | **Authoring web UI** | Server-rendered browser editor + media picker behind `INKWELL_BROWSER_LOGIN` (ADR 0010) |
 | **Media upload + hosting** | `POST/GET/DELETE /media`, pluggable storage backend, magic-byte sniffing, immutable cache + `ETag` (ADR 0013) |
 | **Observability** | Structured JSON logs with request ids, Prometheus `/metrics`, split `/healthz` + `/readyz` (ADR 0012) |
+| **Backup + restore** | `inkwell backup` / `inkwell restore` for database + media in one bundle, refusing a non-empty target without `--overwrite` (ADR 0014) |
 
 The per-release summary of everything else in this span is in
 [`CHANGELOG.md`](https://github.com/HexSleeves/inkwell/blob/main/CHANGELOG.md).
@@ -90,6 +91,18 @@ exposes no auth or authoring surface at all. See
   DB-aware); `GET /health` is retained as an alias of `/readyz`.
 - Guide: [`docs/OBSERVABILITY.md`](OBSERVABILITY.md),
   [ADR 0012](adr/0012-observability.md).
+
+### Backup and restore
+
+- **One bundle** — `inkwell backup` captures the database and the media blobs
+  together with a manifest, so a restore cannot silently half-apply.
+- **Refuses to clobber** — `inkwell restore` exits non-zero against a non-empty
+  target unless `--overwrite` is passed, and against a corrupt bundle changes
+  nothing. Both paths matter because the docs ship a cron wrapper.
+- **Search index is rebuilt, not copied** — `search_vector` is a generated
+  column and is excluded from the bundle.
+- Guide: [`docs/BACKUP-RESTORE.md`](BACKUP-RESTORE.md),
+  [ADR 0014](adr/0014-backup-restore.md).
 
 ## Migrating from v0.1
 
