@@ -15,7 +15,7 @@ jobs:
     permissions: {}
     services:
       postgres:
-        image: pgvector/pgvector:pg17@sha256:3226977dafcdf8f8a8079c8e31763dab1d7e52a8c7e008fc04bc33234fce45bb
+        image: pgvector/pgvector:pg17@sha256:f193b9c848deb27b0e892f85ed07b53fd83ccb1feb634ba415b1cdc44411bedc
         env:
           POSTGRES_USER: inkwell
           POSTGRES_PASSWORD: inkwell
