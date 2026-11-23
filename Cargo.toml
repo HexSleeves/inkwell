@@ -11,7 +11,7 @@ async-trait = "0.1.89"
 axum = { version = "0.8", features = ["json"] }
 base64 = "0.22.1"
 clap = { version = "4", features = ["derive"] }
-comrak = { version = "0.52", default-features = false }
+comrak = { version = "1.0", default-features = false }
 dotenvy = "0.15"
 flate2 = "1.1.9"
 form_urlencoded = "1"
